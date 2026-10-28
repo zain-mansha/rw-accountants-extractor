@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' fareextractor://app blob: data:; script-src 'self' fareextractor://app 'unsafe-inline'; style-src 'self' fareextractor://app 'unsafe-inline'; object-src 'none'">
+  <title>R&amp;W Accountants | Extractor</title>
+  <link rel="stylesheet" href="fareextractor://app/styles.css?v=1.1.3-bank-support">
+</head>
+<body>
+  <section id="workspace-login" class="workspace-login">
+    <div class="login-brand"><span class="brand-mark">R&amp;W</span><span class="brand-name">R&amp;W Accountants <small>EXTRACTOR</small></span><span class="brand-local"><i></i>Private workspaces</span></div>
+    <div class="login-layout">
+      <div class="login-intro">
+        <span class="eyebrow">DOCUMENT WORKSPACE</span>
+        <h1>Good work starts<br>with clear records.</h1>
+        <p>Choose your workspace to process statements, invoices and receipts on this computer.</p>
+        <div class="login-assurance"><span class="assurance-icon">✓</span><div><strong>Stored separately for each username</strong><span>PDFs are processed locally and never uploaded.</span></div></div>
+      </div>
+      <div class="login-card">
+        <div class="login-card-heading"><span class="eyebrow">SIGN IN</span><h2>Welcome back</h2><p>Use your username to open your workspace.</p></div>
+        <form id="workspace-form" autocomplete="off">
+          <label for="workspace-username">Username</label>
+          <div class="login-field-row"><input id="workspace-username" name="username" maxlength="40" autocomplete="username" placeholder="Enter your username" required><button class="button primary" type="submit">Continue</button></div>
+        </form>
+        <div id="workspace-feedback" class="workspace-feedback" role="status" hidden></div>
+        <button id="workspace-create" class="create-workspace" type="button">＋ Create a new user</button>
+        <div class="workspace-divider"><span>OR OPEN A RECENT WORKSPACE</span></div>
+        <div id="workspace-list" class="workspace-list"><p class="workspace-empty">Loading workspaces…</p></div>
+        <p class="login-footnote">No password is used. Usernames separate local workspaces; they are not security credentials.</p>
+      </div>
+    </div>
+    <div class="login-footer">R&amp;W Accountants <span>·</span> Extractor <span>·</span> Local document processing</div>
+  </section>
+
+  <div id="app-workspace" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand"><span class="brand-mark">R&amp;W</span><div><strong>R&amp;W Accountants</strong><small>EXTRACTOR</small></div></div>
+      <div class="sidebar-section-label">YOUR WORKSPACE</div>
+      <nav class="modes" aria-label="Workspace">
+        <button class="mode active" data-mode="bank"><span class="nav-icon">↔</span><span><strong>Bank statements</strong><small>Transactions and balances</small></span></button>
+        <button class="mode" data-mode="invoice"><span class="nav-icon">▤</span><span><strong>Invoices</strong><small>Supplier documents</small></span></button>
+        <button class="mode" data-mode="receipt"><span class="nav-icon">▧</span><span><strong>Fuel receipts</strong><small>Receipt totals and dates</small></span></button>
+        <button class="mode" data-mode="companies"><span class="nav-icon">◫</span><span><strong>Compatible companies</strong><small>Banks and suppliers</small></span></button>
+        <button class="mode" data-mode="vt-import"><span class="nav-icon">⇥</span><span><strong>VT Import</strong><small>Prepare split entries</small></span></button>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-local"><span class="local-dot"></span><div><strong>Private by design</strong><small>Files stay on this computer</small></div></div>
+      <div class="sidebar-user"><span id="workspace-avatar" class="avatar">U</span><div class="sidebar-user-copy"><strong id="workspace-username-label">Workspace</strong><small>Local user space</small></div><button id="switch-workspace" class="switch-user" type="button" title="Switch user" aria-label="Switch user">⇄</button></div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar"><div><span class="topbar-kicker">R&amp;W ACCOUNTANTS · EXTRACTOR</span><div class="topbar-title">Your workbench</div></div><div class="topbar-right"><span class="local-pill"><i></i>Ready on this device</span></div></header>
+      <div class="content-area">
+        <section class="hero"><div><span class="eyebrow">EXTRACT · REVIEW · EXPORT</span><h1>Turn paperwork into<br>work you can use.</h1><p>Choose a document type, add your PDFs, review the extracted details and save a workbook.</p></div><div class="privacy"><span class="privacy-icon">⌂</span><div><strong>Processed on this computer</strong><span>Your documents stay in your control.</span></div></div></section>
+        <div id="pdf-workspace"><section class="card upload-card"><div id="drop" class="drop"><div class="drop-icon">↑</div><h2 id="drop-title">Add bank statements</h2><p id="drop-copy">Drop selectable-text PDFs or bank transaction CSV exports here. CSV works when a statement PDF needs a password.</p><label id="choose-files-label" class="button primary" for="files">Choose PDF or CSV files</label><input id="files" type="file" accept="application/pdf,.pdf,.csv,text/csv" multiple></div><div id="file-list" class="file-list"></div><div class="actions"><button id="extract" class="button primary" disabled>Extract and review</button><button id="clear" class="button" disabled>Clear files</button></div><div id="progress-panel" class="progress-panel" hidden aria-live="polite"><div class="progress-meta"><span id="progress-label">Preparing…</span><span id="progress-count">0 / 0</span></div><progress id="progress-bar" max="100" value="0">0%</progress></div></section><section id="result" class="result" hidden></section></div>
+        <section id="vt-workspace" class="vt-workspace" hidden>
+          <section class="card vt-import-card"><div class="vt-intro"><div><span class="eyebrow">VT UNIVERSAL INPUT</span><h2>Prepare a VT paste sheet</h2><p>Upload an Extractor invoice or fuel receipt workbook. Review accepted and rejected rows before creating the VT paste sheet. Fuel receipts split fuel and drawings where needed.</p></div><div class="vt-privacy"><strong>Processed on this computer</strong><span>The uploaded workbook is not sent anywhere.</span></div></div>
+            <div class="vt-file-row"><label class="button primary" for="vt-file">Choose Excel workbook</label><input id="vt-file" type="file" accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12"><span id="vt-file-name">No workbook selected</span><button id="vt-clear" class="button" disabled>Clear</button></div>
+            <div id="vt-error" class="notice" hidden></div>
+          </section>
+          <section id="vt-review" class="vt-review" hidden></section>
+        </section>
+        <section id="companies-workspace" class="companies-workspace" hidden><div class="companies-head"><span class="eyebrow">SUPPORTED DOCUMENT FORMATS</span><h2>Compatible banks and suppliers</h2><p>Bank statements are read from supported transaction layouts. Invoice and receipt profiles identify supplier-specific document formats.</p></div><div id="compatible-companies" class="company-groups"></div></section>
+        <footer>R&amp;W Accountants · Extractor <span>·</span> Local PDF extraction <span>·</span> Scanned PDFs use Windows OCR when available <span id="build-info"></span></footer>
+      </div>
+    </main>
+  </div>
+
+  <div id="pdf-password-dialog" class="password-dialog" hidden>
+    <section class="password-card" role="dialog" aria-modal="true" aria-labelledby="pdf-password-title" aria-describedby="pdf-password-copy">
+      <span class="eyebrow">PROTECTED PDF</span>
+      <h2 id="pdf-password-title">Enter the statement password</h2>
+      <p id="pdf-password-copy">This PDF needs its password before Extractor can read it.</p>
+      <form id="pdf-password-form" autocomplete="off">
+        <label for="pdf-password-input">PDF password</label>
+        <input id="pdf-password-input" type="password" autocomplete="current-password" spellcheck="false" required>
+        <div id="pdf-password-error" class="password-error" role="alert" hidden></div>
+        <div class="password-actions">
+          <button id="pdf-password-cancel" class="button" type="button">Cancel</button>
+          <button class="button primary" type="submit">Continue</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <script src="fareextractor://app/vendor/xlsx.full.min.js"></script>
+  <script src="fareextractor://app/parser.js"></script>
+  <script src="fareextractor://app/vt-export.js"></script>
+  <script src="fareextractor://app/vt-import.js"></script>
+  <script src="fareextractor://app/app.js"></script>
+</body>
+</html>
