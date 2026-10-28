@@ -58,6 +58,7 @@ test('network launcher updates the shared app from the public GitHub repository 
   assert.match(source,/resources\\app/);
   assert.match(source,/Join-Path \$source 'resources\\app'/);
   assert.match(source,/Join-Path \$source 'Start Extractor from Network\.cmd'/);
+  assert.match(source,/\$shortcut\.IconLocation = .*Extractor\.exe/);
   assert.match(source,/Programs\\ExtractorRuntime/);
   assert.match(source,/robocopy\.exe[^\r\n]*\$source \$runtimeStage/);
   assert.match(source,/Join-Path \$source 'resources\\app'\),\(Join-Path \$source 'data'\)/);

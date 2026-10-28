@@ -355,6 +355,7 @@ if (-not $NoLaunch) {
       $shortcut = $shell.CreateShortcut($shortcutPath)
       $shortcut.TargetPath = Join-Path $source 'Start Extractor from Network.cmd'
       $shortcut.WorkingDirectory = $source
+      $shortcut.IconLocation = "$(Join-Path $source 'Extractor.exe'),0"
       $shortcut.Description = 'Launch the latest R&W Accountants Extractor from the shared network folder'
       $shortcut.Save()
       [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
