@@ -40,8 +40,28 @@ test('network launcher accepts the Windows-managed en-GB OCR version on supporte
   assert.doesNotMatch(source,/CurrentBuild/);
   assert.doesNotMatch(source,/Remove-WindowsCapability/);
   assert.doesNotMatch(source,/minimum tested OCR version/);
-  assert.match(source,/\[void\]\(Ensure-ExtractorEnglishOcr\)/);
-  assert.match(source,/\[void\]\(Ensure-ExtractorEnglishOcr\)[\s\S]*Start-Process -FilePath \$executable/);
+  assert.match(source,/\[void\]\(Ensure-ExtractorEnglishOcr \$applicationDirectory\)/);
+  assert.match(source,/Start-Process -FilePath \$runtimeExecutable -ArgumentList \$applicationArgument/);
+});
+
+test('network launcher updates the shared app from the public GitHub repository and keeps app code off per-PC installs',()=>{
+  const source=fs.readFileSync(powershellScript,'utf8');
+  assert.match(source,/zain-mansha/);
+  assert.match(source,/rw-accountants-extractor/);
+  assert.match(source,/commits\/\$repositoryBranch\.atom/);
+  assert.match(source,/tag:github\\\.com,2008:Grit::Commit/);
+  assert.doesNotMatch(source,/api\.github\.com/);
+  assert.match(source,/codeload\.github\.com/);
+  assert.match(source,/\.extractor-apps/);
+  assert.match(source,/\.extractor-update\.lock/);
+  assert.match(source,/Checking the shared network application against GitHub/);
+  assert.match(source,/resources\\app/);
+  assert.match(source,/Join-Path \$source 'resources\\app'/);
+  assert.match(source,/Join-Path \$source 'Start Extractor from Network\.cmd'/);
+  assert.match(source,/Programs\\ExtractorRuntime/);
+  assert.match(source,/robocopy\.exe[^\r\n]*\$source \$runtimeStage/);
+  assert.match(source,/Join-Path \$source 'resources\\app'\),\(Join-Path \$source 'data'\)/);
+  assert.doesNotMatch(source,/Programs\\Extractor'\)/);
 });
 
 test('elevated OCR helper requests the Windows-compatible OCR package without removing an installed one',{skip:process.platform!=='win32'},()=>{
@@ -134,39 +154,68 @@ test('the bank workspace accepts CSV transaction exports as a password-free stat
   assert.match(app,/Source file/);
 });
 
-test('network installer copies and verifies a clean per-user app folder on Windows',{skip:process.platform!=='win32'},()=>{
+test('network launcher publishes source updates to the share and caches only the Electron runtime locally on Windows',{skip:process.platform!=='win32'},()=>{
   const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'Extractor Network Launcher '));
   try{
-    const source=path.join(temporary,'shared package'),install=path.join(temporary,'local install'),profile=path.join(temporary,'local profiles');
-    const buildId='9.8.7-123456789abc';
-    const required=[
-      'Extractor.exe','icudtl.dat','resources.pak','snapshot_blob.bin',
-      'resources/app/main.cjs','resources/app/package.json','resources/app/index.html',
-      'resources/app/parser.js','resources/app/styles.css','resources/app/vendor/xlsx.full.min.js',
-      'resources/app/ocr-helper.ps1','resources/app/copy-helper.ps1',
-      'resources/app/ocr-requirement.json','resources/app/build-info.json'
-    ];
-    for(const relative of required){const file=path.join(source,relative);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,relative);}
-    fs.writeFileSync(path.join(source,'network-build.txt'),buildId+'\n');
-    fs.mkdirSync(path.join(source,'data'),{recursive:true});fs.writeFileSync(path.join(source,'data','must-not-copy.txt'),'workspace data');
-    fs.writeFileSync(path.join(source,'debug.log'),'temporary log');
+    const source=path.join(temporary,'shared package'),runtime=path.join(temporary,'local runtime'),profile=path.join(temporary,'local profiles');
+    const commit='1234567890abcdef1234567890abcdef12345678';
+    const archiveContainer=path.join(temporary,'archive container');
+    const repo=path.join(archiveContainer,'rw-accountants-extractor-test');
+    const archive=path.join(temporary,'extractor-source.zip');
+    const app=path.join(repo,'extractor');
+    const vendor=path.join(repo,'dist','vendor');
+    const scripts=path.join(repo,'scripts');
+    const files={
+      'Extractor.exe':'runtime exe','icudtl.dat':'runtime data','resources.pak':'runtime resources',
+      'snapshot_blob.bin':'runtime snapshot','v8_context_snapshot.bin':'runtime context','version':'44.7.0',
+      'resources/app/main.cjs':'old packaged bootstrap','resources/app/package.json':'{}',
+      'resources/app/index.html':'old packaged page','resources/app/parser.js':'old parser',
+      'resources/app/styles.css':'old styles','resources/app/vendor/xlsx.full.min.js':'old library',
+      'resources/app/ocr-helper.ps1':'old helper','resources/app/copy-helper.ps1':'old copy helper',
+      'resources/app/ocr-requirement.json':'{}','resources/app/build-info.json':'{}',
+      'data/must-not-copy.txt':'workspace data','debug.log':'temporary log'
+    };
+    for(const [relative,content] of Object.entries(files)){const file=path.join(source,relative);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,content);}
+    fs.writeFileSync(path.join(source,'network-build.txt'),'1.1.7-123456789abc\n');
+    const appFiles={
+      'main.cjs':'updated shared app entry','package.json':JSON.stringify({version:'1.1.7',main:'main.cjs'}),
+      'index.html':'updated shared page','parser.js':'updated shared parser','styles.css':'updated shared styles',
+      'ocr-helper.ps1':'updated OCR helper','copy-helper.ps1':'updated PDF helper',
+      'ocr-requirement.json':JSON.stringify({language:'en-GB',capability:'Language.OCR~~~en-GB~0.0.1.0',versionPolicy:'windows-managed'}),
+      'license.cjs':'must not be included'
+    };
+    for(const [relative,content] of Object.entries(appFiles)){const file=path.join(app,relative);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,content);}
+    fs.mkdirSync(vendor,{recursive:true});
+    fs.writeFileSync(path.join(vendor,'xlsx.full.min.js'),'updated workbook library');
+    fs.writeFileSync(path.join(vendor,'SHEETJS-LICENSE.txt'),'third-party notice');
+    fs.mkdirSync(scripts,{recursive:true});
+    fs.copyFileSync(powershellScript,path.join(scripts,'Start Extractor from Network.ps1'));
+    fs.copyFileSync(commandScript,path.join(scripts,'Start Extractor from Network.cmd'));
+    const zipScript=path.join(temporary,'compress.ps1');
+    fs.writeFileSync(zipScript,"$ErrorActionPreference='Stop'\nCompress-Archive -Path (Join-Path $env:EXTRACTOR_TEST_REPO_CONTAINER '*') -DestinationPath $env:EXTRACTOR_TEST_ARCHIVE -Force\n",'utf8');
+    execFileSync('powershell.exe',['-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',zipScript],{
+      encoding:'utf8',windowsHide:true,env:{...process.env,EXTRACTOR_TEST_REPO_CONTAINER:archiveContainer,EXTRACTOR_TEST_ARCHIVE:archive}
+    });
     fs.copyFileSync(powershellScript,path.join(source,'Start Extractor from Network.ps1'));
+    fs.copyFileSync(commandScript,path.join(source,'Start Extractor from Network.cmd'));
 
-    const runInstaller=()=>execFileSync('powershell.exe',[
+    const runUpdater=()=>execFileSync('powershell.exe',[
       '-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(source,'Start Extractor from Network.ps1'),
-      '-InstallRoot',install,'-ProfileRoot',profile,'-NoLaunch'
-    ],{encoding:'utf8',windowsHide:true,timeout:120000});
-    runInstaller();
+      '-RuntimeRoot',runtime,'-ProfileRoot',profile,'-NoLaunch'
+    ],{encoding:'utf8',windowsHide:true,timeout:120000,env:{...process.env,EXTRACTOR_NETWORK_UPDATE_TESTS:'1',EXTRACTOR_TEST_COMMIT:commit,EXTRACTOR_TEST_ARCHIVE:archive}});
+    runUpdater();
 
-    const destination=path.join(install,buildId);
-    for(const relative of required)assert.equal(fs.readFileSync(path.join(destination,relative),'utf8'),relative);
-    assert.equal(fs.existsSync(path.join(destination,'data')),false);
-    assert.equal(fs.existsSync(path.join(destination,'debug.log')),false);
-    assert.equal(fs.existsSync(path.join(destination,'network-build.txt')),false);
-    assert.equal(fs.existsSync(profile),false);
-    fs.rmSync(path.join(destination,'resources/app/main.cjs'));
-    runInstaller();
-    assert.equal(fs.readFileSync(path.join(destination,'resources/app/main.cjs'),'utf8'),'resources/app/main.cjs');
+    const sharedApp=path.join(source,'.extractor-apps',commit,'resources','app');
+    assert.equal(fs.readFileSync(path.join(source,'.extractor-current.txt'),'utf8').trim(),commit);
+    assert.equal(fs.readFileSync(path.join(sharedApp,'main.cjs'),'utf8'),'updated shared app entry');
+    assert.equal(fs.readFileSync(path.join(sharedApp,'parser.js'),'utf8'),'updated shared parser');
+    assert.equal(fs.readFileSync(path.join(sharedApp,'vendor','xlsx.full.min.js'),'utf8'),'updated workbook library');
+    assert.equal(fs.existsSync(path.join(sharedApp,'license.cjs')),false);
+    assert.equal(fs.existsSync(path.join(runtime,'44.7.0','Extractor.exe')),true);
+    assert.equal(fs.existsSync(path.join(runtime,'44.7.0','resources','app','parser.js')),false);
+    assert.equal(fs.existsSync(path.join(runtime,'44.7.0','data')),false);
+    assert.equal(fs.existsSync(path.join(profile)),false);
+    assert.match(runUpdater(),new RegExp(commit));
   }finally{
     fs.rmSync(temporary,{recursive:true,force:true});
   }

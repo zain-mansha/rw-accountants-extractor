@@ -8,14 +8,14 @@ const crypto=require('node:crypto');
 const {readWorkspaceProfilesSync,workspaceDirectory,createWorkspace}=require('./workspaces.cjs');
 
 // The executable in the shared network package is a click-to-launch bootstrap.
-// It installs a local per-user copy first so OCR and workspace data stay local,
-// then exits after the normal application has opened from that local copy.
+// It refreshes the shared application files from GitHub, then runs that shared
+// application with a per-user Electron runtime and workspace data.
 const networkPackageDirectory=path.dirname(process.execPath);
 const networkBuildFile=path.join(networkPackageDirectory,'network-build.txt');
 if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
   app.whenReady().then(()=>{
     const splash=new BrowserWindow({width:460,height:205,resizable:false,show:true,autoHideMenuBar:true,title:'Extractor',backgroundColor:'#f4f7f4',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
-    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f7f4;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:340px}.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#08796c}.title{font-size:20px;font-weight:700;margin:12px 0 7px}.copy{color:#60736d;line-height:1.5}.track{height:7px;margin-top:22px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:35%;border-radius:8px;background:#0d8276;animation:move 1.4s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(180px)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title">Preparing your Extractor</div><div class="copy">Setting up your personal copy. This may take a few minutes the first time.</div><div class="track"><div class="bar"></div></div></main>';
+    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f7f4;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:340px}.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#08796c}.title{font-size:20px;font-weight:700;margin:12px 0 7px}.copy{color:#60736d;line-height:1.5}.track{height:7px;margin-top:22px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:35%;border-radius:8px;background:#0d8276;animation:move 1.4s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(180px)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title">Checking shared updates</div><div class="copy">Checking GitHub and preparing the latest shared application files.</div><div class="track"><div class="bar"></div></div></main>';
     splash.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(html));
 
     const launcher=path.join(networkPackageDirectory,'Start Extractor from Network.ps1');

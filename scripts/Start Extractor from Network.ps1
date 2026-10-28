@@ -1,5 +1,5 @@
 param(
-  [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Programs\Extractor'),
+  [string]$RuntimeRoot = (Join-Path $env:LOCALAPPDATA 'Programs\ExtractorRuntime'),
   [string]$ProfileRoot = (Join-Path $env:LOCALAPPDATA 'Extractor\Profiles'),
   [switch]$NoLaunch
 )
@@ -10,36 +10,67 @@ $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalA
 if ([string]::IsNullOrWhiteSpace($localAppData)) {
   throw 'Windows did not provide a local application-data folder for this account.'
 }
-$buildFile = Join-Path $source 'network-build.txt'
-if (-not (Test-Path -LiteralPath $buildFile -PathType Leaf)) {
-  throw 'The shared Extractor package is missing network-build.txt. Rebuild it with the network packaging command.'
+$RuntimeRoot = [IO.Path]::GetFullPath($RuntimeRoot)
+$runtimeVersionFile = Join-Path $source 'version'
+if (-not (Test-Path -LiteralPath $runtimeVersionFile -PathType Leaf)) {
+  throw 'The shared Extractor package is missing Electron runtime version information.'
 }
-$buildId = (Get-Content -LiteralPath $buildFile -Raw).Trim()
-if ($buildId -notmatch '^\d+\.\d+\.\d+-[a-f0-9]{12}$') {
-  throw 'The shared Extractor build marker is invalid.'
+$runtimeVersion = (Get-Content -LiteralPath $runtimeVersionFile -Raw).Trim()
+if ($runtimeVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'The Electron runtime version marker is invalid.' }
+$runtimeTarget = Join-Path $RuntimeRoot $runtimeVersion
+$runtimeExecutable = Join-Path $runtimeTarget 'Extractor.exe'
+$runtimePrefix = $RuntimeRoot.TrimEnd('\') + '\'
+if (-not $runtimeTarget.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'The local Electron runtime path is outside its selected folder.'
 }
 
-$InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
-$target = Join-Path $InstallRoot $buildId
-$executable = Join-Path $target 'Extractor.exe'
-$rootPrefix = $InstallRoot.TrimEnd('\') + '\'
-if (-not $target.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-  throw 'The local Extractor install path is outside the selected install folder.'
-}
-$requiredFiles = @(
-  'Extractor.exe', 'icudtl.dat', 'resources.pak', 'snapshot_blob.bin',
-  'resources\app\main.cjs', 'resources\app\package.json',
-  'resources\app\index.html', 'resources\app\parser.js',
-  'resources\app\styles.css', 'resources\app\vendor\xlsx.full.min.js',
-  'resources\app\ocr-helper.ps1', 'resources\app\ocr-requirement.json',
-  'resources\app\build-info.json'
+$repositoryOwner = 'zain-mansha'
+$repositoryName = 'rw-accountants-extractor'
+$repositoryBranch = 'main'
+$currentBuildFile = Join-Path $source '.extractor-current.txt'
+$buildRoot = Join-Path $source '.extractor-apps'
+$requiredAppFiles = @(
+  'main.cjs', 'package.json', 'index.html', 'parser.js', 'styles.css',
+  'vendor\xlsx.full.min.js', 'ocr-helper.ps1', 'copy-helper.ps1', 'ocr-requirement.json', 'build-info.json'
 )
-$installIsComplete = {
-  param([string]$Directory)
-  foreach ($relative in $requiredFiles) {
+
+function Test-ExtractorAppReady([string]$Directory) {
+  if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { return $false }
+  foreach ($relative in $requiredAppFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $Directory $relative) -PathType Leaf)) { return $false }
   }
   return $true
+}
+
+function Get-CurrentExtractorApp {
+  if (Test-Path -LiteralPath $currentBuildFile -PathType Leaf) {
+    $currentBuild = (Get-Content -LiteralPath $currentBuildFile -Raw).Trim()
+    if ($currentBuild -match '^[a-f0-9]{40}$') {
+      $currentApp = Join-Path (Join-Path $buildRoot $currentBuild) 'resources\app'
+      if (Test-ExtractorAppReady $currentApp) { return $currentApp }
+    }
+  }
+  $packagedApp = Join-Path $source 'resources\app'
+  if (Test-ExtractorAppReady $packagedApp) { return $packagedApp }
+  return $null
+}
+
+function Get-LatestExtractorCommit {
+  if ($env:EXTRACTOR_NETWORK_UPDATE_TESTS -eq '1') {
+    if ($env:EXTRACTOR_TEST_COMMIT -notmatch '^[a-f0-9]{40}$' -or -not (Test-Path -LiteralPath $env:EXTRACTOR_TEST_ARCHIVE -PathType Leaf)) {
+      throw 'Extractor updater test configuration is incomplete.'
+    }
+    return $env:EXTRACTOR_TEST_COMMIT
+  }
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  $uri = "https://github.com/$repositoryOwner/$repositoryName/commits/$repositoryBranch.atom"
+  $headers = @{ Accept = 'application/atom+xml'; 'User-Agent' = 'RW-Accountants-Extractor-Updater' }
+  $feed = Invoke-WebRequest -UseBasicParsing -Method Get -Uri $uri -Headers $headers -TimeoutSec 20
+  $shaMatch = [regex]::Match([string]$feed.Content, 'tag:github\.com,2008:Grit::Commit/(?<sha>[a-f0-9]{40})')
+  if (-not $shaMatch.Success) { throw 'GitHub returned a commit feed without a readable commit identifier.' }
+  $sha = [string]$shaMatch.Groups['sha'].Value
+  if ($sha -notmatch '^[a-f0-9]{40}$') { throw 'GitHub returned an invalid Extractor commit identifier.' }
+  return $sha
 }
 
 function Get-ExtractorOcrLanguages {
@@ -52,8 +83,8 @@ function Get-ExtractorOcrLanguages {
   }
 }
 
-function Ensure-ExtractorEnglishOcr {
-  $requirementPath = Join-Path $source 'resources\app\ocr-requirement.json'
+function Ensure-ExtractorEnglishOcr([string]$ApplicationDirectory) {
+  $requirementPath = Join-Path $ApplicationDirectory 'ocr-requirement.json'
   if (-not (Test-Path -LiteralPath $requirementPath -PathType Leaf)) {
     throw 'The network package is missing its Windows OCR requirement. Copy the complete updated Extractor package.'
   }
@@ -158,60 +189,152 @@ try {
   throw "Required en-GB Windows OCR is unavailable, so Extractor has not started. $installDetail An administrator can install it with: DISM /Online /Add-Capability /CapabilityName:$capability"
 }
 
-if (-not (& $installIsComplete $target)) {
-  New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-  $lockPath = Join-Path $InstallRoot "$buildId.install.lock"
-  $lock = $null
-  $deadline = [DateTime]::UtcNow.AddMinutes(10)
-  while (-not $lock -and -not (& $installIsComplete $target)) {
-    try {
-      $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-    } catch [IO.IOException] {
-      if ([DateTime]::UtcNow -ge $deadline) { throw 'Another install did not finish within 10 minutes. Close Extractor and try again.' }
-      Start-Sleep -Milliseconds 500
-    }
-  }
-
+function New-SharedExtractorBuild([string]$CommitSha) {
+  $updatesDirectory = Join-Path $source '.extractor-update'
+  New-Item -ItemType Directory -Path $updatesDirectory -Force | Out-Null
+  New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
+  $archivePath = Join-Path $updatesDirectory "source-$CommitSha.zip"
+  $extractDirectory = Join-Path $updatesDirectory "extract-$CommitSha"
+  $targetRoot = Join-Path $buildRoot $CommitSha
+  $stageRoot = Join-Path $buildRoot ".staging-$CommitSha-$([guid]::NewGuid().ToString('N'))"
   try {
-    if (-not (& $installIsComplete $target)) {
-      if (Test-Path -LiteralPath $target) {
-        try { Remove-Item -LiteralPath $target -Recurse -Force }
-        catch { throw "An incomplete local Extractor copy could not be repaired. Close Extractor and run the network launcher again. $($_.Exception.Message)" }
-      }
-      $stage = Join-Path $InstallRoot "$buildId.staging"
-      $stageFull = [IO.Path]::GetFullPath($stage)
-      if (-not $stageFull.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'The temporary install path is outside the selected install folder.'
-      }
-      try {
-        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
-        New-Item -ItemType Directory -Path $stage | Out-Null
-        & "$env:SystemRoot\System32\robocopy.exe" $source $stage /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP /XF network-build.txt debug.log /XD data | Out-Null
-        $copyResult = $LASTEXITCODE
-        if ($copyResult -ge 8) {
-          throw "Windows could not copy the Extractor package from the shared folder (Robocopy code $copyResult). Check your network permissions and free disk space."
-        }
-        if (-not (& $installIsComplete $stage)) {
-          throw 'The shared folder does not contain all required Extractor application files. Copy the complete network package and try again.'
-        }
-        Move-Item -LiteralPath $stage -Destination $target
-      } catch {
-        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
-        throw
+    if ($env:EXTRACTOR_NETWORK_UPDATE_TESTS -eq '1') {
+      Copy-Item -LiteralPath $env:EXTRACTOR_TEST_ARCHIVE -Destination $archivePath -Force
+    } else {
+      $archiveUri = "https://codeload.github.com/$repositoryOwner/$repositoryName/zip/$CommitSha"
+      Invoke-WebRequest -UseBasicParsing -Method Get -Uri $archiveUri -OutFile $archivePath -TimeoutSec 120
+    }
+    if (Test-Path -LiteralPath $extractDirectory) { Remove-Item -LiteralPath $extractDirectory -Recurse -Force }
+    Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDirectory -Force
+    $repoRoot = Get-ChildItem -LiteralPath $extractDirectory -Directory | Select-Object -First 1
+    if (-not $repoRoot) { throw 'The downloaded GitHub archive did not contain a source folder.' }
+    $extractorSource = Join-Path $repoRoot.FullName 'extractor'
+    $vendorSource = Join-Path $repoRoot.FullName 'dist\vendor'
+    $scriptsSource = Join-Path $repoRoot.FullName 'scripts'
+    if (-not (Test-Path -LiteralPath (Join-Path $extractorSource 'main.cjs') -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $vendorSource 'xlsx.full.min.js') -PathType Leaf)) {
+      throw 'The downloaded GitHub source is missing the Extractor application files.'
+    }
+
+    $applicationStage = Join-Path $stageRoot 'resources\app'
+    New-Item -ItemType Directory -Path $applicationStage -Force | Out-Null
+    Get-ChildItem -LiteralPath $extractorSource -Force | Where-Object { $_.Name -notin @('license.cjs','license-config.json') } | ForEach-Object {
+      Copy-Item -LiteralPath $_.FullName -Destination $applicationStage -Recurse -Force
+    }
+    $vendorStage = Join-Path $applicationStage 'vendor'
+    New-Item -ItemType Directory -Path $vendorStage -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $vendorSource 'xlsx.full.min.js') -Destination $vendorStage -Force
+    Copy-Item -LiteralPath (Join-Path $vendorSource 'SHEETJS-LICENSE.txt') -Destination $vendorStage -Force
+    $applicationPackage = Get-Content -LiteralPath (Join-Path $applicationStage 'package.json') -Raw | ConvertFrom-Json
+    $buildId = "$($applicationPackage.version)-$($CommitSha.Substring(0,12))"
+    [IO.File]::WriteAllText((Join-Path $applicationStage 'build-info.json'), (@{buildId=$buildId;commit=$CommitSha} | ConvertTo-Json -Depth 4), [Text.Encoding]::UTF8)
+    if (-not (Test-ExtractorAppReady $applicationStage)) { throw 'The updated Extractor application is incomplete; the existing shared version has been kept.' }
+
+    New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
+    if (Test-Path -LiteralPath $targetRoot) { Remove-Item -LiteralPath $targetRoot -Recurse -Force }
+    Move-Item -LiteralPath $stageRoot -Destination $targetRoot
+
+    foreach ($launcherName in @('Start Extractor from Network.ps1','Start Extractor from Network.cmd')) {
+      $updatedLauncher = Join-Path $scriptsSource $launcherName
+      if (Test-Path -LiteralPath $updatedLauncher -PathType Leaf) {
+        $temporaryLauncher = Join-Path $source (".$launcherName.$([guid]::NewGuid().ToString('N')).tmp")
+        Copy-Item -LiteralPath $updatedLauncher -Destination $temporaryLauncher -Force
+        Move-Item -LiteralPath $temporaryLauncher -Destination (Join-Path $source $launcherName) -Force
       }
     }
+    $markerTemp = "$currentBuildFile.$([guid]::NewGuid().ToString('N')).tmp"
+    [IO.File]::WriteAllText($markerTemp, "$CommitSha`n", [Text.Encoding]::ASCII)
+    Move-Item -LiteralPath $markerTemp -Destination $currentBuildFile -Force
+    return (Join-Path $targetRoot 'resources\app')
   } finally {
-    if ($lock) { $lock.Dispose() }
+    foreach ($temporaryPath in @($archivePath,$extractDirectory,$stageRoot)) {
+      if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Recurse -Force -ErrorAction SilentlyContinue }
+    }
   }
 }
 
-if (-not (& $installIsComplete $target)) {
-  throw 'The local Extractor application could not be installed.'
+Write-Progress -Activity 'Checking Extractor updates' -Status 'Checking the shared network application against GitHub...' -PercentComplete 10
+$applicationDirectory = Get-CurrentExtractorApp
+$commitSha = ''
+try {
+  $commitSha = Get-LatestExtractorCommit
+  $updatedDirectory = Join-Path (Join-Path $buildRoot $commitSha) 'resources\app'
+  if (-not (Test-ExtractorAppReady $updatedDirectory)) {
+    $updateLockPath = Join-Path $source '.extractor-update.lock'
+    $updateLock = $null
+    $updateDeadline = [DateTime]::UtcNow.AddMinutes(10)
+    while (-not $updateLock) {
+      try { $updateLock = [IO.File]::Open($updateLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+      catch [IO.IOException] {
+        $applicationDirectory = Get-CurrentExtractorApp
+        if ((Test-ExtractorAppReady $updatedDirectory)) { break }
+        if ([DateTime]::UtcNow -ge $updateDeadline) { throw 'Another Extractor update did not finish within 10 minutes. Try launching again.' }
+        Write-Progress -Activity 'Checking Extractor updates' -Status 'Waiting for another user to finish the shared update...' -PercentComplete 20
+        Start-Sleep -Milliseconds 500
+      }
+    }
+    try {
+      if (-not (Test-ExtractorAppReady $updatedDirectory)) {
+        Write-Progress -Activity 'Checking Extractor updates' -Status 'Downloading and preparing the update on the shared network folder...' -PercentComplete 35
+        $updatedDirectory = New-SharedExtractorBuild $commitSha
+      }
+    } finally {
+      if ($updateLock) { $updateLock.Dispose() }
+    }
+  }
+  if (Test-ExtractorAppReady $updatedDirectory) { $applicationDirectory = $updatedDirectory }
+  Write-Progress -Activity 'Checking Extractor updates' -Status 'Shared application files are current.' -PercentComplete 70
+} catch {
+  if (-not $applicationDirectory) { throw "Extractor could not check GitHub or find a usable application on the network. $($_.Exception.Message)" }
+  Write-Warning "GitHub could not be reached, so Extractor will use the last complete version on the network. $($_.Exception.Message)"
 }
-Write-Output "Using local Extractor build $buildId."
-Write-Output "Application: $target"
+if (-not $applicationDirectory -or -not (Test-ExtractorAppReady $applicationDirectory)) {
+  throw 'No complete Extractor application is available on the shared network folder.'
+}
+
+$runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot_blob.bin','v8_context_snapshot.bin')
+  $runtimeReady = $true
+  foreach ($relative in $runtimeRequiredFiles) { if (-not (Test-Path -LiteralPath (Join-Path $runtimeTarget $relative) -PathType Leaf)) { $runtimeReady = $false; break } }
+  if (-not $runtimeReady) {
+    New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
+    $runtimeLockPath = Join-Path $RuntimeRoot "$runtimeVersion.install.lock"
+    $runtimeLock = $null
+    $runtimeDeadline = [DateTime]::UtcNow.AddMinutes(10)
+    while (-not $runtimeLock) {
+      try { $runtimeLock = [IO.File]::Open($runtimeLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+      catch [IO.IOException] {
+        if ([DateTime]::UtcNow -ge $runtimeDeadline) { throw 'The shared Electron runtime could not be prepared within 10 minutes. Try launching again.' }
+        Start-Sleep -Milliseconds 500
+      }
+    }
+    try {
+      $runtimeReady = $true
+      foreach ($relative in $runtimeRequiredFiles) { if (-not (Test-Path -LiteralPath (Join-Path $runtimeTarget $relative) -PathType Leaf)) { $runtimeReady = $false; break } }
+      if (-not $runtimeReady) {
+        if (Test-Path -LiteralPath $runtimeTarget) { Remove-Item -LiteralPath $runtimeTarget -Recurse -Force }
+        $runtimeStage = Join-Path $RuntimeRoot "$runtimeVersion.staging-$([guid]::NewGuid().ToString('N'))"
+        $runtimeStageFull = [IO.Path]::GetFullPath($runtimeStage)
+        if (-not $runtimeStageFull.StartsWith($runtimePrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'The temporary Electron runtime path is outside its selected folder.' }
+        $excludedDirectories = @((Join-Path $source 'resources\app'),(Join-Path $source 'data'),$buildRoot,(Join-Path $source '.extractor-update'))
+        try {
+          New-Item -ItemType Directory -Path $runtimeStage | Out-Null
+          Write-Progress -Activity 'Checking Extractor updates' -Status 'Preparing the Windows Electron runtime on this PC (first launch only)...' -PercentComplete 80
+          & "$env:SystemRoot\System32\robocopy.exe" $source $runtimeStage /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP /XF debug.log .extractor-current.txt .extractor-head-cache.json .extractor-update.lock /XD $excludedDirectories | Out-Null
+          $copyResult = $LASTEXITCODE
+          if ($copyResult -ge 8) { throw "Windows could not prepare the Electron runtime (Robocopy code $copyResult). Check network access and free disk space." }
+          foreach ($relative in $runtimeRequiredFiles) { if (-not (Test-Path -LiteralPath (Join-Path $runtimeStage $relative) -PathType Leaf)) { throw "The Electron runtime is missing $relative." } }
+          Move-Item -LiteralPath $runtimeStage -Destination $runtimeTarget
+        } catch {
+          if (Test-Path -LiteralPath $runtimeStage) { Remove-Item -LiteralPath $runtimeStage -Recurse -Force -ErrorAction SilentlyContinue }
+          throw
+        }
+      }
+    } finally {
+      if ($runtimeLock) { $runtimeLock.Dispose() }
+    }
+  }
+
 if (-not $NoLaunch) {
-  [void](Ensure-ExtractorEnglishOcr)
+  [void](Ensure-ExtractorEnglishOcr $applicationDirectory)
   New-Item -ItemType Directory -Path $ProfileRoot -Force | Out-Null
   $env:FARE_EXTRACTOR_PROFILE_ROOT = [IO.Path]::GetFullPath($ProfileRoot)
   try {
@@ -221,10 +344,9 @@ if (-not $NoLaunch) {
       $shortcutPath = Join-Path $desktop 'R&W Accountants Extractor.lnk'
       $shell = New-Object -ComObject WScript.Shell
       $shortcut = $shell.CreateShortcut($shortcutPath)
-      $shortcut.TargetPath = $executable
-      $shortcut.WorkingDirectory = $target
-      $shortcut.IconLocation = "$executable,0"
-      $shortcut.Description = 'Launch your local R&W Accountants Extractor workspace'
+      $shortcut.TargetPath = Join-Path $source 'Start Extractor from Network.cmd'
+      $shortcut.WorkingDirectory = $source
+      $shortcut.Description = 'Launch the latest R&W Accountants Extractor from the shared network folder'
       $shortcut.Save()
       [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
       Write-Output "Desktop shortcut: $shortcutPath"
@@ -232,5 +354,12 @@ if (-not $NoLaunch) {
   } catch {
     Write-Warning "Could not create the desktop shortcut: $($_.Exception.Message)"
   }
-  Start-Process -FilePath $executable -WorkingDirectory $target
+  Write-Progress -Activity 'Checking Extractor updates' -Status 'Starting the latest shared application...' -PercentComplete 100 -Completed
+  $applicationArgument = '"' + $applicationDirectory + '"'
+  Start-Process -FilePath $runtimeExecutable -ArgumentList $applicationArgument -WorkingDirectory $applicationDirectory
+} else {
+  Write-Progress -Activity 'Checking Extractor updates' -Status 'Shared application files are ready.' -PercentComplete 100 -Completed
+  Write-Output "Shared application: $applicationDirectory"
+  Write-Output "Electron runtime prepared: $runtimeTarget"
+  if ($commitSha) { Write-Output "GitHub source commit: $commitSha" }
 }
