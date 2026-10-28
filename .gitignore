@@ -1,0 +1,16 @@
+.tools/
+release/
+samples/
+.tmp/
+.preview/
+artifacts/
+.local-data/
+license-server/data/
+license-server/keys/private.pem
+node_modules/
+*.log
+*.pdf
+*.xlsx
+*.xls
+.DS_Store
+Thumbs.db
