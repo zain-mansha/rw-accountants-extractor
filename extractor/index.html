@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' fareextractor://app blob: data:; script-src 'self' fareextractor://app 'unsafe-inline'; style-src 'self' fareextractor://app 'unsafe-inline'; object-src 'none'">
   <title>R&amp;W Accountants | Extractor</title>
-  <link rel="stylesheet" href="fareextractor://app/styles.css?v=1.1.3-bank-support">
+  <link rel="stylesheet" href="fareextractor://app/styles.css?v=1.1.8-build-label">
 </head>
 <body>
   <section id="workspace-login" class="workspace-login">
@@ -50,7 +50,7 @@
     </aside>
 
     <main class="main-content">
-      <header class="topbar"><div><span class="topbar-kicker">R&amp;W ACCOUNTANTS · EXTRACTOR</span><div class="topbar-title">Your workbench</div></div><div class="topbar-right"><span class="local-pill"><i></i>Ready on this device</span></div></header>
+      <header class="topbar"><div><span class="topbar-kicker">R&amp;W ACCOUNTANTS · EXTRACTOR</span><div class="topbar-title">Your workbench</div></div><div class="topbar-right"><span id="build-info" class="build-info" role="status" aria-label="Application version">Checking version…</span><span class="local-pill"><i></i>Ready on this device</span></div></header>
       <div class="content-area">
         <section class="hero"><div><span class="eyebrow">EXTRACT · REVIEW · EXPORT</span><h1>Turn paperwork into<br>work you can use.</h1><p>Choose a document type, add your PDFs, review the extracted details and save a workbook.</p></div><div class="privacy"><span class="privacy-icon">⌂</span><div><strong>Processed on this computer</strong><span>Your documents stay in your control.</span></div></div></section>
         <div id="pdf-workspace"><section class="card upload-card"><div id="drop" class="drop"><div class="drop-icon">↑</div><h2 id="drop-title">Add bank statements</h2><p id="drop-copy">Drop selectable-text PDFs or bank transaction CSV exports here. CSV works when a statement PDF needs a password.</p><label id="choose-files-label" class="button primary" for="files">Choose PDF or CSV files</label><input id="files" type="file" accept="application/pdf,.pdf,.csv,text/csv" multiple></div><div id="file-list" class="file-list"></div><div class="actions"><button id="extract" class="button primary" disabled>Extract and review</button><button id="clear" class="button" disabled>Clear files</button></div><div id="progress-panel" class="progress-panel" hidden aria-live="polite"><div class="progress-meta"><span id="progress-label">Preparing…</span><span id="progress-count">0 / 0</span></div><progress id="progress-bar" max="100" value="0">0%</progress></div></section><section id="result" class="result" hidden></section></div>
@@ -62,7 +62,7 @@
           <section id="vt-review" class="vt-review" hidden></section>
         </section>
         <section id="companies-workspace" class="companies-workspace" hidden><div class="companies-head"><span class="eyebrow">SUPPORTED DOCUMENT FORMATS</span><h2>Compatible banks and suppliers</h2><p>Bank statements are read from supported transaction layouts. Invoice and receipt profiles identify supplier-specific document formats.</p></div><div id="compatible-companies" class="company-groups"></div></section>
-        <footer>R&amp;W Accountants · Extractor <span>·</span> Local PDF extraction <span>·</span> Scanned PDFs use Windows OCR when available <span id="build-info"></span></footer>
+        <footer>R&amp;W Accountants · Extractor <span>·</span> Local PDF extraction <span>·</span> Scanned PDFs use Windows OCR when available</footer>
       </div>
     </main>
   </div>

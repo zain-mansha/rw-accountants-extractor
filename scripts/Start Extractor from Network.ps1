@@ -242,7 +242,7 @@ function New-SharedExtractorBuild([string]$CommitSha) {
     if (Test-Path -LiteralPath $targetRoot) { Remove-Item -LiteralPath $targetRoot -Recurse -Force }
     Move-Item -LiteralPath $stageRoot -Destination $targetRoot
 
-    foreach ($launcherName in @('Start Extractor from Network.ps1','Start Extractor from Network.cmd')) {
+    foreach ($launcherName in @('Start Extractor from Network.ps1','Start Extractor from Network.cmd','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')) {
       $updatedLauncher = Join-Path $scriptsSource $launcherName
       if (Test-Path -LiteralPath $updatedLauncher -PathType Leaf) {
         $temporaryLauncher = Join-Path $source (".$launcherName.$([guid]::NewGuid().ToString('N')).tmp")
@@ -299,6 +299,13 @@ try {
 if (-not $applicationDirectory -or -not (Test-ExtractorAppReady $applicationDirectory)) {
   throw 'No complete Extractor application is available on the shared network folder.'
 }
+$runtimeLoaderSource = Join-Path $source 'ExtractorRuntimeLoader.cjs'
+$runtimePackageSource = Join-Path $source 'ExtractorRuntimePackage.json'
+foreach ($requiredLoaderFile in @($runtimeLoaderSource,$runtimePackageSource)) {
+  if (-not (Test-Path -LiteralPath $requiredLoaderFile -PathType Leaf)) {
+    throw 'The shared Extractor package is missing its runtime loader. Copy the complete updated network package and try again.'
+  }
+}
 
 $runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot_blob.bin','v8_context_snapshot.bin')
   $runtimeReady = $true
@@ -324,10 +331,11 @@ $runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot
         $runtimeStageFull = [IO.Path]::GetFullPath($runtimeStage)
         if (-not $runtimeStageFull.StartsWith($runtimePrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'The temporary Electron runtime path is outside its selected folder.' }
         $excludedDirectories = @((Join-Path $source 'resources\app'),(Join-Path $source 'data'),$buildRoot,(Join-Path $source '.extractor-update'))
+        $excludedRuntimeFiles = @('debug.log','network-build.txt','.extractor-current.txt','.extractor-head-cache.json','.extractor-update.lock','Start Extractor from Network.cmd','Start Extractor from Network.ps1','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')
         try {
           New-Item -ItemType Directory -Path $runtimeStage | Out-Null
           Write-Progress -Activity 'Checking Extractor updates' -Status 'Preparing the Windows Electron runtime on this PC (first launch only)...' -PercentComplete 80
-          & "$env:SystemRoot\System32\robocopy.exe" $source $runtimeStage /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP /XF debug.log .extractor-current.txt .extractor-head-cache.json .extractor-update.lock /XD $excludedDirectories | Out-Null
+          & "$env:SystemRoot\System32\robocopy.exe" $source $runtimeStage /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP /XF $excludedRuntimeFiles /XD $excludedDirectories | Out-Null
           $copyResult = $LASTEXITCODE
           if ($copyResult -ge 8) { throw "Windows could not prepare the Electron runtime (Robocopy code $copyResult). Check network access and free disk space." }
           foreach ($relative in $runtimeRequiredFiles) { if (-not (Test-Path -LiteralPath (Join-Path $runtimeStage $relative) -PathType Leaf)) { throw "The Electron runtime is missing $relative." } }
@@ -341,6 +349,82 @@ $runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot
       if ($runtimeLock) { $runtimeLock.Dispose() }
     }
   }
+
+# Electron's sandboxed Chromium processes need read/execute access to the local
+# runtime directory through the ALL APPLICATION PACKAGES SID. Grant it once
+# when the inherited local folder ACL does not already provide it.
+$allPackagesSid = 'S-1-15-2-1'
+$runtimeAcl = Get-Acl -LiteralPath $runtimeTarget
+$requiredRuntimeRights = [System.Security.AccessControl.FileSystemRights]::ReadAndExecute
+$requiredRuntimeInheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+$hasSandboxReadAccess = $false
+foreach ($accessRule in $runtimeAcl.Access) {
+  if ($accessRule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+  try { $ruleSid = $accessRule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
+  catch { $ruleSid = $accessRule.IdentityReference.Value }
+  if ($ruleSid -ne $allPackagesSid) { continue }
+  $rightsReady = ($accessRule.FileSystemRights -band $requiredRuntimeRights) -eq $requiredRuntimeRights
+  $inheritanceReady = ($accessRule.InheritanceFlags -band $requiredRuntimeInheritance) -eq $requiredRuntimeInheritance
+  if ($rightsReady -and $inheritanceReady) { $hasSandboxReadAccess = $true; break }
+}
+if (-not $hasSandboxReadAccess) {
+  $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+  $aclOutput = & $icacls $runtimeTarget '/grant' '*S-1-15-2-1:(OI)(CI)(RX)' '/T' '/C' '/Q' 2>&1
+  $aclResult = $LASTEXITCODE
+  if ($aclResult -ne 0) { throw "Windows could not grant Electron's sandbox read access to its local runtime (icacls code $aclResult). $($aclOutput -join ' ')" }
+}
+
+# Electron's built-in `electron` module is available to a packaged app, but not
+# when its loose source directory is passed as a development app. Install a
+# tiny packaged entry point beside the per-user runtime; it loads the selected
+# immutable app version from the share without copying that app onto this PC.
+$runtimeLoaderDirectory = Join-Path $runtimeTarget 'resources\app'
+$runtimeLoaderPath = Join-Path $runtimeLoaderDirectory 'ExtractorRuntimeLoader.cjs'
+$runtimePackagePath = Join-Path $runtimeLoaderDirectory 'package.json'
+$runtimeLoaderMarker = Join-Path $runtimeLoaderDirectory '.extractor-runtime-loader'
+$loaderHash = (Get-FileHash -LiteralPath $runtimeLoaderSource -Algorithm SHA256).Hash
+$packageHash = (Get-FileHash -LiteralPath $runtimePackageSource -Algorithm SHA256).Hash
+$loaderSignature = "$loaderHash`n$packageHash"
+$runtimeLoaderLockPath = Join-Path $RuntimeRoot "$runtimeVersion.loader.lock"
+$runtimeLoaderLock = $null
+$loaderDeadline = [DateTime]::UtcNow.AddMinutes(2)
+while (-not $runtimeLoaderLock) {
+  try { $runtimeLoaderLock = [IO.File]::Open($runtimeLoaderLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+  catch [IO.IOException] {
+    if ([DateTime]::UtcNow -ge $loaderDeadline) { throw 'The local Extractor launcher could not be prepared within 2 minutes. Close other launch attempts and try again.' }
+    Start-Sleep -Milliseconds 250
+  }
+}
+try {
+  New-Item -ItemType Directory -Path $runtimeLoaderDirectory -Force | Out-Null
+  $installedSignature = if (Test-Path -LiteralPath $runtimeLoaderMarker -PathType Leaf) { (Get-Content -LiteralPath $runtimeLoaderMarker -Raw).Trim() } else { '' }
+  $loaderReady = $installedSignature -eq $loaderSignature -and (Test-Path -LiteralPath $runtimeLoaderPath -PathType Leaf) -and (Test-Path -LiteralPath $runtimePackagePath -PathType Leaf)
+  if (-not $loaderReady) {
+    foreach ($filePair in @(
+      @{Source=$runtimeLoaderSource;Destination=$runtimeLoaderPath},
+      @{Source=$runtimePackageSource;Destination=$runtimePackagePath}
+    )) {
+      $temporaryFile = "$($filePair.Destination).$([guid]::NewGuid().ToString('N')).tmp"
+      Copy-Item -LiteralPath $filePair.Source -Destination $temporaryFile -Force
+      if (Test-Path -LiteralPath $filePair.Destination -PathType Leaf) { [IO.File]::Replace($temporaryFile,$filePair.Destination,$null) }
+      else { Move-Item -LiteralPath $temporaryFile -Destination $filePair.Destination }
+    }
+    $temporaryMarker = "$runtimeLoaderMarker.$([guid]::NewGuid().ToString('N')).tmp"
+    [IO.File]::WriteAllText($temporaryMarker,$loaderSignature,[Text.Encoding]::ASCII)
+    if (Test-Path -LiteralPath $runtimeLoaderMarker -PathType Leaf) { [IO.File]::Replace($temporaryMarker,$runtimeLoaderMarker,$null) }
+    else { Move-Item -LiteralPath $temporaryMarker -Destination $runtimeLoaderMarker }
+  }
+} finally {
+  if ($runtimeLoaderLock) { $runtimeLoaderLock.Dispose() }
+}
+
+# Earlier launcher builds copied these bootstrap files along with Electron.
+# Remove them so a local runtime can never mistake itself for the network
+# updater when it starts the packaged loader.
+foreach ($runtimeBootstrapFile in @('network-build.txt','Start Extractor from Network.cmd','Start Extractor from Network.ps1','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')) {
+  $runtimeBootstrapPath = Join-Path $runtimeTarget $runtimeBootstrapFile
+  if (Test-Path -LiteralPath $runtimeBootstrapPath -PathType Leaf) { Remove-Item -LiteralPath $runtimeBootstrapPath -Force }
+}
 
 if (-not $NoLaunch) {
   [void](Ensure-ExtractorEnglishOcr $applicationDirectory)
@@ -365,8 +449,23 @@ if (-not $NoLaunch) {
     Write-Warning "Could not create the desktop shortcut: $($_.Exception.Message)"
   }
   Write-Progress -Activity 'Checking Extractor updates' -Status 'Starting the latest shared application...' -PercentComplete 100 -Completed
-  $applicationArgument = '"' + $applicationDirectory + '"'
-  Start-Process -FilePath $runtimeExecutable -ArgumentList $applicationArgument -WorkingDirectory $applicationDirectory
+  $previousSharedApp = $env:FARE_EXTRACTOR_SHARED_APP
+  $previousRunAsNode = $env:ELECTRON_RUN_AS_NODE
+  $env:FARE_EXTRACTOR_SHARED_APP = [IO.Path]::GetFullPath($applicationDirectory)
+  Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+  try {
+    $extractorProcess = Start-Process -FilePath $runtimeExecutable -WorkingDirectory $runtimeTarget -PassThru
+    Start-Sleep -Milliseconds 1500
+    if ($extractorProcess.HasExited) {
+      throw "The Extractor app exited during startup (exit code $($extractorProcess.ExitCode)). Try launching again. If it keeps closing, send this message to your administrator."
+    }
+    Write-Output "Extractor is running (process ID $($extractorProcess.Id))."
+  } finally {
+    if ($null -eq $previousSharedApp) { Remove-Item Env:FARE_EXTRACTOR_SHARED_APP -ErrorAction SilentlyContinue }
+    else { $env:FARE_EXTRACTOR_SHARED_APP = $previousSharedApp }
+    if ($null -eq $previousRunAsNode) { Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
+    else { $env:ELECTRON_RUN_AS_NODE = $previousRunAsNode }
+  }
 } else {
   Write-Progress -Activity 'Checking Extractor updates' -Status 'Shared application files are ready.' -PercentComplete 100 -Completed
   Write-Output "Shared application: $applicationDirectory"

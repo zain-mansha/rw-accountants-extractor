@@ -701,13 +701,14 @@
   function isEagleFoodsText(value){const text=String(value||'');return /\bEAGLE\s*FOODS?\s*(?:LTD|LIMITED)\b/i.test(text)||/\bEAGLEFOODS\b/i.test(text)||/sales\s*@\s*eaglefoods\.co\.uk/i.test(text)||/823\s*9589\s*88/.test(text);}
   function isEagleNonInvoicePage(value){const text=String(value||'');return /\bstatement\s+of\s+account\b/i.test(text)||/\b(?:interpretation|force\s+majeure|intellectual\s+property\s+rights|business\s+day)\b/i.test(text)||/\bterms\s+and\s+conditions\b/i.test(text)&&(/\bEagle\s*Foods?\b/i.test(text)||/04994847/.test(text));}
   function eagleDate(value){
-    const text=String(value||'').trim().replace(/\b0(?=[A-Z]{2,3}\b)/i,'O').replace(/\b([0-9])\s*[-/.]\s*([A-Za-z]{3})\s*[-/.]\s*(\d{2,4})\b/,(match,day,month,year)=>`${day}-${month.toUpperCase()}-${year}`);
-    const monthDate=text.match(/\b(\d{1,2})\s*[-/.]\s*([A-Z]{3})\s*[-/.]\s*(\d{2,4})\b/i);
+    const text=String(value||'').trim().replace(/\b(?:0CR|ACR)\b/ig,'OCT').replace(/\b0(?=[A-Z0-9]{2,3}\b)/i,'O').replace(/(\b\d{1,2}\s*[-/. _]{1,3})(?:UG|U6)(?=[-/. _]{1,3}\d)/i,'$1AUG').replace(/(\b\d{1,2}\s*[-/. _]{1,3})UL(?=[-/. _]{1,3}\d)/i,'$1JUL').replace(/\b([0-9]{1,2})\s*[-/. _]{1,3}\s*([A-Za-z0-9]{3})\s*[-/. _]{1,3}\s*(\d{2,4})\b/,(match,day,month,year)=>`${day}-${month.toUpperCase().replace(/^5EP$/,'SEP').replace(/^0CT$/,'OCT')}-${year}`);
+    const monthDate=text.match(/\b(\d{1,2})\s*[-/. _]{1,3}\s*([A-Z]{3})\s*[-/. _]{1,3}\s*(\d{2,4})\b/i);
     if(monthDate){const months={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12},month=months[monthDate[2].toUpperCase()];if(month)return parseDate(`${monthDate[1]}/${month}/${monthDate[3]}`);}
     const numeric=text.match(/\b\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\b/);return parseDate(numeric?.[0]||'');
   }
   function eaglePrintedAmount(value){
-    const raw=String(value??'').trim().replace(/[£$€]/g,'').replace(/\bGBP\b/ig,'').trim();
+    let raw=String(value??'').trim().replace(/[£$€]/g,'').replace(/\bGBP\b/ig,'').trim();
+    if(/^\d{1,3}[.,]\d{3}[.,]\d{2}$/.test(raw))raw=raw.replace(/[.,](?=\d{3}[.,]\d{2}$)/,'');
     if(!/^[+-]?\s*\(?\s*\d[\d\s,]*[.,]\s*\d{2}\s*\)?$/.test(raw))return null;
     return invoiceAmount(raw);
   }
@@ -734,18 +735,64 @@
   }
   function eagleInvoiceReference(lines,flat=''){
     const refs=[];
-    const add=value=>{const digits=String(value||'').replace(/\D/g,'');if(digits.length>=4&&digits.length<=12)refs.push(digits);};
-    const anchored=eagleAnchoredValue(lines,/\binvoice\s*(?:no\.?|number|#)\s*:?\s*/i,/\b\d[\d\s-]{2,}\d\b/);
+    const add=value=>{const digits=String(value||'').toUpperCase().replace(/[SOBIL]/g,char=>({S:'5',O:'0',B:'8',I:'1',L:'1'}[char])).replace(/\D/g,'');if(digits.length>=2&&digits.length<=12)refs.push(digits);};
+    const anchored=eagleAnchoredValue(lines,/\binvoice\s*(?:no\.?|number|#)\s*:?\s*/i,/\b[\dSOBIL]{2,11}\b/i);
     if(anchored)add(anchored);
-    if(!refs.length){const match=String(flat||'').match(/\binvoice\s*(?:no\.?|number|#)\s*:?\s*([A-Z0-9\s/-]{4,32})/i);if(match){const candidates=match[1].match(/\d[\d\s-]{2,}\d/g)||[];for(const candidate of candidates)add(candidate);}}
+    if(!refs.length&&!(Array.isArray(lines)&&lines.some(line=>String(line?.text||'').trim()))){const match=String(flat||'').match(/\binvoice\s*(?:no\.?|number|#)\s*:?\s*(\d[\d]{1,11})\b/i);if(match)add(match[1]);}
     return refs.sort((a,b)=>b.length-a.length)[0]||'';
   }
   function eagleInvoiceDate(lines,flat=''){
     const pattern=/\b\d{1,2}\s*[-/.]\s*[A-Z0-9]{3}\s*[-/.]\s*\d{2,4}\b|\b\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\b/i;
-    const anchored=eagleAnchoredValue(lines,/\b(?:invoice|order)\s+date\s*:?\s*/i,pattern);
-    if(anchored)return eagleDate(anchored);
+    const items=Array.isArray(lines)?lines:[],labels=items.filter(line=>/\b(?:invoice|order)\s+date\s*:?/i.test(String(line.text||'')));
+    if(labels.length){
+      const choices=[];
+      for(const label of labels){
+        const labelText=String(label.text||''),match=labelText.match(/\b(?:invoice|order)\s+date\s*:?/i),inline=labelText.slice((match?.index||0)+(match?.[0]?.length||0)).match(pattern);
+        if(inline&&eagleDate(inline[0]))choices.push({date:eagleDate(inline[0]),distance:0});
+        const x=Number(label.x)||0,y=Number(label.y)||0,height=Number(label.height)||20;
+        for(const candidate of items){
+          if(candidate===label||label.page!==undefined&&candidate.page!==undefined&&Number(label.page)!==Number(candidate.page))continue;
+          const candidateX=Number(candidate.x)||0,candidateY=Number(candidate.y)||0,raw=String(candidate.text||'').match(pattern)?.[0],date=eagleDate(raw);
+          if(date&&candidateX>=x&&candidateX<=x+height*20&&Math.abs(candidateY-y)<=height*1.1)choices.push({date,distance:Math.abs(candidateY-y)});
+        }
+      }
+      return choices.sort((a,b)=>a.distance-b.distance)[0]?.date||'';
+    }
     const match=String(flat||'').match(/\b(?:invoice|order)\s+date\s*:?\s*(\d{1,2}\s*[-/.]\s*[A-Z0-9]{3}\s*[-/.]\s*\d{2,4}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4})/i);
     return eagleDate(match?.[1]||'');
+  }
+  function eagleDateField(lines,labelPattern,verticalTolerance=2){
+    const items=Array.isArray(lines)?lines:[],pattern=/\b\d{1,2}\s*[-/.]\s*[A-Z0-9]{2,5}\s*[-/.]\s*\d{2,4}\b|\b\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\b|\b[A-Z0-9]{2,5}\s*[-/. ]*\s*\d{2,4}\b/i,choices=[];
+    for(const label of items){const text=String(label.text||''),match=text.match(labelPattern);if(!match)continue;const inline=text.slice((match.index||0)+match[0].length).match(pattern);if(inline)choices.push({raw:inline[0],distance:0});const x=Number(label.x)||0,y=Number(label.y)||0,height=Number(label.height)||20,width=Number(label.width)||text.length*height*0.45,right=x+width;
+      for(const candidate of items){if(candidate===label||label.page!==undefined&&candidate.page!==undefined&&Number(label.page)!==Number(candidate.page))continue;const candidateX=Number(candidate.x)||0,candidateY=Number(candidate.y)||0,raw=String(candidate.text||'').match(pattern)?.[0];if(!raw||candidateX<right-height*0.5||candidateX>right+height*18||Math.abs(candidateY-y)>height*verticalTolerance)continue;choices.push({raw,distance:Math.abs(candidateY-y)});}
+      const fieldItems=items.filter(candidate=>candidate!==label&&(label.page===undefined||candidate.page===undefined||Number(label.page)===Number(candidate.page))&&Number(candidate.x)>=right-height*0.5&&Number(candidate.x)<=right+height*18&&Math.abs((Number(candidate.y)||0)-y)<=height*2.5),dayItems=fieldItems.filter(candidate=>/^\s*\d{1,2}\s*$/.test(String(candidate.text||''))),monthItems=fieldItems.filter(candidate=>/^\s*[A-Z0-9]{2,5}\s*[-/. ]*\s*\d{2,4}\s*$/i.test(String(candidate.text||'')));
+      for(const day of dayItems)for(const month of monthItems){const dayText=String(day.text||'').trim(),monthText=String(month.text||'').trim(),dayY=Number(day.y)||0,monthY=Number(month.y)||0;if(Math.abs(dayY-monthY)>height*3)continue;choices.push({raw:`${dayText}-${monthText}`,distance:(Math.abs(dayY-y)+Math.abs(monthY-y))/2});}
+    }
+    return choices.sort((a,b)=>a.distance-b.distance)[0]?.raw||'';
+  }
+  function eagleDatePeriod(value){
+    const text=String(value||'').toUpperCase().replace(/\b(?:0CR|ACR)\b/g,'OCT').replace(/0(?=CT\b)/g,'O').replace(/\bUL(?=[-/. ]*\d{2,4}\b)/g,'JUL').replace(/\bUG(?=[-/. ]*\d{2,4}\b)/g,'AUG'),months={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12};let match=null;
+    for(const name of Object.keys(months)){const found=text.match(new RegExp(`${name}[^A-Z0-9]{0,5}(\\d{2,4})|${name}(\\d{2,4})`));if(found){match={month:months[name],year:Number(found[1]||found[2])};break;}}
+    if(!match){const legacy=text.match(/\b([A-Z0-9]{2,3})\s*[-/. ]*\s*(\d{2,4})\b/);if(!legacy)return null;const monthName=legacy[1].replace(/^0(?=CT$)/,'O');if(!months[monthName])return null;match={month:months[monthName],year:Number(legacy[2])};}
+    let year=match.year;if(!year)return null;if(year<100)year+=year>=70?1900:2000;return {year,month:match.month};
+  }
+  function eagleDateHints(lines){
+    const orderLabel=/\b(?:invoice|order)\s+date\s*:?/i,deliveryLabel=/\bdelivery\s+date\s*:?/i,orderRaw=eagleDateField(lines,orderLabel),deliveryRaw=eagleDateField(lines,deliveryLabel),periodRaws=[eagleDateField(lines,orderLabel,2.5),eagleDateField(lines,deliveryLabel,2.5)],orderDate=eagleDate(orderRaw),deliveryDate=eagleDate(deliveryRaw),periods=periodRaws.map(eagleDatePeriod).filter(Boolean),uniquePeriods=[...new Map(periods.map(item=>[`${item.year}-${item.month}`,item])).values()];return {orderDate,deliveryDate,periods:uniquePeriods};
+  }
+  function eagleFooterAmounts(lines){
+    const items=Array.isArray(lines)?lines:[],anchors=items.filter(line=>/^\s*(?:Total\s+Credit|New\s+Invoice\s+Total)\s*:?\s*$/i.test(String(line.text||'')));
+    let partial=null;
+    for(const anchor of anchors){
+      const x=Number(anchor.x)||0,y=Number(anchor.y)||0,height=Number(anchor.height)||20;
+      const nearby=items.filter(line=>Number(line.page)===Number(anchor.page)&&Number(line.x)>=x-height*30&&Number(line.x)<=x+height*4&&y-(Number(line.y)||0)>=height*4&&y-(Number(line.y)||0)<=height*15);
+      for(const gross of nearby.filter(line=>eaglePrintedAmount(line.text)!==null).sort((a,b)=>(Number(b.x)||0)-(Number(a.x)||0))){
+        const row=nearby.filter(line=>Math.abs((Number(line.y)||0)-(Number(gross.y)||0))<=height*1.5).sort((a,b)=>(Number(a.x)||0)-(Number(b.x)||0));
+        const grossIndex=row.indexOf(gross);if(grossIndex<1)continue;
+        const precedingAmounts=row.slice(0,grossIndex).filter(line=>eaglePrintedAmount(line.text)!==null),netLine=precedingAmounts.length>=2?precedingAmounts.at(-2):null,vatLine=precedingAmounts.length>=2?precedingAmounts.at(-1):null,net=eaglePrintedAmount(netLine?.text),vat=eaglePrintedAmount(vatLine?.text),total=eaglePrintedAmount(gross.text);
+        if(total!==null){if(net!==null&&vat!==null){const totalX=Number(gross.x)||0,vatX=Number(vatLine?.x)||0,vatWidth=Number(vatLine?.width)||String(vatLine?.text||'').length*height*0.45,splitPrefix=items.some(line=>line!==gross&&Number(line.x)>vatX+vatWidth*0.6&&Number(line.x)<totalX+height*2&&Math.abs((Number(line.y)||0)-(Number(gross.y)||0))<=height*1.5&&(/^\s*[+-]?\d{1,3}[,.]\s*$/.test(String(line.text||''))||/^\s*[+-]?\d{1,3}[,.]\s+\d{1,3}[,.]\s*\d{2}\s*$/.test(String(line.text||''))));return {net,vat,total,totalOcrIncomplete:splitPrefix};}partial??={vat:null,total};}
+      }
+    }
+    return partial;
   }
   function eagleAccountCode(lines){
     const items=Array.isArray(lines)?lines.filter(line=>line&&String(line.text||'').trim()):[],labels=items.filter(line=>/^\s*account\s+no\.?\s*:?\s*$/i.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0));
@@ -760,13 +807,14 @@
   function parseEagleFoodsInvoice(flat,source='',ocrLines){
     const lines=Array.isArray(ocrLines)?ocrLines.filter(line=>line&&String(line.text||'').trim()):[],isStatement=/\bstatement\s+of\s+account\b/i.test(String(flat||''));
     if(isStatement||!eagleInvoicePage(lines,flat))return {invoiceNumber:'',originalInvoiceNumber:'',date:'',supplier:'Eagle Foods Ltd',subtotal:'',vat:'',total:'',documentType:'INVOICE',currency:'GBP',source,isInvoiceDocument:false,accepted:false,rejected:true,rejectedReason:'This Eagle Foods page is a statement, terms sheet, or other non-invoice page.',retryOcr:false};
-    const fullNumber=eagleInvoiceReference(lines,flat),date=eagleInvoiceDate(lines,flat),accountCode=eagleAccountCode(lines),vatRaw=eagleAnchoredValue(lines,/^\s*VAT\s+Total\s*:?\s*/i,/\(?\s*[+-]?\s*\d[\d\s,]*[.,]\s*\d{2}\s*\)?/i),totalRaw=eagleAnchoredValue(lines,/^\s*(?:Invoice\s+Total|Total\s+Credit)\s*:?\s*/i,/\(?\s*[+-]?\s*\d[\d\s,]*[.,]\s*\d{2}\s*\)?/i),vat=eaglePrintedAmount(vatRaw),total=eaglePrintedAmount(totalRaw),complete=Boolean(fullNumber&&date&&vat!==null&&total!==null);
+    const fullNumber=eagleInvoiceReference(lines,flat),dateHints=eagleDateHints(lines),date=dateHints.orderDate||eagleInvoiceDate(lines,flat),accountCode=eagleAccountCode(lines),vatRaw=eagleAnchoredValue(lines,/^\s*VAT\s+Total\s*:?\s*/i,/\(?\s*[+-]?\s*\d[\d\s,]*[.,]\s*\d{2}\s*\)?/i),totalRaw=eagleAnchoredValue(lines,/^\s*(?:Invoice\s+Total|Total\s+Credit)\s*:?\s*/i,/\(?\s*[+-]?\s*\d[\d\s,]*[.,]\s*\d{2}\s*\)?/i),footer=eagleFooterAmounts(lines),vat=eaglePrintedAmount(vatRaw)??footer?.vat??null,total=eaglePrintedAmount(totalRaw)??footer?.total??null,complete=Boolean(fullNumber&&date&&vat!==null&&total!==null);
     const rejectedReason=complete?'':!fullNumber?'Eagle Foods invoice number could not be confirmed.':!date?'Eagle Foods invoice date could not be confirmed.':total===null?'Printed Eagle Foods invoice total could not be confirmed.':'Printed Eagle Foods VAT could not be confirmed.';
-    return {invoiceNumber:normalizeInvoiceNumber(fullNumber),originalInvoiceNumber:fullNumber,date,accountCode,supplier:'Eagle Foods Ltd',subtotal:'',vat:vat??'',total:total??'',documentType:'INVOICE',currency:'GBP',source,isInvoiceDocument:true,accepted:complete,rejected:!complete,rejectedReason,confidence:complete?'ACCEPTED':'REJECTED',retryOcr:!complete,review:false,profileId:'eagle-foods',layoutId:'eagle-foods-invoice'};
+    return {invoiceNumber:normalizeInvoiceNumber(fullNumber),originalInvoiceNumber:fullNumber,date,eagleDeliveryDate:dateHints.deliveryDate,eagleDatePeriods:dateHints.periods,accountCode,eagleInvoiceNet:footer?.net??null,eagleTotalOcrIncomplete:Boolean(footer?.totalOcrIncomplete),supplier:'Eagle Foods Ltd',subtotal:'',vat:vat??'',total:total??'',documentType:'INVOICE',currency:'GBP',source,isInvoiceDocument:true,accepted:complete,rejected:!complete,rejectedReason,confidence:complete?'ACCEPTED':'REJECTED',retryOcr:!complete,review:false,profileId:'eagle-foods',layoutId:'eagle-foods-invoice'};
   }
   function eagleStatementRows(lines){
     const items=Array.isArray(lines)?lines.filter(line=>line&&String(line.text||'').trim()):[],text=items.map(line=>String(line.text||'')).join(' ');
     if(!/\bstatement\s+of\s+account\b/i.test(text))return [];
+    const headerStatementDate=items.filter(line=>/\b\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{4}\b/.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0))[0],statementDate=eagleDate(eagleAnchoredValue(items,/^\s*Statement\s+Date\s*:?\s*/i,/\b\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{4}\b/)||headerStatementDate?.text||text.match(/\bStatement\s+Date\s*:?\s*(\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{4})/i)?.[1]||'');
     const labels=[['date',/\bdocument\s+date\b/i],['type',/\bdocument\s+type\b/i],['number',/\bdocument\s+no\b/i],['net',/^\s*net\s*$/i],['vat',/^\s*vat\s*$/i],['total',/^\s*total\s*$/i],['balance',/^\s*balance\s*$/i],['dueDate',/^\s*due\s+date\s*$/i],['daysOld',/^\s*days\s+old\s*$/i],['amountDue',/^\s*amount\s+due\s*$/i]],headers={};
     const dateHeader=items.find(line=>/\bdocument\s+date\b/i.test(String(line.text||''))),headerY=Number(dateHeader?.y)||0,headerTolerance=Math.max(8,(Number(dateHeader?.height)||16)*1.5);
     for(const [key,pattern] of labels){const found=items.filter(line=>pattern.test(String(line.text||''))&&Math.abs((Number(line.y)||0)-headerY)<=headerTolerance).sort((a,b)=>Math.abs((Number(a.y)||0)-headerY)-Math.abs((Number(b.y)||0)-headerY));if(found.length)headers[key]=Number(found[0].x)||0;}
@@ -781,54 +829,108 @@
       if(!/\bsales\s+invoice\b/i.test(cells.type||''))continue;
       const documentNumber=String(cells.number||'').replace(/\D/g,''),total=eaglePrintedAmount(cells.total),vat=eaglePrintedAmount(cells.vat),date=eagleDate(cells.date);
       if(documentNumber.length<4||total===null||vat===null)continue;
-       result.push({documentNumber,date,total,vat,net:eaglePrintedAmount(cells.net),accountCode,documentType:'Sales Invoice'});
+      result.push({documentNumber,date,total,vat,net:eaglePrintedAmount(cells.net),accountCode,statementDate,documentType:'Sales Invoice'});
     }
     return result;
   }
-  function eagleInvoicePageInfo(lines){
-    const text=(Array.isArray(lines)?lines:[]).map(line=>String(line?.text||'')).join(' '),reference=eagleInvoiceReference(lines,text),date=eagleInvoiceDate(lines,text),pageMarker=text.match(/\bpage\s*([1-9]\d?)\s*(?:of\s*([1-9]\d?))?\b/i);
-    return {reference,date,pageNumber:pageMarker?Number(pageMarker[1]):0,pageCount:pageMarker?.[2]?Number(pageMarker[2]):0};
+  function eagleStatementRowsFromOcr(lines){
+    const items=Array.isArray(lines)?lines.filter(line=>line&&String(line.text||'').trim()):[],pages=new Map();
+    for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}
+    return [...pages].flatMap(([page,pageItems])=>eagleStatementRows(pageItems).map(row=>({...row,summaryPage:page})));
   }
-  function sameEagleInvoiceReference(a,b){if(!a||!b)return false;if(a===b)return true;return Math.min(a.length,b.length)<6&&a.slice(-4)===b.slice(-4);}
+  function eagleAccountCodesCompatible(a,b){const left=String(a||'').replace(/[^A-Z0-9]/gi,'').toUpperCase(),right=String(b||'').replace(/[^A-Z0-9]/gi,'').toUpperCase();return !left||!right||left===right||left.endsWith(right)||right.endsWith(left);}
+  function newestEagleStatementMatch(matches,row){
+    if(!matches.length)return null;
+    const allMatches=[...matches];
+    if(row.date){const byDocumentDate=matches.filter(item=>!item.date||item.date===row.date);if(!byDocumentDate.length)return null;matches=byDocumentDate;}
+    const dated=matches.filter(item=>item.statementDate);
+    if(dated.length){const latest=dated.reduce((max,item)=>item.statementDate>max?item.statementDate:max,'');matches=dated.filter(item=>item.statementDate===latest);}
+    const unique=new Map(matches.map(item=>[`${item.documentNumber}|${item.date}|${Math.round(item.total*100)}|${Math.round(item.vat*100)}`,item]));
+    matches=[...unique.values()];
+    const withKnownDate=selected=>{if(selected?.date)return selected;const sameAmounts=allMatches.filter(item=>item.date&&Math.round(Number(item.total)*100)===Math.round(Number(selected.total)*100)&&Math.round(Number(item.vat)*100)===Math.round(Number(selected.vat)*100)),dates=new Set(sameAmounts.map(item=>item.date));return dates.size===1?{...selected,date:[...dates][0]}:selected;};
+    if(matches.length===1)return withKnownDate(matches[0]);
+    const documents=new Set(matches.map(item=>item.documentNumber)),amounts=new Set(matches.map(item=>`${Math.round(item.total*100)}|${Math.round(item.vat*100)}`)),dates=new Set(matches.map(item=>item.date).filter(Boolean));
+    if(documents.size===1&&amounts.size===1&&(row.date||dates.size<=1))return withKnownDate(matches.find(item=>row.date&&item.date===row.date)||matches[0]);
+    return null;
+  }
+  function eagleInvoicePageInfo(lines){
+    const text=(Array.isArray(lines)?lines:[]).map(line=>String(line?.text||'')).join(' ').replace(/\bpa[qg]e\b/ig,'page').replace(/\bpa\s*ge\b/ig,'page').replace(/\bpa\s*e\s*[vV]?\s*2\s*(?:th|of)?\b/ig,'page 2'),reference=eagleInvoiceReference(lines,text),dateHints=eagleDateHints(lines),date=dateHints.orderDate||eagleInvoiceDate(lines,text),accountCode=eagleAccountCode(lines),pageMarker=text.match(/\bpage\s*([1-9]\d?)\s*(?:of\s*([1-9]\d?))?\b/i);
+    return {reference,date,deliveryDate:dateHints.deliveryDate,datePeriods:dateHints.periods,accountCode,pageNumber:pageMarker?Number(pageMarker[1]):0,pageCount:pageMarker?.[2]?Number(pageMarker[2]):0};
+  }
+  function sameEagleInvoiceReference(a,b){return Boolean(a&&b&&a===b);}
+  function eagleSummaryMatchesDateEvidence(item,row){
+    if(!item?.date)return true;
+    const printedDates=[row?.date,row?.eagleDeliveryDate].filter(Boolean);if(printedDates.includes(item.date))return true;
+    const periods=row?.eagleDatePeriods||[];if(!row?.date&&!row?.eagleDeliveryDate&&!periods.length)return true;const [year,month]=String(item.date).split('-').map(Number);return periods.some(period=>period.year===year&&period.month===month);
+  }
+  function eagleShortReferenceDocuments(row,statementRows){
+    const digits=String(row?.originalInvoiceNumber||'').replace(/\D/g,'');if(digits.length<2||digits.length>=6)return new Set();
+    let candidates=statementRows.filter(item=>item.documentNumber.endsWith(digits)&&eagleSummaryMatchesDateEvidence(item,row));const accountMatches=candidates.filter(item=>eagleAccountCodesCompatible(row.accountCode,item.accountCode));if(accountMatches.length)candidates=accountMatches;
+    return new Set(candidates.map(item=>item.documentNumber));
+  }
+  function eagleRowsDateEvidenceOverlaps(left,right){
+    const periods=row=>{const evidence=[...(row?.eagleDatePeriods||[])];for(const value of [row?.date,row?.eagleDeliveryDate])if(value){const [year,month]=String(value).split('-').map(Number);if(year&&month)evidence.push({year,month});}return [...new Map(evidence.map(item=>[`${item.year}-${item.month}`,item])).values()];},a=periods(left),b=periods(right);return !a.length||!b.length||a.some(x=>b.some(y=>x.year===y.year&&x.month===y.month));
+  }
   function applyEagleStatementConfirmation(row,statementRows){
-    const originalDigits=String(row.originalInvoiceNumber||'').replace(/\D/g,''),suffix=originalDigits.slice(-4),rowTotal=row.total===''||row.total===null||row.total===undefined?null:Number(row.total),rowVat=row.vat===''||row.vat===null||row.vat===undefined?null:Number(row.vat),accountCode=String(row.accountCode||'').toUpperCase(),eligible=statementRows.filter(item=>!accountCode||!item.accountCode||item.accountCode===accountCode);
-    if(row.invoiceNumber&&row.date&&rowTotal!==null&&Number.isFinite(rowTotal)&&rowVat!==null&&Number.isFinite(rowVat))return row;
-    let matches=originalDigits.length>=6?eligible.filter(item=>item.documentNumber===originalDigits):[];
-    if(!matches.length&&originalDigits.length>=6)matches=statementRows.filter(item=>item.documentNumber===originalDigits);
-    if(!matches.length&&suffix){matches=eligible.filter(item=>item.documentNumber.endsWith(suffix));if(!matches.length){const allBySuffix=statementRows.filter(item=>item.documentNumber.endsWith(suffix)),documents=new Set(allBySuffix.map(item=>item.documentNumber));if(documents.size===1)matches=allBySuffix;}}
-    if(matches.length>1&&row.date){const dated=matches.filter(item=>!item.date||item.date===row.date);if(dated.length)matches=dated;}
-    if(!matches.length&&rowTotal!==null&&Number.isFinite(rowTotal))matches=eligible.filter(item=>Math.round(item.total*100)===Math.round(rowTotal*100)&&(!row.date||!item.date||item.date===row.date));
-    if(!matches.length&&!suffix&&row.date)matches=eligible.filter(item=>item.date===row.date);
-    const unique=new Map(matches.map(item=>[`${item.documentNumber}|${item.date}|${Math.round(item.total*100)}|${Math.round(item.vat*100)}`,item]));matches=[...unique.values()];
-    if(matches.length>1){const documents=new Set(matches.map(item=>item.documentNumber)),amounts=new Set(matches.map(item=>`${Math.round(item.total*100)}|${Math.round(item.vat*100)}`));if(documents.size===1&&amounts.size===1){const dated=row.date&&matches.find(item=>item.date===row.date);matches=[dated||matches[0]];}else{if(documents.size===1)row.eagleSummaryDocumentNumber=matches[0].documentNumber;row.eagleSummaryConflict=true;row.eagleSummaryConflictReason='Matching Eagle Foods account statements show conflicting values for this invoice. Verify the invoice and statement before importing.';row.accepted=false;row.rejected=true;row.status='REJECTED';row.rejectedReason=row.eagleSummaryConflictReason;row.retryOcr=false;return row;}}
-    if(matches.length!==1)return row;
-    const match=matches[0],conflicts=[];
-    if(rowTotal!==null&&Number.isFinite(rowTotal)&&Math.round(rowTotal*100)!==Math.round(match.total*100))conflicts.push(`printed total ${rowTotal.toFixed(2)} vs statement ${match.total.toFixed(2)}`);
-    if(rowVat!==null&&Number.isFinite(rowVat)&&Math.round(rowVat*100)!==Math.round(match.vat*100))conflicts.push(`printed VAT ${rowVat.toFixed(2)} vs statement ${match.vat.toFixed(2)}`);
-    if(conflicts.length){row.eagleSummaryConflict=true;row.eagleSummaryConflictReason=`The invoice page and matching account statement disagree (${conflicts.join('; ')}). Verify the invoice before importing.`;row.accepted=false;row.rejected=true;row.status='REJECTED';row.rejectedReason=row.eagleSummaryConflictReason;row.retryOcr=false;return row;}
-    row.originalInvoiceNumber=match.documentNumber;row.invoiceNumber=normalizeInvoiceNumber(match.documentNumber);if(!row.accountCode)row.accountCode=match.accountCode;
+    const originalDigits=String(row.originalInvoiceNumber||'').replace(/\D/g,'');
+    if(row.eagleTotalOcrIncomplete){row.total='';row.accepted=false;row.rejected=true;row.status='REJECTED';row.confidence='REJECTED';row.rejectedReason='The printed Eagle Foods total was split across OCR fragments and must be confirmed from a matching invoice summary.';row.retryOcr=false;}
+    if(originalDigits.length<2)return row;
+    const suffixMatches=statementRows.filter(item=>item.documentNumber.endsWith(originalDigits)&&eagleSummaryMatchesDateEvidence(item,row)),accountMatches=suffixMatches.filter(item=>eagleAccountCodesCompatible(row.accountCode,item.accountCode));if(accountMatches.length)suffixMatches.splice(0,suffixMatches.length,...accountMatches);const matchedDocuments=new Set(suffixMatches.map(item=>item.documentNumber));row.eagleSummaryAmbiguousReference=false;
+    if(originalDigits.length<6&&matchedDocuments.size>1){row.eagleSummaryAmbiguousReference=true;row.eagleSummaryConflictReason=`The ${originalDigits.length}-digit Eagle Foods invoice reference matches more than one document number in the summaries.`;row.accepted=false;row.rejected=true;row.status='REJECTED';row.rejectedReason=row.eagleSummaryConflictReason;row.retryOcr=true;return row;}
+    const linkedDocument=originalDigits.length>=6?originalDigits:[...matchedDocuments][0]||'';
+    if(!linkedDocument)return row;
+    let matches=statementRows.filter(item=>item.documentNumber===linkedDocument&&eagleAccountCodesCompatible(row.accountCode,item.accountCode));if(!matches.length&&originalDigits.length<6)matches=statementRows.filter(item=>item.documentNumber===linkedDocument);if(!matches.length)return row;
+    const dateCompatible=matches.filter(item=>eagleSummaryMatchesDateEvidence(item,row));if(!dateCompatible.length)return row;
+    const summaryDate=row.date&&dateCompatible.some(item=>item.date===row.date)?row.date:row.eagleDeliveryDate&&dateCompatible.some(item=>item.date===row.eagleDeliveryDate)?row.eagleDeliveryDate:'';
+    const match=newestEagleStatementMatch(dateCompatible,{...row,date:summaryDate});
+    if(!match){
+      if(!row.date||row.total===''||row.vat===''){row.eagleSummaryConflict=true;row.eagleSummaryConflictReason='Matching Eagle Foods summaries contain conflicting details, so missing invoice values could not be confirmed.';row.accepted=false;row.rejected=true;row.status='REJECTED';row.confidence='REJECTED';row.rejectedReason=row.eagleSummaryConflictReason;row.retryOcr=false;}
+      return row;
+    }
+    row.originalInvoiceNumber=match.documentNumber;row.invoiceNumber=originalDigits.length<4?originalDigits:normalizeInvoiceNumber(match.documentNumber);if(!row.accountCode)row.accountCode=match.accountCode;
     if(!row.date)row.date=match.date;
-    if(row.total===''||row.total===null||row.total===undefined)row.total=match.total;
-    if(row.vat===''||row.vat===null||row.vat===undefined)row.vat=match.vat;
-    row.eagleSummaryConfirmed=true;row.eagleSummaryDocumentNumber=match.documentNumber;row.eagleSummaryPageReference=true;
-    const complete=Boolean(row.invoiceNumber&&row.date&&Number.isFinite(Number(row.total))&&Number.isFinite(Number(row.vat)));
+    const summaryConfirmsSplitTotal=Boolean(row.eagleTotalOcrIncomplete&&row.eagleInvoiceNet!==null&&row.eagleInvoiceNet!==undefined&&match.net!==null&&match.net!==undefined&&Math.round(Number(row.eagleInvoiceNet)*100)===Math.round(Number(match.net)*100)&&row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Math.round(Number(row.vat)*100)===Math.round(Number(match.vat)*100));
+    if(summaryConfirmsSplitTotal){row.total=match.total;row.eagleSummaryReplacedSplitTotal=true;}
+    if((row.total===''||row.total===null||row.total===undefined)&&(!row.eagleTotalOcrIncomplete||summaryConfirmsSplitTotal))row.total=match.total;
+    if(row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified)row.vat=match.vat;
+    row.vatUnverified=false;
+    row.eagleSummaryConfirmed=true;row.eagleSummaryAmbiguousReference=false;row.eagleSummaryConflict=false;row.eagleSummaryDocumentNumber=match.documentNumber;row.eagleSummaryPageReference=true;
+    const complete=Boolean(row.invoiceNumber&&row.date&&row.total!==''&&row.total!==null&&Number.isFinite(Number(row.total))&&row.vat!==''&&row.vat!==null&&Number.isFinite(Number(row.vat)));
     row.accepted=complete;row.rejected=!complete;row.status=complete?'ACCEPTED':'REJECTED';row.confidence=row.status;row.retryOcr=!complete;
     row.rejectedReason=complete?'':!row.invoiceNumber?'Eagle Foods invoice number could not be confirmed.':!row.date?'Eagle Foods invoice date could not be confirmed.':row.total===''?'Printed Eagle Foods invoice total could not be confirmed.':'Printed Eagle Foods VAT could not be confirmed.';
     return row;
   }
+  function confirmEagleInvoiceRows(rows,additionalStatementRows=[]){
+    const allRows=Array.isArray(rows)?rows:[],collected=[...additionalStatementRows,...allRows.filter(row=>row?.profileId==='eagle-foods').flatMap(row=>Array.isArray(row.eagleStatementRows)?row.eagleStatementRows:[])],summaries=[...new Map(collected.filter(item=>item?.documentNumber).map(item=>[`${item.documentNumber}|${item.date||''}|${item.statementDate||''}|${item.accountCode||''}|${Math.round(Number(item.total)*100)}|${Math.round(Number(item.vat)*100)}`,item])).values()];
+    const eagleRows=allRows.filter(row=>row?.profileId==='eagle-foods');
+    for(const row of eagleRows){row.eagleStatementRows=summaries;applyEagleStatementConfirmation(row,summaries);}
+    for(const row of eagleRows){const digits=String(row.originalInvoiceNumber||'').replace(/\D/g,'');if(digits.length<2||digits.length>=6||row.eagleSummaryConfirmed||row.eagleSummaryConflict)continue;const summaryDocuments=eagleShortReferenceDocuments(row,summaries),rowMatches=eagleRows.filter(other=>other!==row&&String(other.originalInvoiceNumber||'').replace(/\D/g,'').endsWith(digits)&&eagleRowsDateEvidenceOverlaps(row,other));if(summaryDocuments.size>1||!summaryDocuments.size&&rowMatches.length){row.eagleSummaryAmbiguousReference=true;row.accepted=false;row.rejected=true;row.status='REJECTED';row.confidence='REJECTED';row.rejectedReason=`The ${digits.length}-digit Eagle Foods invoice reference is not unique in the selected PDFs. Verify it against the invoice summary.`;row.retryOcr=false;}}
+    return allRows;
+  }
   function parseEagleFoodsBatch(pageLines,source=''){
-    const rawSummaries=[];for(const lines of pageLines.values())rawSummaries.push(...eagleStatementRows(lines));
-    const summaries=[...new Map(rawSummaries.map(item=>[`${item.documentNumber}|${item.date}|${Math.round(item.total*100)}|${Math.round(item.vat*100)}`,item])).values()];
+    const summaries=eagleStatementRowsFromOcr([...pageLines.values()].flat());
+    const canonicalReference=(reference,accountCode,page,datePeriods=[])=>{
+      const digits=String(reference||'').replace(/\D/g,'');if(digits.length<2)return '';
+      if(digits.length>=6)return digits;
+      let candidates=summaries.filter(item=>item.documentNumber.endsWith(digits)&&eagleAccountCodesCompatible(accountCode,item.accountCode));if(datePeriods.length)candidates=candidates.filter(item=>!item.date||datePeriods.some(period=>{const [year,month]=item.date.split('-').map(Number);return period.year===year&&period.month===month;}));
+      const documents=new Set(candidates.map(item=>item.documentNumber));
+      return documents.size===1?[...documents][0]:documents.size>1?`ambiguous:${digits}:${page}`:`short:${digits}`;
+    };
     const groups=[];
-    for(const [page,lines] of pageLines){const text=lines.map(line=>String(line.text||'')).join(' ');if(!eagleInvoicePage(lines,text))continue;const info=eagleInvoicePageInfo(lines),continuation=info.pageNumber>1;let group=null;
-      if(info.reference){group=groups.find(candidate=>candidate.references.some(reference=>sameEagleInvoiceReference(reference,info.reference))&&(!candidate.dates.length||!info.date||candidate.dates.includes(info.date)));}
-      if(!group&&continuation){group=[...groups].reverse().find(candidate=>candidate.pageCount>=info.pageNumber&&(!candidate.dates.length||!info.date||candidate.dates.includes(info.date)));}
-      if(!group){group={pages:[],references:[],dates:[],pageCount:0};groups.push(group);}
-      group.pages.push({page,lines});if(info.reference)group.references.push(info.reference);if(info.date)group.dates.push(info.date);group.pageCount=Math.max(group.pageCount,info.pageCount);
+    for(const [page,lines] of [...pageLines].sort((a,b)=>Number(a[0])-Number(b[0]))){const text=lines.map(line=>String(line.text||'')).join(' ');if(!eagleInvoicePage(lines,text))continue;const info=eagleInvoicePageInfo(lines),referenceKey=canonicalReference(info.reference,info.accountCode,page,info.datePeriods);let group=null;
+      if(referenceKey){group=groups.find(candidate=>candidate.referenceKey===referenceKey&&eagleAccountCodesCompatible(candidate.accountCode,info.accountCode)&&(!candidate.dates.length||!info.date||candidate.dates.includes(info.date))&&(!candidate.datePeriods.length||!info.datePeriods.length||candidate.datePeriods.some(left=>info.datePeriods.some(right=>left.year===right.year&&left.month===right.month))));}
+      if(!group&&info.pageNumber===2&&(!info.pageCount||info.pageCount===2)){const previous=groups.at(-1),previousPage=previous?.pages.at(-1),priorReference=previous?.references.filter(Boolean).sort((a,b)=>b.length-a.length)[0]||'';if(previous&&previousPage&&Number(previousPage.page)===Number(page)-1&&eagleAccountCodesCompatible(previous.accountCode,info.accountCode)&&(!priorReference||!info.reference||priorReference.endsWith(info.reference)||info.reference.endsWith(priorReference)))group=previous;}
+      if(!group){group={pages:[],references:[],dates:[],datePeriods:[],pageCount:0,referenceKey,accountCode:info.accountCode};groups.push(group);}
+      group.pages.push({page,lines,pageNumber:info.pageNumber,pageCount:info.pageCount});if(info.reference)group.references.push(info.reference);if(info.date)group.dates.push(info.date);group.datePeriods.push(...info.datePeriods);group.pageCount=Math.max(group.pageCount,info.pageCount);
     }
     const records=[];
-    for(const group of groups){const recordLines=group.pages.flatMap(item=>item.lines),recordText=recordLines.map(line=>String(line.text||'').trim()).filter(Boolean).join('\n');let row=parseInvoiceRobust(recordText,source,recordLines);row.profileId='eagle-foods';row.page=group.pages[0].page;row.sourcePages=group.pages.map(item=>item.page);row=applyEagleStatementConfirmation(row,summaries);records.push(row);}
-    const unique=[];for(const row of records.sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0))){const digits=String(row.eagleSummaryDocumentNumber||row.originalInvoiceNumber||'').replace(/\D/g,''),key=digits.length>=6?`${row.accountCode||''}|${digits}|${row.date||''}`:'';if(!key){unique.push(row);continue;}const previous=unique.find(item=>String(item.eagleSummaryDocumentNumber||item.originalInvoiceNumber||'').replace(/\D/g,'').length>=6&&`${item.accountCode||''}|${String(item.eagleSummaryDocumentNumber||item.originalInvoiceNumber||'').replace(/\D/g,'')}|${item.date||''}`===key);if(!previous){unique.push(row);continue;}previous.sourcePages=[...new Set([...(previous.sourcePages||[previous.page]),...(row.sourcePages||[row.page])])].sort((a,b)=>a-b);if(row.eagleSummaryConflict||previous.eagleSummaryConflict||Number(previous.total)!==Number(row.total)||Number(previous.vat)!==Number(row.vat)){previous.eagleSummaryConflict=true;previous.eagleSummaryConflictReason='Duplicate Eagle Foods invoice pages or statements contain conflicting details. Verify this invoice before importing.';previous.rejectedReason=previous.eagleSummaryConflictReason;previous.accepted=false;previous.rejected=true;previous.status='REJECTED';previous.retryOcr=false;}else if(!previous.accepted&&row.accepted){Object.assign(previous,row,{sourcePages:previous.sourcePages});}}
+    for(const group of groups){const recordLines=group.pages.flatMap(item=>item.lines),recordText=recordLines.map(line=>String(line.text||'').trim()).filter(Boolean).join('\n');let row=parseInvoiceRobust(recordText,source,recordLines);row.profileId='eagle-foods';row.page=group.pages[0].page;row.sourcePages=group.pages.map(item=>item.page);row.eagleStatementRows=summaries;records.push(row);}
+    for(const row of records)applyEagleStatementConfirmation(row,summaries);
+    for(const row of records){const digits=String(row.originalInvoiceNumber||'').replace(/\D/g,'');if(digits.length<2||digits.length>=6||row.eagleSummaryConfirmed||row.eagleSummaryConflict)continue;
+      const summaryDocuments=eagleShortReferenceDocuments(row,summaries),rowMatches=records.filter(other=>other!==row&&String(other.originalInvoiceNumber||'').replace(/\D/g,'').endsWith(digits)&&eagleRowsDateEvidenceOverlaps(row,other));
+      if(summaryDocuments.size>1||!summaryDocuments.size&&rowMatches.length){row.eagleSummaryAmbiguousReference=true;row.accepted=false;row.rejected=true;row.status='REJECTED';row.confidence='REJECTED';row.rejectedReason=`The ${digits.length}-digit Eagle Foods invoice reference is not unique in this batch. Verify it against the invoice summary.`;row.retryOcr=true;}
+    }
+    const unique=[];for(const row of records.sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0))){const digits=String(row.eagleSummaryDocumentNumber||row.originalInvoiceNumber||'').replace(/\D/g,''),key=digits.length>=6?`${digits}|${row.date||''}`:'';if(!key){unique.push(row);continue;}const previous=unique.find(item=>String(item.eagleSummaryDocumentNumber||item.originalInvoiceNumber||'').replace(/\D/g,'').length>=6&&`${String(item.eagleSummaryDocumentNumber||item.originalInvoiceNumber||'').replace(/\D/g,'')}|${item.date||''}`===key&&eagleAccountCodesCompatible(item.accountCode,row.accountCode));if(!previous){unique.push(row);continue;}previous.sourcePages=[...new Set([...(previous.sourcePages||[previous.page]),...(row.sourcePages||[row.page])])].sort((a,b)=>a-b);for(const field of ['invoiceNumber','originalInvoiceNumber','date','accountCode','vat','total'])if((previous[field]===''||previous[field]===null||previous[field]===undefined)&&row[field]!==''&&row[field]!==null&&row[field]!==undefined)previous[field]=row[field];if(row.eagleSummaryConflict||previous.eagleSummaryConflict||(previous.total!==''&&row.total!==''&&Number(previous.total)!==Number(row.total))||(previous.vat!==''&&row.vat!==''&&Number(previous.vat)!==Number(row.vat))){previous.eagleSummaryConflict=true;previous.eagleSummaryConflictReason='Duplicate Eagle Foods invoice pages contain conflicting printed details. Verify this invoice before importing.';previous.rejectedReason=previous.eagleSummaryConflictReason;previous.accepted=false;previous.rejected=true;previous.status='REJECTED';previous.retryOcr=false;}else{const complete=Boolean(previous.invoiceNumber&&previous.date&&previous.total!==''&&previous.vat!=='');previous.accepted=complete;previous.rejected=!complete;previous.status=complete?'ACCEPTED':'REJECTED';previous.confidence=previous.status;previous.retryOcr=!complete;previous.rejectedReason=complete?'':row.rejectedReason||previous.rejectedReason;}}
     return unique;
   }
   function peterboroughPrintedMoney(value){
@@ -1868,7 +1970,24 @@
   function invoiceRetryConflictReason(conflicts={}){
     return Object.entries(conflicts).map(([field,values])=>`OCR passes disagree on ${field==='vat'?'VAT':'total'} (£${Number(values.firstPass).toFixed(2)} vs £${Number(values.retry).toFixed(2)}). Confirm the printed amount on the PDF.`).join(' ');
   }
-  function invoiceRetryAccepted(row,candidate,complete){return Boolean(complete&&!row?.freshwaysVatOcrAmbiguous&&!Object.keys(row?.ocrAmountConflicts||{}).length&&(row?.profileId==='bestway'||candidate?.accepted||row?.freshwaysVatOcrRetryResolved));}
+  function matchEagleRetryCandidate(row,candidates){
+    if(row?.profileId!=='eagle-foods'||!Number.isInteger(Number(row.page))||Number(row.page)<1)return null;
+    const first=String(row.originalInvoiceNumber||'').replace(/\D/g,''),page=Number(row.page);
+    const matches=(candidates||[]).filter(candidate=>{
+      if(candidate?.profileId!=='eagle-foods')return false;
+      const retry=String(candidate.originalInvoiceNumber||'').replace(/\D/g,'');
+      if(retry.length<6||!((candidate.sourcePages||[candidate.page]).map(Number).includes(page)))return false;
+      if(first.length>=6&&first!==retry||first.length>=2&&first.length<6&&!retry.endsWith(first))return false;
+      if(row.date&&candidate.date&&row.date!==candidate.date)return false;
+      if(row.accountCode&&candidate.accountCode&&row.accountCode!==candidate.accountCode)return false;
+      return true;
+    });
+    return matches.length===1?matches[0]:null;
+  }
+  function invoiceRetryAccepted(row,candidate,complete){
+    const first=String(row?.originalInvoiceNumber||'').replace(/\D/g,''),retry=String(candidate?.originalInvoiceNumber||'').replace(/\D/g,''),sameEaglePage=(candidate?.sourcePages||[candidate?.page]).map(Number).includes(Number(row?.page)),eaglePageMatch=row?.profileId==='eagle-foods'&&candidate?.profileId==='eagle-foods'&&sameEaglePage&&(!first||first===retry||first.length>=2&&first.length<6&&retry.endsWith(first));
+    return Boolean(complete&&!row?.freshwaysVatOcrAmbiguous&&!row?.eagleSummaryConflict&&!row?.eagleSummaryAmbiguousReference&&!Object.keys(row?.ocrAmountConflicts||{}).length&&(row?.profileId==='bestway'||candidate?.accepted||row?.freshwaysVatOcrRetryResolved||eaglePageMatch));
+  }
   function mergeInvoiceRetryCandidate(row,candidate,{preserveGeneratedReference=false}={}){
     const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','date','supplier','subtotal','vat','total','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured'];
     for(const key of fields){
@@ -1878,7 +1997,7 @@
       // become "20.00", keep already readable first-pass totals. The higher
       // resolution page can misread the pound sign on the invoice total too.
       if(row?.profileId==='freshways'&&row?.freshwaysVatOcrAmbiguous&&key==='total'&&merged.total!==''&&merged.total!==null&&merged.total!==undefined)continue;
-      const compareRetryAmount=(row.profileId==='bestway'||candidate.profileId==='bestway')&&(key==='vat'||key==='total')||row.profileId==='freshways'&&candidate.profileId==='freshways'&&key==='vat';
+      const compareRetryAmount=(row.profileId==='bestway'||candidate.profileId==='bestway'||row.profileId==='eagle-foods'&&candidate.profileId==='eagle-foods')&&(key==='vat'||key==='total')||row.profileId==='freshways'&&candidate.profileId==='freshways'&&key==='vat';
       if(compareRetryAmount){
         const first=merged[key],firstNumber=first===''||first===null||first===undefined?null:Number(first),retryNumber=Number(value);
         if(Number.isFinite(firstNumber)&&Number.isFinite(retryNumber)&&Math.round(firstNumber*100)!==Math.round(retryNumber*100)){
@@ -1893,6 +2012,9 @@
       if(retryVat===0){merged.vat=0;merged.freshwaysVatOcrAmbiguous=false;merged.freshwaysVatOcrRetryResolved=true;merged.rejectedReason='';}
       else{merged.vat='';merged.freshwaysVatOcrAmbiguous=true;merged.accepted=false;merged.rejectedReason='Freshways VAT remained ambiguous after the 5x OCR retry; confirm the printed footer manually.';}
     }
+    if(row?.profileId==='eagle-foods'&&Array.isArray(merged.eagleStatementRows)&&String(merged.originalInvoiceNumber||'').replace(/\D/g,'').length>=6){
+      applyEagleStatementConfirmation(merged,merged.eagleStatementRows);
+    }
     // When Liberty's clipped footer is unreadable on the higher-resolution
     // pass, do not preserve a generic first-pass figure (often a case price)
     // as if it were the invoice total. Keep the row for manual review instead.
@@ -1902,7 +2024,7 @@
     else{delete merged.ocrAmountConflicts;delete merged.ocrConflictReason;}
     return merged;
   }
-  return {extractText,parseBank,parseBankCsv,parseOcrBank,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
+  return {extractText,parseBank,parseBankCsv,parseOcrBank,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
 });
 
 
