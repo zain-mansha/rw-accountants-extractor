@@ -199,10 +199,11 @@ test('network launcher publishes source updates to the share and caches only the
     fs.copyFileSync(powershellScript,path.join(source,'Start Extractor from Network.ps1'));
     fs.copyFileSync(commandScript,path.join(source,'Start Extractor from Network.cmd'));
 
+    const atomFeed=`<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>tag:github.com,2008:Grit::Commit/${commit}</id></entry></feed>`;
     const runUpdater=()=>execFileSync('powershell.exe',[
       '-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(source,'Start Extractor from Network.ps1'),
       '-RuntimeRoot',runtime,'-ProfileRoot',profile,'-NoLaunch'
-    ],{encoding:'utf8',windowsHide:true,timeout:120000,env:{...process.env,EXTRACTOR_NETWORK_UPDATE_TESTS:'1',EXTRACTOR_TEST_COMMIT:commit,EXTRACTOR_TEST_ARCHIVE:archive}});
+    ],{encoding:'utf8',windowsHide:true,timeout:120000,env:{...process.env,EXTRACTOR_NETWORK_UPDATE_TESTS:'1',EXTRACTOR_TEST_COMMIT:commit,EXTRACTOR_TEST_ARCHIVE:archive,EXTRACTOR_TEST_FEED_CONTENT:atomFeed}});
     runUpdater();
 
     const sharedApp=path.join(source,'.extractor-apps',commit,'resources','app');

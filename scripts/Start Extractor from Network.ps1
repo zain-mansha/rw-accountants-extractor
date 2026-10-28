@@ -55,10 +55,23 @@ function Get-CurrentExtractorApp {
   return $null
 }
 
+function Get-ExtractorCommitFromFeed([string]$FeedContent) {
+  $shaMatch = [regex]::Match($FeedContent, 'tag:github\.com,2008:Grit::Commit/(?<sha>[a-f0-9]{40})')
+  if (-not $shaMatch.Success) { throw 'GitHub returned a commit feed without a readable commit identifier.' }
+  $sha = [string]$shaMatch.Groups['sha'].Value
+  if ($sha -notmatch '^[a-f0-9]{40}$') { throw 'GitHub returned an invalid Extractor commit identifier.' }
+  return $sha
+}
+
 function Get-LatestExtractorCommit {
   if ($env:EXTRACTOR_NETWORK_UPDATE_TESTS -eq '1') {
     if ($env:EXTRACTOR_TEST_COMMIT -notmatch '^[a-f0-9]{40}$' -or -not (Test-Path -LiteralPath $env:EXTRACTOR_TEST_ARCHIVE -PathType Leaf)) {
       throw 'Extractor updater test configuration is incomplete.'
+    }
+    if ($env:EXTRACTOR_TEST_FEED_CONTENT) {
+      $testSha = Get-ExtractorCommitFromFeed $env:EXTRACTOR_TEST_FEED_CONTENT
+      if ($testSha -ne $env:EXTRACTOR_TEST_COMMIT) { throw 'The test commit feed did not match its configured source archive.' }
+      return $testSha
     }
     return $env:EXTRACTOR_TEST_COMMIT
   }
@@ -66,11 +79,7 @@ function Get-LatestExtractorCommit {
   $uri = "https://github.com/$repositoryOwner/$repositoryName/commits/$repositoryBranch.atom"
   $headers = @{ Accept = 'application/atom+xml'; 'User-Agent' = 'RW-Accountants-Extractor-Updater' }
   $feed = Invoke-WebRequest -UseBasicParsing -Method Get -Uri $uri -Headers $headers -TimeoutSec 20
-  $shaMatch = [regex]::Match([string]$feed.Content, 'tag:github\.com,2008:Grit::Commit/(?<sha>[a-f0-9]{40})')
-  if (-not $shaMatch.Success) { throw 'GitHub returned a commit feed without a readable commit identifier.' }
-  $sha = [string]$shaMatch.Groups['sha'].Value
-  if ($sha -notmatch '^[a-f0-9]{40}$') { throw 'GitHub returned an invalid Extractor commit identifier.' }
-  return $sha
+  return Get-ExtractorCommitFromFeed ([string]$feed.Content)
 }
 
 function Get-ExtractorOcrLanguages {
