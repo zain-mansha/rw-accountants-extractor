@@ -1,0 +1,10 @@
+{
+  "name": "rw-accountants-extractor",
+  "version": "1.1.7",
+  "private": true,
+  "description": "R&W Accountants local invoice, receipt, and bank statement extractor",
+  "scripts": {
+    "test": "node --test tests/extractor.test.cjs tests/network-launcher.test.cjs tests/workspaces.test.cjs",
+    "package:network": "node scripts/package-extractor.mjs --network"
+  }
+}
