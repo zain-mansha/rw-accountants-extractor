@@ -6,19 +6,28 @@ const fsSync=require('node:fs');
 const {execFile,spawn}=require('node:child_process');
 const crypto=require('node:crypto');
 const {readWorkspaceProfilesSync,workspaceDirectory,createWorkspace}=require('./workspaces.cjs');
+const {publishNetworkBootstrap}=require('./network-bootstrap.cjs');
 
 // The executable in the shared network package is a click-to-launch bootstrap.
 // It refreshes the shared application files from GitHub, then runs that shared
 // application with a per-user Electron runtime and workspace data.
 const networkPackageDirectory=path.dirname(process.execPath);
 const networkBuildFile=path.join(networkPackageDirectory,'network-build.txt');
+const bootstrapRefresh=publishNetworkBootstrap({
+  packaged:app.isPackaged,
+  sharedApplication:process.env.FARE_EXTRACTOR_SHARED_APP,
+  applicationDirectory:__dirname,
+  sourceFile:__filename
+});
+if(bootstrapRefresh.error)console.warn(`Could not refresh the network click-to-launch bootstrap: ${bootstrapRefresh.error}`);
+
 if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
   app.whenReady().then(()=>{
     const splash=new BrowserWindow({width:460,height:205,resizable:false,show:true,autoHideMenuBar:true,title:'Extractor',backgroundColor:'#f4f7f4',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
     const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f7f4;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:340px}.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#08796c}.title{font-size:20px;font-weight:700;margin:12px 0 7px}.copy{color:#60736d;line-height:1.5}.track{height:7px;margin-top:22px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:35%;border-radius:8px;background:#0d8276;animation:move 1.4s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(180px)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title">Checking shared updates</div><div class="copy">Checking GitHub and preparing the latest shared application files.</div><div class="track"><div class="bar"></div></div></main>';
     splash.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(html));
 
-    const launcher=path.join(networkPackageDirectory,'Start Extractor from Network.ps1');
+    const launcher=path.join(networkPackageDirectory,'Start Extractor from Network.cmd');
     if(!fsSync.existsSync(launcher)){
       dialog.showErrorBox('Unable to start Extractor','The shared Extractor package is incomplete. Ask your administrator to replace it with the full network package.');
       app.exit(1);
@@ -33,7 +42,16 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
       splash.close();
       app.exit(1);
     };
-    const child=spawn('powershell.exe',['-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',launcher],{cwd:networkPackageDirectory,windowsHide:true,stdio:['ignore','pipe','pipe']});
+    // Use the same entry point as the working CMD shortcut. It maps UNC shares
+    // with pushd and clears Electron's run-as-Node flag before starting the
+    // local runtime. Suppress the batch file's interactive pause so bootstrap
+    // failures can be shown in this window instead of waiting invisibly.
+    const child=spawn(process.env.ComSpec||'cmd.exe',['/d','/c','call',launcher],{
+      cwd:networkPackageDirectory,
+      windowsHide:true,
+      stdio:['ignore','pipe','pipe'],
+      env:{...process.env,FARE_EXTRACTOR_BOOTSTRAP:'1'}
+    });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data',chunk=>{output=(output+chunk).slice(-4000);});
     child.stderr.setEncoding('utf8');
