@@ -145,3 +145,7 @@ body{background:#f3f6f5;color:var(--ink)}
 .password-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:17px}
 .password-error{margin-top:8px;color:#a3382b;font-size:11px}
 .invoice-status-cell{min-width:190px;max-width:320px;vertical-align:top}.invoice-status-reason{display:block;min-width:170px;margin-top:5px;color:#80520b;font-size:10px;line-height:1.4;white-space:normal}.invoice-status-reason:empty{display:none}
+
+.badge.reject{background:#fff0e8;color:#a63a12;border:1px solid #f0b08f}
+.bank-rejected td{background:#fff6f4}
+.bank-status-reason{display:block;max-width:260px;margin-top:4px;color:#9b3c30;font-size:10px;line-height:1.4}

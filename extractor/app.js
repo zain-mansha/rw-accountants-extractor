@@ -71,8 +71,10 @@
   function renderResult(){
     const result=$('#result');result.hidden=false;
     if(mode==='bank'){
-      result.innerHTML=`<div class="result-head"><div><h2>Review bank transactions</h2><p>${rows.length} rows detected. Edit any cells, then save the import workbook to your chosen location.</p></div><button class="button primary" data-download="bank">Save bank Excel\u2026</button></div>${notes.map(n=>`<div class="notice">${esc(n)}</div>`).join('')}${rows.length?`<div class="table-wrap"><table><thead><tr><th>Use</th><th>Date</th><th>Details</th><th>Receipt (\u00A3)</th><th>Payment (\u00A3)</th><th>Balance (\u00A3)</th><th>Source</th><th>Review</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><input type="checkbox" data-cell="include" data-row="${i}" ${r.include===false?'':'checked'}></td><td><input data-cell="date" data-row="${i}" value="${esc(inputValue(r,'date'))}"></td><td><input data-cell="details" data-row="${i}" value="${esc(inputValue(r,'details'))}"></td><td><input data-cell="receipt" data-row="${i}" type="number" step="0.01" value="${esc(money(r.receipt))}"></td><td><input data-cell="payment" data-row="${i}" type="number" step="0.01" value="${esc(money(r.payment))}"></td><td><input data-cell="balance" data-row="${i}" type="number" step="0.01" value="${esc(money(r.balance))}"></td><td>${esc(r.source)}</td><td><span class="badge ${r.review?'warn':'ok'}">${esc(r.confidence||'Ready')}</span></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No transaction rows were detected. This PDF may be scanned or protected; try a bank CSV export or enter the values manually.</div>'}<div class="notice">The workbook uses Date, Details, Receipt, Payment and Balance columns, so Fare Books can import it from Transactions \u2192 Import statement.</div>`;
-    } else if(mode==='receipt'){
+      const data=[['Date','Details','Receipt','Payment','Balance','Source file','Page','Confidence','Review'],...rows.filter(row=>row.include!==false).map(row=>[row.date,row.details,row.receipt===''?'':Number(row.receipt),row.payment===''?'':Number(row.payment),row.balance===''||row.balance===undefined?'':Number(row.balance),row.source,row.page||'',row.rejected?'REJECTED':row.confidence||'',row.rejectedReason||(row.review?'Check direction / balance':'')])];
+      const ws=XLSX.utils.aoa_to_sheet(data);formatExcelDates(ws,data);formatExcelMoney(ws,data,[2,3,4]);XLSX.utils.book_append_sheet(wb,ws,'Bank transactions');
+      const rejectedRows=rows.filter(row=>row.rejected);if(rejectedRows.length){const rejectedData=[['Date','Details','Receipt','Payment','Balance','Source file','Page','Confidence','Review'],...rejectedRows.map(row=>[row.date,row.details,row.receipt===''?'':Number(row.receipt),row.payment===''?'':Number(row.payment),row.balance===''||row.balance===undefined?'':Number(row.balance),row.source,row.page||'','REJECTED',row.rejectedReason||'Bank balance could not be reconciled.'])],rejectedSheet=XLSX.utils.aoa_to_sheet(rejectedData);formatExcelDates(rejectedSheet,rejectedData);formatExcelMoney(rejectedSheet,rejectedData,[2,3,4]);XLSX.utils.book_append_sheet(wb,rejectedSheet,'Rejected transactions');}
+    }else if(mode==='receipt'){
       result.innerHTML=receiptResultMarkup();
     } else {
       const groups=groupedInvoiceRows();
@@ -290,6 +292,21 @@
   function filePathFor(fileIndex){try{return native?.getPathForFile(files[fileIndex])||'';}catch{return '';}}
   function isSupportedUpload(file){return /\.pdf$/i.test(file?.name||'')||(mode==='bank'&&/\.csv$/i.test(file?.name||''));}
   async function readCsvFile(file){const bytes=new Uint8Array(await file.arrayBuffer());if(bytes[0]===0xff&&bytes[1]===0xfe)return new TextDecoder('utf-16le').decode(bytes.subarray(2));if(bytes[0]===0xfe&&bytes[1]===0xff)return new TextDecoder('utf-16be').decode(bytes.subarray(2));return new TextDecoder('utf-8').decode(bytes);}
+  async function verifyBankBalanceRows(inputRows,file,fileIndex,totalFiles,sourcePath,password='',canRetry=true){
+    let checkedRows=Array.isArray(inputRows)?inputRows:[],report=P.inspectBankBalances(checkedRows),retried=false,attempted=false;const originalMismatchCount=report.mismatches.length;
+    if(originalMismatchCount&&canRetry&&native?.ocrPdf&&sourcePath){
+      setProgress(fileIndex,totalFiles,`Balance mismatch found. Rechecking ${file.name} at 5x resolution`,`${fileIndex} / ${totalFiles} files`);$('#extract').textContent='Rechecking bank balances\u2026';
+      try{
+        attempted=true;
+        let scan;try{scan=await native.ocrPdf(sourcePath,password,{scale:5});}catch(firstError){if(!/password-protected/i.test(firstError.message||''))throw firstError;password=await askForPdfPassword(file.name);if(password===null)throw new Error('Password entry was cancelled. The bank statement was not rechecked.');scan=await native.ocrPdf(sourcePath,password,{scale:5});}
+        const retryRows=scan.lines?.length?P.parseOcrBank(scan.lines,scan.text||'',file.name):P.parseBank(scan.text||'',file.name),retryReport=P.inspectBankBalances(retryRows),hasSameOrMoreCheckpoints=retryReport.checkpointCount>=report.checkpointCount,hasSameOrMoreSegments=retryReport.checkedSegments>=report.checkedSegments,improvesReconciliation=retryReport.mismatches.length<report.mismatches.length,keepsCoverage=retryRows.length>=checkedRows.length&&hasSameOrMoreCheckpoints&&hasSameOrMoreSegments&&retryReport.mismatches.length<=report.mismatches.length;
+        if(keepsCoverage||improvesReconciliation&&hasSameOrMoreCheckpoints){checkedRows=retryRows;report=retryReport;retried=true;}
+      }catch(error){notes.push(`${file.name}: the 5x balance verification failed (${error.message}). Any unreconciled date range will be rejected.`);}
+    }
+    if(report.mismatches.length){P.markBankBalanceMismatches(checkedRows,report);notes.push(`${file.name}: ${report.mismatches.length} running-balance interval${report.mismatches.length===1?'':'s'} still did not reconcile${attempted?' after the 5x OCR recheck':''}. The affected transaction date range${report.mismatches.length===1?' is':'s are'} marked REJECTED and excluded from the workbook by default.`);}
+    else if(originalMismatchCount&&retried)notes.push(`${file.name}: the 5x OCR recheck resolved the running-balance mismatch; the re-read transaction rows are being used.`);
+    return checkedRows;
+  }
   async function extract(){
     const totalFiles=files.length,fileLabel=mode==='bank'?'files':'PDFs';if(!totalFiles)return;$('#extract').disabled=true;$('#extract').textContent='Reading files\u2026';rows=[];notes=[];invoiceSummaryRows=[];isExtracting=mode==='invoice'||mode==='receipt';renderResult();setProgress(0,totalFiles,'Preparing...',`0 / ${totalFiles} ${fileLabel}`);const ocrRuns=new Map(),eagleStatementRows=invoiceSummaryRows;
     for(let fileIndex=0;fileIndex<totalFiles;fileIndex++){
@@ -297,9 +314,9 @@
       setProgress(fileIndex,totalFiles,`Reading ${file.name}`,`${fileIndex} / ${totalFiles} ${fileLabel}`);
       try{
         if(mode==='bank'&&/\.csv$/i.test(file.name)){
-          const transactions=P.parseBankCsv(await readCsvFile(file),file.name);
+          let transactions=P.parseBankCsv(await readCsvFile(file),file.name);
           if(!transactions.length)notes.push(`${file.name}: no transaction rows were found. The CSV needs a date column and either a signed amount or separate money-in and money-out columns.`);
-          rows.push(...transactions.map(row=>({...row,include:true,sourcePath})));extractedCount=transactions.length;
+          transactions=await verifyBankBalanceRows(transactions,file,fileIndex,totalFiles,sourcePath,'',false);rows.push(...transactions.map(row=>({...row,include:row.include===false?false:true,sourcePath})));extractedCount=transactions.length;
         }else{
         let parsed=await P.parsePdf(await file.arrayBuffer(),mode,file.name);pageCount=Number(parsed.info?.pages)||1;if(mode==='invoice'){extractedCount=parsed.invoices?.length||0;if(Array.isArray(parsed.info?.pageItems)&&parsed.info.pageItems.length===pageCount){const pageLines=parsed.info.pageItems.flatMap((items,index)=>(items||[]).map(line=>({...line,page:index+1})));collectEagleSummaryRows(eagleStatementRows,pageLines,file,sourcePath);}}else if(mode==='receipt')extractedCount=parsed.receipts?.length||0;
         const parsedInvoiceRows=mode==='invoice'?(parsed.invoices||[parsed.invoice]).filter(Boolean):[],hasUnreadableInvoice=parsedInvoiceRows.some(invoice=>invoice.retryOcr||invoice.total===''||invoice.total===null||invoice.total===undefined||invoice.isInvoiceDocument!==false&&invoice.documentType!=='DELIVERY NOTE'&&(invoice.vat===''||invoice.vat===null||invoice.vat===undefined)),hasPolishDelivery=parsedInvoiceRows.some(invoice=>invoice.profileId==='polish-village-bread'&&invoice.documentType==='DELIVERY NOTE');
@@ -313,7 +330,7 @@
           }catch(error){notes.push(`${file.name}: Windows OCR could not read this PDF (${error.message}).`);}
         }
         if(!parsed.info.hasText){notes.push(file.name+': no readable text was recovered.');if(mode==='invoice')await appendInvoiceRows([{invoiceNumber:'',date:'',supplier:'',subtotal:'',vat:'',total:'',currency:'GBP',source:file.name,page:1,confidence:'REJECTED',rejectedReason:'No selectable text was recovered from this PDF.',review:false,accepted:false,rejected:true}],sourcePath);else if(mode==='receipt'){const run=ocrRuns.get(fileIndex),visualPages=run?.visualPages?.length?run.visualPages:Array.from({length:pageCount},(_,index)=>index+1),placeholders=P.parseReceiptBatch('',file.name,[],{auditUnmatchedPages:true,pageCount,visualPages});upsertReceiptRows(placeholders,sourcePath);}}
-        else if(mode==='bank')rows.push(...(parsed.transactions||[]).map(row=>({...row,include:true,sourcePath})));
+        else if(mode==='bank'){const transactions=await verifyBankBalanceRows(parsed.transactions||[],file,fileIndex,totalFiles,sourcePath,ocrRuns.get(fileIndex)?.password||'',true);rows.push(...transactions.map(row=>({...row,include:row.include===false?false:true,sourcePath})));extractedCount=transactions.length;}
         else if(mode==='receipt')upsertReceiptRows((parsed.receipts||[]).map(row=>({...row,source:file.name})),sourcePath);
         else await appendInvoiceRows((parsed.invoices||[parsed.invoice]).filter(Boolean).map(row=>({...row,source:file.name,sourcePath})),sourcePath);
         }

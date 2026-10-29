@@ -95,7 +95,7 @@
       const dateLine=dateItems.slice().sort((a,b)=>Math.abs(a.y-marker.y)-Math.abs(b.y-marker.y))[0],out=nearest(outValues,marker.y),incoming=nearest(inValues,marker.y),balance=nearest(balanceValues,marker.y);
       if(!dateLine||!balance||(!out&&!incoming))continue;
       const isReceipt=Boolean(incoming),value=isReceipt?incoming.value:out.value;
-      rows.push({date:parseDate(dateLine.text),details:details||'Bank transaction',receipt:isReceipt?value:'',payment:isReceipt?'':value,amount:isReceipt?value:-value,balance:balance.value,source,page:pageNumber,confidence:'Metro Bank columns',review:false});
+      rows.push({date:parseDate(dateLine.text),details:details||'Bank transaction',receipt:isReceipt?value:'',payment:isReceipt?'':value,amount:isReceipt?value:-value,balance:balance.value,balanceExpected:true,source,page:pageNumber,confidence:'Metro Bank columns',review:false});
     }
     return rows;
   }
@@ -135,7 +135,7 @@
       if(value===null)continue;
       const signed=isIncoming?value:-value;
       const aligned=detailDescriptions.length===detailDates.length&&detailDescriptions.length===balanceValues.length;
-      rows.push({date:detailDates[i]||'',details:detail,receipt:isIncoming?value:'',payment:isIncoming?'':value,amount:signed,balance:balanceValues[i]??'',source,page:pageNumber,confidence:summary?'Metro Bank summary':(aligned?'Metro Bank columns':'Review row alignment'),review:!aligned});
+      rows.push({date:detailDates[i]||'',details:detail,receipt:isIncoming?value:'',payment:isIncoming?'':value,amount:signed,balance:balanceValues[i]??'',balanceExpected:true,openingBalance:summary&&i===0?balances[0]:'',source,page:pageNumber,confidence:summary?'Metro Bank summary':(aligned?'Metro Bank columns':'Review row alignment'),review:!aligned});
     }
     return rows;
   }
@@ -151,8 +151,68 @@
   function parseBank(text,source='',pageItems){
     const metro=parseMetroBank(text,source,pageItems);if(metro.length)return metro;
     const result=[],ls=lines(text),dateRe=/^(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}[\/-]\d{1,2}[\/-]\d{1,2})\b/;
-    for(let i=0;i<ls.length;i++){const line=ls[i],dm=line.match(dateRe);if(!dm)continue;const date=parseDate(dm[1]);if(!date)continue;let detail=line.slice(dm[0].length).trim(),j=i+1;while(j<ls.length&&!dateRe.test(ls[j])&&!moneyTokens(ls[j]).length&&j-i<3){detail+=' '+ls[j];j++;}const joined=ls.slice(i,j).join(' '),tokens=moneyTokens(joined);if(!tokens.length)continue;const movement=tokens.length>1?tokens[tokens.length-2]:tokens[0];let value=movement.value;const upper=joined.toUpperCase();if(value>0&&!/CR|CREDIT|RECEIPT|DEPOSIT/.test(upper)&&/DR|DEBIT|WITHDRAWAL/.test(upper))value=-value;detail=detail.replace(/(?:[\u00A3$\u20AC]\s*)?\(?-?\d[\d,]*(?:\.\d{2})\)?(?:\s*(?:CR|DR))?/gi,' ').replace(/\s+/g,' ').trim();result.push({date,details:detail||'Bank transaction',receipt:value>0?value:'',payment:value<0?Math.abs(value):'',amount:value,source,confidence:tokens.length>1?'Review balance column':'Review direction',review:tokens.length>1});i=j-1;}
+    for(let i=0;i<ls.length;i++){const line=ls[i],dm=line.match(dateRe);if(!dm)continue;const date=parseDate(dm[1]);if(!date)continue;let detail=line.slice(dm[0].length).trim(),j=i+1;while(j<ls.length&&!dateRe.test(ls[j])&&!moneyTokens(ls[j]).length&&j-i<3){detail+=' '+ls[j];j++;}const joined=ls.slice(i,j).join(' '),tokens=moneyTokens(joined);if(!tokens.length)continue;const movement=tokens.length>1?tokens[tokens.length-2]:tokens[0],balance=tokens.length>1?tokens.at(-1).value:'',valueBeforeDirection=movement.value;let value=valueBeforeDirection;const upper=joined.toUpperCase();if(value>0&&!/CR|CREDIT|RECEIPT|DEPOSIT/.test(upper)&&/DR|DEBIT|WITHDRAWAL/.test(upper))value=-value;detail=detail.replace(/(?:[\u00A3$\u20AC]\s*)?\(?-?\d[\d,]*(?:\.\d{2})\)?(?:\s*(?:CR|DR))?/gi,' ').replace(/\s+/g,' ').trim();result.push({date,details:detail||'Bank transaction',receipt:value>0?value:'',payment:value<0?Math.abs(value):'',amount:value,balance,balanceExpected:tokens.length>1,source,confidence:tokens.length>1?'Review balance column':'Review direction',review:tokens.length>1});i=j-1;}
+    const opening=bankOpeningBalance(text);if(result.length&&opening!==null)result[0].openingBalance=opening;
     return result;
+  }
+  function bankOpeningBalance(text){
+    const source=String(text||'').split(/\r?\n/);
+    for(let i=0;i<source.length;i++)if(/\b(?:opening\s+balance|balance\s+brought\s+forward)\b/i.test(source[i])){
+      const values=moneyTokens(source[i]);if(values.length)return values.at(-1).value;
+      const next=moneyTokens(source[i+1]||'');if(next.length)return next.at(-1).value;
+    }
+    return null;
+  }
+  function bankRowAmountCents(row){
+    let value=row?.amount;
+    if(value===''||value===null||value===undefined||!Number.isFinite(Number(value))){
+      const receipt=row?.receipt,payment=row?.payment;
+      if(receipt!==''&&receipt!==null&&receipt!==undefined&&Number.isFinite(Number(receipt)))value=Math.abs(Number(receipt));
+      else if(payment!==''&&payment!==null&&payment!==undefined&&Number.isFinite(Number(payment)))value=-Math.abs(Number(payment));
+      else return null;
+    }
+    return Math.round(Number(value)*100);
+  }
+  function bankValueCents(value){
+    if(value===''||value===null||value===undefined||!Number.isFinite(Number(value)))return null;
+    return Math.round(Number(value)*100);
+  }
+  function inspectBankBalances(rows){
+    const items=(Array.isArray(rows)?rows:[]).map((row,index)=>({row,index,date:String(row?.date||''),amountCents:bankRowAmountCents(row),balanceCents:bankValueCents(row?.balance)})).filter(item=>item.date||item.amountCents!==null||item.balanceCents!==null).sort((a,b)=>a.date&&b.date?a.date.localeCompare(b.date)||a.index-b.index:a.index-b.index);
+    const mismatches=[];
+    for(const item of items){
+      if(item.row?.balanceMovementUnreadable||item.balanceCents!==null&&item.amountCents===null)mismatches.push({startIndex:item.index,endIndex:item.index,rowIndexes:[item.index],previousDate:'',date:item.date,expectedCents:item.balanceCents??0,actualCents:item.balanceCents??0,differenceCents:0,page:item.row?.page||'',unreadableMovement:true});
+      else if(item.row?.balanceExpected&&item.date&&item.balanceCents===null)mismatches.push({startIndex:item.index,endIndex:item.index,rowIndexes:[item.index],previousDate:'',date:item.date,expectedCents:0,actualCents:0,differenceCents:0,page:item.row?.page||'',missingBalance:true});
+    }
+    let previous=null,pending=[],leading=[],checkedSegments=0,checkpointCount=0;
+    for(const item of items){
+      if(previous)pending.push(item);else leading.push(item);
+      if(item.balanceCents===null)continue;
+      checkpointCount++;
+      if(previous){
+        const segmentRows=pending.map(entry=>entry.index),hasUnknownMovement=pending.some(entry=>entry.amountCents===null);
+        if(pending.length&&!hasUnknownMovement){
+          checkedSegments++;const expected=previous.balanceCents+pending.reduce((sum,entry)=>sum+entry.amountCents,0),difference=item.balanceCents-expected;
+          if(difference!==0)mismatches.push({startIndex:segmentRows[0],endIndex:item.index,rowIndexes:segmentRows,previousDate:previous.date,date:item.date,expectedCents:expected,actualCents:item.balanceCents,differenceCents:difference,page:item.row?.page||''});
+        }
+      }else{
+        const openingItem=leading.find(entry=>bankValueCents(entry.row?.openingBalance)!==null),opening=bankValueCents(openingItem?.row?.openingBalance),leadingRows=leading,hasUnknownMovement=leadingRows.some(entry=>entry.amountCents===null);
+        if(opening!==null&&leadingRows.length&&!hasUnknownMovement){
+          checkedSegments++;const expected=opening+leadingRows.reduce((sum,entry)=>sum+entry.amountCents,0),difference=item.balanceCents-expected;
+          if(difference!==0)mismatches.push({startIndex:leadingRows[0].index,endIndex:item.index,rowIndexes:leadingRows.map(entry=>entry.index),previousDate:'',date:item.date,expectedCents:expected,actualCents:item.balanceCents,differenceCents:difference,page:item.row?.page||''});
+        }
+      }
+      previous=item;pending=[];leading=[];
+    }
+    return {mismatches,checkedSegments,checkpointCount};
+  }
+  function markBankBalanceMismatches(rows,report=inspectBankBalances(rows)){
+    const source=Array.isArray(rows)?rows:[];
+    for(const mismatch of report.mismatches){
+      const range=mismatch.previousDate?`${mismatch.previousDate} to ${mismatch.date}`:mismatch.date,expected=(mismatch.expectedCents/100).toFixed(2),actual=(mismatch.actualCents/100).toFixed(2),difference=(Math.abs(mismatch.differenceCents)/100).toFixed(2),reason=mismatch.missingBalance?`The bank transaction on ${range||'this date'} has no readable running balance after the high-resolution recheck. This row is REJECTED; verify it against the statement.`:mismatch.unreadableMovement?`The bank transaction dated ${range||'this date'} has no readable amount after the high-resolution recheck. This row is REJECTED; verify it against the bank statement.`:`Bank statement balance does not reconcile for ${range}: the listed transactions give \u00A3${expected}, but the statement shows \u00A3${actual} (a \u00A3${difference} difference). Verify the transaction rows against the bank statement; this date range is REJECTED.`;
+      for(const index of mismatch.rowIndexes){const row=source[index];if(!row)continue;row.status='REJECTED';row.rejected=true;row.accepted=false;row.review=true;row.include=false;row.confidence='REJECTED';row.balanceMismatch=true;row.rejectedReason=reason;}
+    }
+    return source;
   }
   function parseBankCsv(text,source=''){
     const input=String(text||'').replace(/^\uFEFF/,'');if(!input.trim())return [];
@@ -276,10 +336,15 @@
       const dateBoundary=(header.dateX+header.descriptionX)/2,descriptionBoundary=(header.descriptionX+header.outX)/2,split=(header.outX+header.outWidth+header.inX)/2,upper=(header.inX+header.balanceX)/2;
       const dates=items.filter(line=>line.y>header.y+Math.max(8,(header.headerHeight||0)*0.5)&&line.x<dateBoundary).map(line=>({line,parsed:parseDatePrefix(line.text)})).filter(item=>item.parsed).sort((a,b)=>a.line.y-b.line.y);
       const movements=items.filter(line=>line.y>header.y+Math.max(8,(header.headerHeight||0)*0.5)&&line.x>=descriptionBoundary&&line.x<upper).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==null).map(item=>({...item,kind:item.line.x<split?'payment':'receipt'})).sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
-      const rowHeight=median(movements.slice(1).map((item,index)=>item.line.y-movements[index].line.y).filter(gap=>gap>0))||80;
+      const rowHeight=median(movements.slice(1).map((item,index)=>item.line.y-movements[index].line.y).filter(gap=>gap>0))||median(dates.slice(1).map((item,index)=>item.line.y-dates[index].line.y).filter(gap=>gap>0))||0,usedDateLines=new Set();
+      const dateForMovement=y=>dates.map((item,index)=>{
+        const before=index?item.line.y-dates[index-1].line.y:0,after=index+1<dates.length?dates[index+1].line.y-item.line.y:0,localGap=before&&after?Math.min(before,after):before||after||rowHeight,radius=(localGap?localGap/2:0)+Math.max(Number(item.line.height)||0,Number(header.headerHeight)||0,Number(movements.find(entry=>entry.line.y===y)?.line.height)||0)*1.25;
+        return {item,distance:Math.abs(item.line.y-y),radius};
+      }).filter(candidate=>candidate.distance<=candidate.radius).sort((a,b)=>a.distance-b.distance)[0]?.item||null;
       for(let i=0;i<movements.length;i++){
-        const movement=movements[i],dateRecord=[...dates].reverse().find(item=>item.line.y<=movement.line.y+20)||dates.find(item=>Math.abs(item.line.y-movement.line.y)<=38);
+        const movement=movements[i],dateRecord=dateForMovement(movement.line.y);
         if(!dateRecord)continue;
+        usedDateLines.add(dateRecord.line);
         const {day,month,suffix}=dateRecord.parsed;
         let year=context?.endYear||Number(String(text).match(/\b(20\d{2})\b/)?.[1])||new Date().getFullYear();
         if(context?.startMonth&&context?.endMonth){year=(context.startMonth>context.endMonth&&month>=context.startMonth)?(context.startYear||year):context.endYear||year;}
@@ -291,14 +356,20 @@
         const details=[inlineDateDetail,primary?.text,...extraLines.map(line=>line.text)].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
         const balanceLine=items.filter(line=>line.x>=upper&&line.x<header.balanceX+Math.max(35,(header.balanceWidth||0)*1.5)&&Math.abs(line.y-movement.line.y)<=Math.max(18,(header.headerHeight||0)*0.8)).sort((a,b)=>Math.abs(a.y-movement.line.y)-Math.abs(b.y-movement.line.y))[0],balanceValue=balanceLine?readMoney(balanceLine.text):null;
         const value=Math.abs(movement.value),payment=movement.kind==='payment'?value:'',receipt=movement.kind==='receipt'?value:'';
-        output.push({date:iso,details:details||'Bank transaction',receipt,payment,balance:balanceValue??'',amount:movement.kind==='receipt'?value:-value,source,page,confidence:'Barclays labelled OCR columns',review:true});
+        output.push({date:iso,details:details||'Bank transaction',receipt,payment,balance:balanceValue??'',balanceExpected:true,amount:movement.kind==='receipt'?value:-value,source,page,confidence:'Barclays labelled OCR columns',review:true});
+      }
+      for(const dateRecord of dates){
+        if(usedDateLines.has(dateRecord.line))continue;
+        const balanceLine=items.filter(line=>line.x>=upper&&line.x<header.balanceX+Math.max(35,(header.balanceWidth||0)*1.5)&&Math.abs(line.y-dateRecord.line.y)<=Math.max(Number(dateRecord.line.height)||0,Number(header.headerHeight)||0)*0.8).sort((a,b)=>Math.abs(a.y-dateRecord.line.y)-Math.abs(b.y-dateRecord.line.y))[0],balanceValue=balanceLine?readMoney(balanceLine.text):null;
+        const {day,month}=dateRecord.parsed;let year=context?.endYear||Number(String(text).match(/\b(20\d{2})\b/)?.[1])||new Date().getFullYear();if(context?.startMonth&&context?.endMonth)year=(context.startMonth>context.endMonth&&month>=context.startMonth)?(context.startYear||year):context.endYear||year;else if(context?.endYear){const statementMatch=String(text).match(/statement\s+date\s+(\d{1,2})\s+([A-Za-z]{3,9})\s+(20\d{2})/i),statementMonth=statementMatch?months[statementMatch[2].slice(0,3).toLowerCase()]:0;if(statementMonth&&statementMonth<=2&&month>=10)year=context.endYear-1;}
+        const iso=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`,detail=items.filter(line=>line.x>=dateBoundary&&line.x<descriptionBoundary&&Math.abs(line.y-dateRecord.line.y)<=Math.max(Number(dateRecord.line.height)||0,Number(header.headerHeight)||0)).map(line=>line.text).filter(value=>value!==dateRecord.line.text).join(' ').trim();output.push({date:iso,details:detail||'Transaction amount not read',receipt:'',payment:'',amount:'',balance:balanceValue??'',balanceExpected:true,source,page,confidence:'REJECTED',review:true,balanceMovementUnreadable:true});
       }
     }
     return output;
   }
   function parseOcrBank(ocrLines,text='',source=''){
     if(!Array.isArray(ocrLines)||!ocrLines.length)return [];
-    const barclaysRows=parseBarclaysOcrBank(ocrLines,text,source);if(barclaysRows!==null)return barclaysRows;
+    const barclaysRows=parseBarclaysOcrBank(ocrLines,text,source);if(barclaysRows!==null){const opening=bankOpeningBalance(`${text}\n${ocrLines.map(line=>line?.text||'').join('\n')}`);if(barclaysRows.length&&opening!==null)barclaysRows[0].openingBalance=opening;return barclaysRows;}
     const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
     const yearMatch=String(text).match(/statement\s+date\s+\d{1,2}\s+([A-Za-z]{3,9})\s+(20\d{2})/i),year=yearMatch?Number(yearMatch[2]):new Date().getFullYear(),statementMonth=yearMatch?months[yearMatch[1].slice(0,3).toLowerCase()]:0;
     const cleanDate=value=>{let s=String(value||'').trim().replace(/^(?:I[O0]|l[O0]|1O)\b/i,'10').replace(/[|Il]/g,'1'),m=s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\b/i),day=Number((m?m[1]:s.match(/^(\d{1,2})\b/)?.[1])||0),month=m?months[m[2].slice(0,3).toLowerCase()]:statementMonth;if(!month||day<1||day>31)return '';return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;};
@@ -313,7 +384,7 @@
         output.push({date,details:detail||'Bank transaction',receipt:movement.kind==='receipt'?movement.value:'',payment:movement.kind==='payment'?movement.value:'',amount:movement.kind==='receipt'?movement.value:-movement.value,source,page:movement.page||1,confidence:'Review OCR row',review:true});
       }
     }
-    return output;
+    const opening=bankOpeningBalance(`${text}\n${ocrLines.map(line=>line?.text||'').join('\n')}`);if(output.length&&opening!==null)output[0].openingBalance=opening;return output;
   }
   function firstMatch(text,patterns){for(const p of patterns){const m=text.match(p);if(m)return m[1].trim();}return '';}
   function cleanInvoiceNumber(value){
@@ -2122,7 +2193,7 @@
     else{delete merged.ocrAmountConflicts;delete merged.ocrConflictReason;}
     return merged;
   }
-  return {extractText,parseBank,parseBankCsv,parseOcrBank,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
+  return {extractText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
 });
 
 
