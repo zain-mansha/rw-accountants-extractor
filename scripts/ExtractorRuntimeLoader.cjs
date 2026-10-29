@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { app, dialog, BrowserWindow, protocol } = require('electron');
+const { parseLauncherConfigText } = require('./ExtractorLauncherConfig.cjs');
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'fareextractor', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 process.env.FARE_EXTRACTOR_SCHEME_REGISTERED = '1';
@@ -36,8 +37,44 @@ function showStartError(error, splash) {
 }
 
 function readLauncherConfig() {
-  try { return JSON.parse(fs.readFileSync(launcherConfigPath, 'utf8')); }
-  catch (error) { throw new Error(`The local Extractor launcher settings could not be read: ${error.message}`); }
+  const recoveredConfigs = [];
+  const settingsPaths = [launcherConfigPath, `${launcherConfigPath}.bak`];
+  for (const settingsPath of settingsPaths) {
+    try {
+      const parsed = parseLauncherConfigText(fs.readFileSync(settingsPath, 'utf8'));
+      if (!parsed.recoveredFromMalformedJson) return parsed;
+      recoveredConfigs.push(parsed);
+    } catch {}
+  }
+
+  const networkRootPath = path.join(runtimeDirectory, 'extractor-network-root.txt');
+  let savedNetworkRoot = '';
+  try { savedNetworkRoot = fs.readFileSync(networkRootPath, 'utf8').replace(/^\uFEFF/, '').trim(); } catch {}
+  const recoveredRoot = recoveredConfigs.find(config => config.networkRoot)?.networkRoot || '';
+  const networkRoot = String(process.env.FARE_EXTRACTOR_NETWORK_ROOT || savedNetworkRoot || recoveredRoot).trim();
+  const localAppData = process.env.LOCALAPPDATA || path.resolve(runtimeDirectory, '..', '..', '..');
+  const applicationsRoot = path.join(localAppData, 'Programs', 'Extractor', 'Applications');
+  let lastLocalApplication = '';
+  try {
+    lastLocalApplication = fs.readdirSync(applicationsRoot, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => path.join(applicationsRoot, entry.name))
+      .filter(directory => fs.existsSync(path.join(directory, 'main.cjs')))
+      .sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs)[0] || '';
+  } catch {}
+
+  if (networkRoot || lastLocalApplication) {
+    return {
+      networkRoot,
+      sharedApplication: networkRoot ? path.join(networkRoot, 'resources', 'app') : '',
+      applicationsRoot,
+      lastLocalApplication,
+      profileRoot: path.join(localAppData, 'Extractor', 'Profiles'),
+      runtimeRoot: path.dirname(runtimeDirectory)
+    };
+  }
+
+  throw new Error('The local Extractor launcher settings are damaged, and no saved network location or complete local application copy was found. Run Start Extractor from Network.cmd once to repair this PC.');
 }
 
 function prepareLocalApplication(config) {
@@ -88,7 +125,7 @@ app.whenReady().then(async () => {
   const splash = showUpdateSplash();
   try {
     const config = readLauncherConfig();
-    const sharedApplication = String(process.env.FARE_EXTRACTOR_SHARED_APP || config.sharedApplication || path.join(config.networkRoot, 'resources', 'app'));
+    const sharedApplication = String(process.env.FARE_EXTRACTOR_SHARED_APP || config.sharedApplication || (config.networkRoot ? path.join(config.networkRoot, 'resources', 'app') : ''));
     let localApplication = String(process.env.FARE_EXTRACTOR_LOCAL_APP || '');
     if (!localApplication || !fs.existsSync(path.join(localApplication, 'main.cjs'))) {
       try {

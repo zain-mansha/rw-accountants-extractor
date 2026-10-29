@@ -377,8 +377,79 @@
     }
     return output;
   }
+  function parseHsbcOcrBank(ocrLines,text='',source=''){
+    if(!Array.isArray(ocrLines)||!ocrLines.length)return null;
+    const allText=`${source} ${text} ${ocrLines.map(line=>line?.text||'').join(' ')}`;
+    if(!/\bHSBC\b/i.test(allText))return null;
+    const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+    const pages=new Map();
+    for(const raw of ocrLines){const page=Number(raw?.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push({...raw,page,x:Number(raw?.x)||0,y:Number(raw?.y)||0,width:Number(raw?.width)||0,height:Number(raw?.height)||0,text:String(raw?.text||'').trim()});}
+    const median=values=>{const sorted=values.filter(value=>Number.isFinite(value)&&value>0).sort((a,b)=>a-b);return sorted.length?sorted[Math.floor(sorted.length/2)]:0;};
+    const label=line=>String(line?.text||'').toLowerCase().replace(/[^a-z ]/g,' ').replace(/\s+/g,' ').trim();
+    const headers=[];
+    for(const [page,items] of pages){
+      const dates=items.filter(line=>/^date$/.test(label(line)));
+      for(const date of dates){
+        const nearby=name=>items.filter(line=>label(line)===name&&Math.abs(line.y-date.y)<=Math.max(22,(date.height||line.height||16)*1.5)).sort((a,b)=>Math.abs(a.y-date.y)-Math.abs(b.y-date.y))[0]||null;
+        const detail=nearby('payment type and details'),out=nearby('paid out'),income=nearby('paid in'),balance=nearby('balance');
+        if(!detail||!out||!income||!balance)continue;
+        const anchors=[date,detail,out,income,balance].map(line=>({line,center:line.x+line.width/2})).sort((a,b)=>a.center-b.center);
+        if(anchors.some((anchor,index)=>index&&anchor.center<=anchors[index-1].center))continue;
+        const anchorHeight=median([date.height,detail.height,out.height,income.height,balance.height]);
+        headers.push({page,items,date,detail,out,income,balance,headerY:median([date.y,detail.y,out.y,income.y,balance.y]),headerHeight:anchorHeight,centers:Object.fromEntries(anchors.map(anchor=>[label(anchor.line),anchor.center]))});
+      }
+    }
+    // A recognizable HSBC statement with its labelled transaction table is
+    // parsed by its own column layout. If OCR did not recover the headings,
+    // leave the existing generic parser available as a fallback.
+    if(!headers.length)return null;
+    const parseDatePrefix=value=>{
+      const normalized=String(value||'').trim().replace(/[Oo]/g,'0').replace(/[Il|]/g,'1');
+      const match=normalized.match(/^([0-9]{1,2})\s+([A-Za-z]{3,9})\s+([0-9]{2}|20[0-9]{2})\b/i);if(!match)return '';
+      const day=Number(match[1]),month=months[match[2].slice(0,3).toLowerCase()],year=Number(match[3])<100?2000+Number(match[3]):Number(match[3]);
+      if(!month||day<1||day>31)return '';
+      return parseDate(`${day}/${month}/${year}`);
+    };
+    const readMoney=value=>{
+      let raw=String(value||'').trim().replace(/[\u00A3$\u20AC]/g,'').replace(/\bGBP\b/ig,'').replace(/[Oo]/g,'0').replace(/[Il|]/g,'1').replace(/\s+/g,'').replace(/CR|DR/ig,'');
+      const negative=/^\(.*\)$/.test(raw)||/^-/.test(raw);raw=raw.replace(/[()]/g,'').replace(/^[-+]/,'');
+      // HSBC prints GBP amounts with two decimal places. Requiring both cents
+      // avoids treating references, dates, percentages, or partial OCR as money.
+      if(!/^\d[\d,]*\.\d{2}$/.test(raw))return null;
+      const valueNumber=Number(raw.replace(/,/g,''));return Number.isFinite(valueNumber)?(negative?-1:1)*valueNumber:null;
+    };
+    const rows=[];let previousPageDate='';
+    for(const header of headers.sort((a,b)=>a.page-b.page)){
+      const c=header.centers,dateDetail=(c.date+c['payment type and details'])/2,detailOut=(c['payment type and details']+c['paid out'])/2,outIncome=(c['paid out']+c['paid in'])/2,incomeBalance=(c['paid in']+c.balance)/2;
+      const afterHeader=header.headerY+Math.max(8,header.headerHeight*.45),items=header.items;
+      const dateLines=items.filter(line=>line.y>afterHeader&&line.x<dateDetail).map(line=>({line,date:parseDatePrefix(line.text)})).filter(item=>item.date).sort((a,b)=>a.line.y-b.line.y);
+      const moneyLines=items.filter(line=>line.y>afterHeader&&line.x>=detailOut&&line.x<incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==null&&item.value!==0).map(item=>({...item,kind:item.line.x<outIncome?'payment':'receipt'})).sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
+      const balances=items.filter(line=>line.y>afterHeader&&line.x>=incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==null).sort((a,b)=>a.line.y-b.line.y);
+      const movements=[];
+      for(const movement of moneyLines){
+        const explicitDate=[...dateLines].reverse().find(item=>item.line.y<=movement.line.y+Math.max(8,(movement.line.height||0)*.5)),date=explicitDate?.date||previousPageDate;
+        if(!date)continue;
+        const prior=movements.at(-1),firstRowStart=explicitDate?explicitDate.line.y-Math.max(8,(explicitDate.line.height||header.headerHeight||16)*.45):afterHeader;
+        const startY=prior?prior.line.y+1:firstRowStart;
+        const detailLines=items.filter(line=>line.x>=dateDetail&&line.x<detailOut&&line.y>=startY&&line.y<=movement.line.y+Math.max(4,(movement.line.height||0)*.2)&&!/^balance\s+(?:brought|carried)\s+forward\b/i.test(line.text)).sort((a,b)=>a.y-b.y||a.x-b.x);
+        const details=detailLines.map(line=>line.text).join(' ').replace(/\s+/g,' ').trim();
+        const maxBalanceDistance=Math.max(10,(movement.line.height||header.headerHeight||16)*.6),balance=balances.filter(item=>Math.abs(item.line.y-movement.line.y)<=maxBalanceDistance).sort((a,b)=>Math.abs(a.line.y-movement.line.y)-Math.abs(b.line.y-movement.line.y))[0]||null;
+        const value=Math.abs(movement.value),signed=movement.kind==='receipt'?value:-value;
+        movements.push({line:movement.line,date,details:details||'Bank transaction',receipt:movement.kind==='receipt'?value:'',payment:movement.kind==='payment'?value:'',amount:signed,balance:balance?.value??'',balanceExpected:Boolean(balance),source,page:header.page,ocrY:movement.line.y,balanceY:balance?.line.y??null,confidence:'HSBC labelled OCR columns',review:true});
+      }
+      if(movements.length){
+        const firstMovementY=moneyLines[0]?.line.y??Infinity,pageOpening=balances.filter(item=>item.line.y<firstMovementY).at(-1)?.value;
+        movements[0].pageOpeningBalance=pageOpening??'';
+        if(!rows.length&&pageOpening!==undefined)movements[0].openingBalance=pageOpening;
+        rows.push(...movements);
+      }
+      if(dateLines.length)previousPageDate=dateLines.at(-1).date;
+    }
+    return rows;
+  }
   function parseOcrBank(ocrLines,text='',source=''){
     if(!Array.isArray(ocrLines)||!ocrLines.length)return [];
+    const hsbcRows=parseHsbcOcrBank(ocrLines,text,source);if(hsbcRows!==null){if(hsbcRows.length)return hsbcRows;}
     const barclaysRows=parseBarclaysOcrBank(ocrLines,text,source);if(barclaysRows!==null){const opening=bankOpeningBalance(`${text}\n${ocrLines.map(line=>line?.text||'').join('\n')}`);if(barclaysRows.length&&opening!==null)barclaysRows[0].openingBalance=opening;return barclaysRows;}
     const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
     const yearMatch=String(text).match(/statement\s+date\s+\d{1,2}\s+([A-Za-z]{3,9})\s+(20\d{2})/i),year=yearMatch?Number(yearMatch[2]):new Date().getFullYear(),statementMonth=yearMatch?months[yearMatch[1].slice(0,3).toLowerCase()]:0;
@@ -1666,6 +1737,7 @@
     {id:'monzo-bank',name:'Monzo',category:'Bank statements',description:'Digital PDF statements with ISO dates and CR/DR transactions'},
     {id:'barclays-bank',name:'Barclays',category:'Bank statements',description:'OCR-supported statements with day and month transaction dates'},
     {id:'metro-bank',name:'Metro Bank',category:'Bank statements',description:'Column-based statements with separate money out, money in and balance columns'},
+    {id:'hsbc-bank',name:'HSBC',category:'Bank statements',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
     ...receiptProfiles.map(({id,name,category})=>({id,name,category})),
     ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status})=>({id,name,category:'Invoices',...(status?{status}:{})}))
   ];}

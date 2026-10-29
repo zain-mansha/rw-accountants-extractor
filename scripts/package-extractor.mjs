@@ -36,12 +36,14 @@ if(network){
   const commandSource=path.join(root,'scripts','Start Extractor from Network.cmd');
   const installerSource=path.join(root,'scripts','Start Extractor from Network.ps1');
   const runtimeLoaderSource=path.join(root,'scripts','ExtractorRuntimeLoader.cjs');
+  const runtimeConfigHelperSource=path.join(root,'scripts','ExtractorLauncherConfig.cjs');
   const runtimePackageSource=path.join(root,'scripts','ExtractorRuntimePackage.json');
   const commandTarget=path.join(target,path.basename(commandSource));
   const installerTarget=path.join(target,path.basename(installerSource));
   await cp(commandSource,commandTarget);
   await cp(installerSource,installerTarget);
   await cp(runtimeLoaderSource,path.join(target,path.basename(runtimeLoaderSource)));
+  await cp(runtimeConfigHelperSource,path.join(target,path.basename(runtimeConfigHelperSource)));
   await cp(runtimePackageSource,path.join(target,path.basename(runtimePackageSource)));
 
   const digest=createHash('sha256');

@@ -9,7 +9,7 @@ test('Extractor build version and fingerprint are wired to the visible top-bar l
   const app=fs.readFileSync(path.join(root,'extractor','app.js'),'utf8');
   const main=fs.readFileSync(path.join(root,'extractor','main.cjs'),'utf8');
   const version=JSON.parse(fs.readFileSync(path.join(root,'extractor','package.json'),'utf8')).version;
-  assert.equal(version,'1.1.10');
+  assert.match(version,/^\d+\.\d+\.\d+$/);
   assert.match(html,/<span id="build-info" class="build-info"[^>]*>Checking version/);
   assert.match(app,/label\.textContent=version\?`v\$\{version\}/);
   assert.match(app,/commit\.slice\(0,12\)/);
@@ -25,6 +25,20 @@ test('PDF page links use absolute, Excel-safe file URLs',()=>{
   const saved=XLSX.read(XLSX.write(workbook,{bookType:'xlsx',type:'buffer'}),{cellStyles:true});
   assert.equal(saved.Sheets.Invoices.A2.l.Target,'file:///C:/Users/Zain%20M/Invoices/fuel%20%231.pdf#page=46');
   assert.equal(saved.Sheets.Invoices.A2.l.Rel.TargetMode,'External');
+});
+test('bank review and both bank workbook sheets link transactions to their PDF page',()=>{
+  const app=fs.readFileSync(path.join(__dirname,'..','extractor','app.js'),'utf8');
+  const html=fs.readFileSync(path.join(__dirname,'..','extractor','index.html'),'utf8');
+  assert.match(app,/<th>Source<\/th><th>PDF \/ page<\/th><th>Review<\/th>/);
+  assert.ok(app.includes("bankHeaders=['Date','Details','Receipt','Payment','Balance','Source file','Page','Confidence','Review','PDF / page']"));
+  assert.match(app,/addBankPageLinks\(ws,bankSourceRows\)/);
+  assert.match(app,/addBankPageLinks\(rejectedSheet,rejectedRows\)/);
+  assert.match(app,/pdfPageTarget\(row\.sourcePath,row\.page\)/);
+  assert.match(app,/function bankStatsMarkup\(\)/);
+  assert.match(app,/Accepted amount/);
+  assert.match(app,/Rejected amount/);
+  assert.match(app,/bankStatsMarkup\(\)/);
+  assert.doesNotMatch(app+html,/Ã|Â|â|�/);
 });
 function pdf(text){return Buffer.from(`%PDF-1.4\n1 0 obj\n<< /Type /Page >>\nendobj\n2 0 obj\n<< /Length ${text.length} >>\nstream\n${text}\nendstream\nendobj\n`,'latin1');}
 test('bank PDF text becomes dated receipt/payment rows',async()=>{const r=await P.parsePdf(pdf('(01/10/2026) Tj (Shell fuel) Tj (12.34) Tj (100.00) Tj (02/10/2026) Tj (Taxi fares) Tj (250.00) Tj'),'bank','statement.pdf');assert.equal(r.info.hasText,true);assert.equal(r.transactions.length,2);assert.equal(r.transactions[0].date,'2026-10-01');assert.equal(r.transactions[0].details.includes('Shell fuel'),true);assert.equal(r.transactions[0].receipt,12.34);assert.equal(r.transactions[0].review,true);});
@@ -45,7 +59,38 @@ test('bank CSV import detects semicolon exports and signed amount columns',()=>{
 });
 test('invoice PDF text extracts number, date, supplier, VAT and total',async()=>{const r=await P.parsePdf(pdf('(ACME MOTORS) Tj (Invoice number: AM-1042) Tj (Invoice date: 11/11/2026) Tj (Subtotal: £100.00) Tj (VAT: £20.00) Tj (Total due: £120.00) Tj'),'invoice','invoice.pdf');assert.equal(r.invoice.invoiceNumber,'1042');assert.equal(r.invoice.date,'2026-11-11');assert.equal(r.invoice.vat,20);assert.equal(r.invoice.total,120);assert.equal(r.invoice.subtotal,100);});
 test('image-only PDF is reported without invented values',async()=>{const r=await P.parsePdf(pdf(''), 'invoice','scan.pdf');assert.equal(r.info.hasText,false);assert.equal(r.invoice.status,'REJECTED');assert.equal(r.invoice.total,'');});
-test('invoice profiles identify supplier-specific and generic document formats',()=>{assert.equal(P.identifyInvoiceProfile('MARION TRADING LTD Invoice No 10445946').id,'marion-trading');assert.equal(P.identifyInvoiceProfile('MONOLITH (UK) LTD AUTO INVOICE - A 310642').id,'monolith');assert.equal(P.identifyInvoiceProfile('Peterborough Bazaar Limited Invoice No 0279659 VAT NO 104 2318 66').id,'peterborough-bazaar');assert.equal(P.identifyInvoiceProfile('Deens produce Ltd VAT number-354695660 Invoice No: 36163').id,'deens-produce');assert.equal(P.identifyInvoiceProfile('LIBERTY Frozen Foods MAP-210726-1').id,'liberty-frozen-foods');assert.equal(P.identifyInvoiceProfile('DAIRY FRESH LTD VAT Reg: GB1408634-22 Order Invoice').id,'dairy-fresh');assert.equal(P.identifyInvoiceProfile('SHAHD HALAL POULTRY LTD VAT No 159 5722 76').id,'shahid-halal-poultry');assert.equal(P.identifyInvoiceProfile('MASPO LTD Invoice number 123-AB/02/2026').id,'maspo');assert.equal(P.identifyInvoiceProfile('Polish Village Bread LTD DELIVERY 666715/MAG/2026').id,'polish-village-bread');assert.equal(P.identifyInvoiceProfile('DELIVERY 666715/MAG/2026 Issued baskets').id,'wz-delivery');assert.equal(P.identifyInvoiceProfile('Bestway Wholesale Invoice No. 262484240').id,'bestway');assert.equal(P.identifyInvoiceProfile('EAGLEFOODS Invoice To: Customer Invoice No 143871').id,'eagle-foods');assert.equal(P.identifyInvoiceProfile('Acme Motors Invoice 1042').id,'generic');assert.ok(P.compatibleCompanies.some(company=>company.id==='eagle-foods'&&company.name==='Eagle Foods Ltd'&&company.category==='Invoices'));assert.deepEqual(P.invoiceProfiles.map(profile=>profile.id),['freshways','bestway','eagle-foods','shahid-halal-poultry','marion-trading','monolith','peterborough-bazaar','deens-produce','liberty-frozen-foods','dairy-fresh','maspo','polish-village-bread','wz-delivery','generic']);});
+test('invoice profiles identify supplier-specific and generic document formats',()=>{assert.equal(P.identifyInvoiceProfile('MARION TRADING LTD Invoice No 10445946').id,'marion-trading');assert.equal(P.identifyInvoiceProfile('MONOLITH (UK) LTD AUTO INVOICE - A 310642').id,'monolith');assert.equal(P.identifyInvoiceProfile('Peterborough Bazaar Limited Invoice No 0279659 VAT NO 104 2318 66').id,'peterborough-bazaar');assert.equal(P.identifyInvoiceProfile('Deens produce Ltd VAT number-354695660 Invoice No: 36163').id,'deens-produce');assert.equal(P.identifyInvoiceProfile('LIBERTY Frozen Foods MAP-210726-1').id,'liberty-frozen-foods');assert.equal(P.identifyInvoiceProfile('DAIRY FRESH LTD VAT Reg: GB1408634-22 Order Invoice').id,'dairy-fresh');assert.equal(P.identifyInvoiceProfile('SHAHD HALAL POULTRY LTD VAT No 159 5722 76').id,'shahid-halal-poultry');assert.equal(P.identifyInvoiceProfile('MASPO LTD Invoice number 123-AB/02/2026').id,'maspo');assert.equal(P.identifyInvoiceProfile('Polish Village Bread LTD DELIVERY 666715/MAG/2026').id,'polish-village-bread');assert.equal(P.identifyInvoiceProfile('DELIVERY 666715/MAG/2026 Issued baskets').id,'wz-delivery');assert.equal(P.identifyInvoiceProfile('Bestway Wholesale Invoice No. 262484240').id,'bestway');assert.equal(P.identifyInvoiceProfile('ISAAC WHOLESALE LTD Invoice No Sl-020056').id,'isaac-wholesale');assert.equal(P.identifyInvoiceProfile('EAGLEFOODS Invoice To: Customer Invoice No 143871').id,'eagle-foods');assert.equal(P.identifyInvoiceProfile('Acme Motors Invoice 1042').id,'generic');assert.ok(P.compatibleCompanies.some(company=>company.id==='eagle-foods'&&company.name==='Eagle Foods Ltd'&&company.category==='Invoices'));assert.ok(P.compatibleCompanies.some(company=>company.id==='isaac-wholesale'&&company.name==='Isaac Wholesale Ltd'&&company.category==='Invoices'));assert.deepEqual(P.invoiceProfiles.map(profile=>profile.id),['freshways','bestway','eagle-foods','shahid-halal-poultry','marion-trading','monolith','peterborough-bazaar','parkers','deens-produce','liberty-frozen-foods','isaac-wholesale','dairy-fresh','maspo','polish-village-bread','wz-delivery','generic']);});
+test('Parkers profile reads invoice identity and printed footer cells without using VAT rate or item prices',()=>{
+  const line=(page,text,x,y,width=String(text).length*9,height=20)=>({page,text,x,y,width,height,confidence:1});
+  const invoice=(page=1,changes={})=>[
+    line(page,'PARKERS',1320,80),line(page,'Parker Motor Services Ltd',130,1660),line(page,'INVOICE',800,100),
+    line(page,'Tax Point',1320,470,48,26),line(page,changes.date||'3/09/26',1565,456,82,20),
+    line(page,'Document No.',1320,520,148,26),line(page,changes.number||'81N234558',1565,506,120,20),
+    line(page,'VAT %',550,1500),line(page,'20.00',560,1580),line(page,'Retail',1360,730),line(page,'10.99',1380,870),line(page,'Trade',1540,730),line(page,'6.50',1570,870),
+    line(page,'GOODS',1320,1625,125,27),line(page,changes.goods||'57.12',1710,1635,60,21),
+    line(page,'VAT',1320,1710,57,27),line(page,changes.vat||'11.42',1710,1710,56,21),
+    line(page,'TOTAL',1320,1800,94,27),line(page,changes.total||'68.54',1710,1790,60,21),
+    line(page,'All electrical goods supplied may be refused credit if returned late',160,1100)
+  ];
+  const parse=lines=>P.parseInvoiceBatch(lines.map(item=>item.text).join('\n'),'random-name.pdf',lines);
+  const [row]=parse(invoice());
+  assert.deepEqual([row.profileId,row.invoiceNumber,row.originalInvoiceNumber,row.date,row.supplier,row.vat,row.total,row.documentType,row.status,row.retryOcr],['parkers','4558','81N234558','2026-09-03','Parker Motor Services Ltd',11.42,68.54,'INVOICE','ACCEPTED',false]);
+  assert.equal(P.compatibleCompanies.find(company=>company.id==='parkers').status,'Review','new invoice suppliers are labelled Review during the initial accuracy period');
+  const shifted=invoice().map(item=>({...item,x:item.x*1.7+380,y:item.y*1.7+210,width:item.width*1.7,height:item.height*1.7})),[shiftedRow]=parse(shifted);
+  assert.deepEqual([shiftedRow.invoiceNumber,shiftedRow.date,shiftedRow.vat,shiftedRow.total,shiftedRow.status],['4558','2026-09-03',11.42,68.54,'ACCEPTED'],'anchors move with the invoice page and do not rely on fixed page coordinates');
+  const [zeroVat]=parse(invoice(2,{number:'81N230000',vat:'0.00',total:'13.50',goods:'13.50'}));
+  assert.deepEqual([zeroVat.invoiceNumber,zeroVat.vat,zeroVat.total,zeroVat.status],['0000',0,13.5,'ACCEPTED'],'printed zero VAT is accepted without calculating or inferring it');
+  const [credit]=parse([...invoice(3,{number:'28CD044080',vat:'-1.14',total:'-6.84',goods:'-5.70'}),line(3,'CREDIT',820,98,100,40)]);
+  assert.deepEqual([credit.invoiceNumber,credit.vat,credit.total,credit.documentType,credit.status],['4080',-1.14,-6.84,'CREDIT NOTE','ACCEPTED'],'credit notes retain the printed negative total and VAT');
+  const [unconfirmed]=parse(invoice(4,{date:'0/09/26',vat:'1142',total:'6854'}));
+  assert.deepEqual([unconfirmed.date,unconfirmed.vat,unconfirmed.total,unconfirmed.status,unconfirmed.retryOcr],['','', '', 'REJECTED',true],'missing date digits and amounts without printed pennies trigger the standard OCR retry instead of a guessed value');
+  const summary=[line(5,'PARKERS',1320,80),line(5,'TOTAL',1300,600),line(5,'INVOICE 1: 3,394.73',500,300),line(5,'SOLD',500,400),line(5,'BALANCE',500,500)];
+  assert.equal(parse([...invoice(),...summary]).length,1,'Parkers summary pages are skipped and never become invoice records');
+});
+test('Parkers is a recognized supplier profile with the remaining invoice suppliers',()=>{
+  assert.equal(P.identifyInvoiceProfile('PARKERS Invoice Tax Point Document No 81N234558').id,'parkers');
+  assert.deepEqual(P.invoiceProfiles.map(profile=>profile.id),['freshways','bestway','eagle-foods','shahid-halal-poultry','marion-trading','monolith','peterborough-bazaar','parkers','deens-produce','liberty-frozen-foods','isaac-wholesale','dairy-fresh','maspo','polish-village-bread','wz-delivery','generic']);
+});
 test('Eagle Foods uses invoice pages only and statement rows only confirm existing invoice pages',()=>{
   const line=(page,text,x,y,width=String(text).length*9)=>({page,text,x,y,width,height:20,confidence:1});
   const invoice=[line(1,'EAGLEFOODS',80,20,150),line(1,'Invoice To:',80,80),line(1,'Account No',80,120),line(1,'CMKL',250,120),line(1,'Invoice No',500,120),line(1,'143871',700,120),line(1,'Order Date',1000,120),line(1,'31-AUG-26',1240,120),line(1,'Total Credit',1650,800),line(1,'1880.40',1800,850),line(1,'New Invoice Total',1650,900),line(1,'5,927.42',1800,950)];
@@ -1025,9 +1070,29 @@ test('an unreadable amount rejects every transaction in its unverified balance i
   assert.deepEqual(report.mismatches[0].rowIndexes,[1,2]);
   P.markBankBalanceMismatches(rows,report);
   assert.deepEqual(rows.map(row=>row.status),[undefined,'REJECTED','REJECTED']);
+  assert.equal(rows[1].include,undefined);
+  assert.equal(rows[2].include,undefined);
   assert.match(rows[2].rejectedReason,/interval .* contains an unreadable transaction amount/i);
 });
-test('compatible formats list the supported Monzo, Barclays and Metro Bank statement layouts',()=>{const banks=P.compatibleCompanies.filter(company=>company.category==='Bank statements');assert.deepEqual(banks.map(company=>company.name),['Monzo','Barclays','Metro Bank']);assert.match(banks[0].description,/ISO dates/);assert.match(banks[1].description,/OCR-supported/);assert.match(banks[2].description,/money out, money in and balance columns/);});
+test('compatible formats list the supported Monzo, Barclays, Metro Bank and HSBC statement layouts',()=>{const banks=P.compatibleCompanies.filter(company=>company.category==='Bank statements');assert.deepEqual(banks.map(company=>company.name),['Monzo','Barclays','Metro Bank','HSBC']);assert.match(banks[0].description,/ISO dates/);assert.match(banks[1].description,/OCR-supported/);assert.match(banks[2].description,/money out, money in and balance columns/);assert.match(banks[3].description,/paid out, paid in and balance columns/);});
+test('HSBC OCR follows labelled columns and carries a date across a page break',()=>{
+  const lines=[
+    {page:1,text:'HSBC',x:20,y:10},
+    {page:1,text:'Date',x:100,y:100,width:40,height:20},{page:1,text:'Payment type and details',x:200,y:100,width:180,height:20},{page:1,text:'Paid out',x:600,y:100,width:60,height:20},{page:1,text:'Paid in',x:750,y:100,width:50,height:20},{page:1,text:'Balance',x:900,y:100,width:55,height:20},
+    {page:1,text:'28 Dec 25',x:100,y:150},{page:1,text:'BALANCE BROUGHT FORWARD',x:200,y:150},{page:1,text:'1,000.00',x:910,y:150},
+    {page:1,text:'29 Dec 25',x:100,y:200},{page:1,text:'Standing Order Example',x:250,y:200},{page:1,text:'50.00',x:620,y:220},{page:1,text:'950.00',x:910,y:220},
+    {page:1,text:'Customer payment',x:250,y:250},{page:1,text:'100.00',x:780,y:270},{page:1,text:'1,050.00',x:910,y:270},
+    {page:2,text:'HSBC',x:20,y:10},
+    {page:2,text:'Date',x:260,y:400,width:40,height:20},{page:2,text:'Payment type and details',x:390,y:400,width:180,height:20},{page:2,text:'Paid out',x:800,y:400,width:60,height:20},{page:2,text:'Paid in',x:1050,y:400,width:50,height:20},{page:2,text:'Balance',x:1275,y:400,width:55,height:20},
+    {page:2,text:'BALANCE BROUGHT FORWARD',x:390,y:450},{page:2,text:'1,050.00',x:1280,y:450},
+    {page:2,text:'Supplier payment',x:440,y:490},{page:2,text:'20.00',x:810,y:510},{page:2,text:'1 ,030.00',x:1280,y:510},
+    {page:2,text:'30 Dec 25',x:260,y:530},{page:2,text:'Card receipt',x:440,y:560},{page:2,text:'5.00',x:1060,y:580},{page:2,text:'1,035.00',x:1280,y:580}
+  ];
+  const rows=P.parseOcrBank(lines,'HSBC Kinetic Current Account Statement','sample.pdf');
+  assert.deepEqual(rows.map(row=>[row.date,row.amount,row.balance]),[['2025-12-29',-50,950],['2025-12-29',100,1050],['2025-12-29',-20,1030],['2025-12-30',5,1035]]);
+  assert.equal(rows[0].openingBalance,1000);assert.equal(rows[2].pageOpeningBalance,1050);assert.ok(rows.every(row=>! /BALANCE BROUGHT FORWARD/i.test(row.details)));
+  const report=P.inspectBankBalances(rows);assert.equal(report.mismatches.length,0);assert.equal(report.checkedSegments,4);
+});
 test('OCR normalises ten as IO and carries a day-only date across rows',()=>{const lines=[{page:2,text:'Statement date 28 Aug 2026',x:490,y:43},{page:2,text:'IO Aug',x:98,y:143},{page:2,text:'Card Purchase Apple',x:183,y:143},{page:2,text:'2.99',x:481,y:143},{page:2,text:'24',x:98,y:300},{page:2,text:'Received From Driver',x:183,y:300},{page:2,text:'26.27',x:562,y:300}];const r=P.parseOcrBank(lines,'Statement date 28 Aug 2026','barclays.pdf');assert.deepEqual(r.map(x=>[x.date,x.payment,x.receipt]),[['2026-08-10',2.99,''],['2026-08-24','',26.27]]);});
 test('ISO date bank statements split rows correctly',async()=>{const r=await P.parsePdf(pdf('(2026-10-11) Tj (Shell fuel) Tj (47.80 DR) Tj (2026-10-12) Tj (Taxi fares) Tj (260.00 CR) Tj'),'bank','monzo.pdf');assert.equal(r.transactions.length,2);assert.equal(r.transactions[0].date,'2026-10-11');assert.equal(r.transactions[1].receipt,260);});
 test('Metro Bank column headers parse with clean or legacy pound characters',()=>{for(const prefix of ['', '\u00C2']){const currency=`(${prefix}\u00A3)`,items=[{text:'10 Aug 2026',x:50,y:700},{text:'Direct Debit Test',x:150,y:700},{text:`Money out ${currency}`,x:400,y:10},{text:`Money in ${currency}`,x:600,y:10},{text:`Balance ${currency}`,x:800,y:10},{text:'12.34',x:500,y:700},{text:'50.00',x:900,y:700}];const [row]=P.parseBank('','synthetic.pdf',[items]);assert.deepEqual([row.date,row.details,row.payment,row.balance],['2026-08-10','Direct Debit Test',12.34,50]);}});
@@ -1437,6 +1502,25 @@ test('Deens Produce scan extracts each printed invoice once with the correct pag
     assert.deepEqual(rows.map(row=>[row.page,row.originalInvoiceNumber,row.date,row.total,row.vat,row.supplier,row.status,row.profileId]),expected.map(([page,number,date,total])=>[page,number,date,total,0,'Deens Produce Ltd','ACCEPTED','deens-produce']));
     assert.equal(new Set(rows.map(row=>`${row.supplier}:${row.originalInvoiceNumber}:${row.date}`)).size,rows.length,'invoice pages must not duplicate records');
   }finally{fs.rmSync(shortPath,{force:true});}
+});
+test('Isaac Wholesale uses relative footer labels, ignores account balances and skips summaries',()=>{
+  const line=(page,text,x,y,width=String(text).length*8)=>({page,text,x,y,width,height:20,confidence:1});
+  const first=[line(1,'Isaac WHOLESALE',100,20),line(1,'Sales Invoice',1300,80),line(1,'Invoice To',100,300),line(1,'Invoice No',1200,300),line(1,'5-018593',1240,330),line(1,'Invoice Date',1200,390),line(1,'20-AUG-2026',1240,420)];
+  const continuation=[line(2,'Isaac Wholesale',100,20),line(2,'Continued on next page',300,80),line(2,'VAT Total',900,480),line(2,'0.00',1200,480),line(2,'Invoice Total',900,520),line(2,'299.06',1200,520),line(2,'Account Balance',900,540),line(2,'902.64',1200,540)];
+  const shifted=[...first,...continuation].map(item=>({...item,x:item.x*1.35+275,y:item.y*1.4+185,width:item.width*1.35,height:item.height*1.4}));
+  const [row]=P.parseInvoiceBatch(shifted.map(item=>item.text).join('\n'),'renamed.pdf',shifted);
+  assert.deepEqual([row.invoiceNumber,row.date,row.vat,row.total,row.supplier,row.status,row.sourcePages],['8593','2026-08-20',0,299.06,'Isaac Wholesale Ltd','ACCEPTED',[1,2]]);
+  const missingTotal=shifted.filter(item=>item.text!=='299.06'),[rejected]=P.parseInvoiceBatch(missingTotal.map(item=>item.text).join('\n'),'renamed.pdf',missingTotal);
+  assert.equal(rejected.status,'REJECTED');assert.equal(rejected.total,'','the account balance must never be substituted for a missing invoice total');
+  const summary=[line(3,'Isaac Wholesale Ltd',100,20),line(3,'Invoice Summary',100,80),line(3,'INVOICE 1: 3,394.73',500,300),line(3,'SOLD 1744.87',500,340),line(3,'BALANCE 7599.81',500,380)];
+  assert.deepEqual(P.parseInvoiceBatch(summary.map(item=>item.text).join('\n'),'renamed.pdf',summary),[],'summary pages must not create invoice records');
+});
+test('Isaac Wholesale OCR sample extracts every printed invoice footer once',{skip:process.env.CLEARCOUNT_RUN_ISAAC_OCR!=='1'||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/Isaac Wholesale/Isaac Wholesale.pdf'))},()=>{
+  const fixture=path.resolve(__dirname,'../samples/extractor/Invoices/Isaac Wholesale/Isaac Wholesale.pdf'),helper=path.resolve(__dirname,'../extractor/ocr-helper.ps1'),raw=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',fixture,'-Scale','2.5'],{encoding:'utf8',windowsHide:true,maxBuffer:60*1024*1024}),pages=raw.split(/\r?\n/).filter(item=>item.startsWith('PAGE:')).map(item=>JSON.parse(item.slice(5))),lines=pages.flatMap(page=>page.lines||[]),rows=P.parseInvoiceBatch(pages.map(page=>page.text||'').join('\n'),fixture,lines),expected=[[1,'0056','2026-09-01',56.38,338.30],[2,'9758','2026-08-29',0,53.16],[3,'8841','2026-08-22',0,25.12],[4,'4554','2026-10-06',48.71,292.27],[5,'7503','2026-08-13',42.51,304.52],[6,'8593','2026-08-20',40.80,299.06],[7,'4456','2026-07-21',62.37,374.23]];
+  assert.equal(pages.length,7);assert.equal(rows.length,expected.length,'each invoice page must produce exactly one row');
+  assert.deepEqual(rows.map(row=>[row.page,row.invoiceNumber,row.date,row.vat,row.total]),expected);
+  assert.ok(rows.every(row=>row.profileId==='isaac-wholesale'&&row.supplier==='Isaac Wholesale Ltd'&&row.status==='ACCEPTED'&&!row.retryOcr));
+  assert.equal(new Set(rows.map(row=>row.invoiceNumber)).size,rows.length);
 });
 test('Peterborough Bazaar scan extracts every unique printed invoice and retries its faint VAT footer',{skip:process.env.CLEARCOUNT_RUN_PETERBOROUGH_OCR!=='1'||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/Peterborough Bazaar.pdf'))},()=>{
   const fixture=path.resolve(__dirname,'../samples/extractor/Invoices/Peterborough Bazaar.pdf'),shortPath=path.resolve(__dirname,`../.tmp/pb-test-${process.pid}.pdf`),helper=path.resolve(__dirname,'../extractor/ocr-helper.ps1');

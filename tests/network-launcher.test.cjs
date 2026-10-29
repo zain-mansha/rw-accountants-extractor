@@ -10,6 +10,26 @@ const powershellScript=path.join(root,'scripts','Start Extractor from Network.ps
 const commandScript=path.join(root,'scripts','Start Extractor from Network.cmd');
 const mainScript=path.join(root,'extractor','main.cjs');
 const networkBootstrapPath=path.join(root,'extractor','network-bootstrap.cjs');
+const {parseLauncherConfigText}=require(path.join(root,'scripts','ExtractorLauncherConfig.cjs'));
+
+test('malformed local launcher settings recover through a valid backup or network-root marker',()=>{
+  const valid={networkRoot:'Z:\\Shared Extractor',sharedApplication:'Z:\\Shared Extractor\\resources\\app',lastLocalApplication:'C:\\Users\\User\\Extractor\\Applications\\build'};
+  assert.deepEqual(parseLauncherConfigText(JSON.stringify(valid)),valid);
+  assert.deepEqual(parseLauncherConfigText(`,${JSON.stringify(valid)}`),valid);
+  assert.deepEqual(parseLauncherConfigText('{"networkRoot":"Z:\\\\Shared Extractor",,"broken":') ,{
+    networkRoot:'Z:\\Shared Extractor',
+    recoveredFromMalformedJson:true
+  });
+
+  const loader=fs.readFileSync(path.join(root,'scripts','ExtractorRuntimeLoader.cjs'),'utf8');
+  const launcher=fs.readFileSync(powershellScript,'utf8');
+  assert.match(loader,/settingsPaths = \[launcherConfigPath, `\$\{launcherConfigPath\}\.bak`\]/);
+  assert.match(loader,/extractor-network-root\.txt/);
+  assert.match(loader,/lastLocalApplication/);
+  assert.match(launcher,/Write-ExtractorAtomicTextFile/);
+  assert.match(launcher,/ConvertFrom-Json -ErrorAction Stop/);
+  assert.match(launcher,/extractor-network-root\.txt/);
+});
 
 test('network command launcher maps a share path and forwards setup options',()=>{
   const source=fs.readFileSync(commandScript,'utf8');
@@ -30,7 +50,7 @@ test('double-clicking the packaged EXE runs the same network CMD launcher withou
   assert.doesNotMatch(main,/spawn\('powershell\.exe',\['-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',launcher\]/);
 });
 
-test('a downloaded shared build safely refreshes only its matching network bootstrap',()=>{
+test('a local network bootstrap never overwrites the canonical shared application',()=>{
   const {publishNetworkBootstrap}=require(networkBootstrapPath);
   const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'Extractor bootstrap refresh '));
   try{
@@ -40,14 +60,8 @@ test('a downloaded shared build safely refreshes only its matching network boots
     fs.writeFileSync(path.join(cached,'main.cjs'),'latest bootstrap');
     fs.writeFileSync(path.join(packaged,'main.cjs'),'old bootstrap');
     const result=publishNetworkBootstrap({packaged:true,sharedApplication:cached,applicationDirectory:cached,sourceFile:path.join(cached,'main.cjs')});
-    assert.equal(result.updated,true);
-    assert.equal(fs.readFileSync(path.join(packaged,'main.cjs'),'utf8'),'latest bootstrap');
-
-    fs.writeFileSync(path.join(packaged,'main.cjs'),'protected app');
-    const unrelated=path.join(temporary,'unrelated');fs.mkdirSync(unrelated,{recursive:true});
-    const rejected=publishNetworkBootstrap({packaged:true,sharedApplication:unrelated,applicationDirectory:unrelated,sourceFile:path.join(cached,'main.cjs')});
-    assert.equal(rejected.updated,false);
-    assert.equal(fs.readFileSync(path.join(packaged,'main.cjs'),'utf8'),'protected app');
+    assert.equal(result.updated,false);
+    assert.equal(fs.readFileSync(path.join(packaged,'main.cjs'),'utf8'),'old bootstrap');
   }finally{
     fs.rmSync(temporary,{recursive:true,force:true});
   }
@@ -105,8 +119,9 @@ test('network runtime uses a packaged local entry point to load the immutable sh
   const manifest=JSON.parse(fs.readFileSync(path.join(root,'scripts','ExtractorRuntimePackage.json'),'utf8'));
   const launcher=fs.readFileSync(powershellScript,'utf8');
   assert.equal(manifest.main,'ExtractorRuntimeLoader.cjs');
+  assert.match(loader,/ExtractorLauncherConfig\.cjs/);
   assert.match(loader,/FARE_EXTRACTOR_SHARED_APP/);
-  assert.match(loader,/require\(sharedMain\)/);
+  assert.match(loader,/require\(localMain\)/);
   assert.match(loader,/showErrorBox/);
   assert.doesNotMatch(loader,/copyFile|copySync|cpSync/);
   assert.match(launcher,/S-1-15-2-1/);
@@ -131,12 +146,12 @@ test('network launcher updates the shared app from the public GitHub repository 
   assert.match(source,/Checking the shared network application against GitHub/);
   assert.match(source,/resources\\app/);
   assert.match(source,/Join-Path \$source 'resources\\app'/);
-  assert.match(source,/\$shortcut\.TargetPath = Join-Path \$source 'Extractor\.exe'/);
-  assert.match(source,/\$shortcut\.IconLocation = .*Extractor\.exe/);
+  assert.match(source,/\$shortcut\.TargetPath = \$runtimeExecutable/);
+  assert.match(source,/\$shortcut\.IconLocation = "\$runtimeExecutable,0"/);
   assert.match(source,/Programs\\ExtractorRuntime/);
   assert.match(source,/robocopy\.exe[^\r\n]*\$source \$runtimeStage/);
   assert.match(source,/Join-Path \$source 'resources\\app'\),\(Join-Path \$source 'data'\)/);
-  assert.doesNotMatch(source,/Programs\\Extractor'\)/);
+  assert.match(source,/Programs\\Extractor'\)/);
 });
 
 test('elevated OCR helper requests the Windows-compatible OCR package without removing an installed one',{skip:process.platform!=='win32'},()=>{
@@ -244,7 +259,9 @@ test('network launcher publishes source updates to the share and caches only the
       'Extractor.exe':'runtime exe','icudtl.dat':'runtime data','resources.pak':'runtime resources',
       'snapshot_blob.bin':'runtime snapshot','v8_context_snapshot.bin':'runtime context','version':'44.7.0',
       'resources/app/main.cjs':'old packaged bootstrap','resources/app/package.json':'{}',
+      'resources/app/network-bootstrap.cjs':'old network bootstrap','resources/app/preload.cjs':'old preload',
       'resources/app/index.html':'old packaged page','resources/app/parser.js':'old parser',
+      'resources/app/app.js':'old app script',
       'resources/app/styles.css':'old styles','resources/app/vendor/xlsx.full.min.js':'old library',
       'resources/app/ocr-helper.ps1':'old helper','resources/app/copy-helper.ps1':'old copy helper',
       'resources/app/ocr-requirement.json':'{}','resources/app/build-info.json':'{}',
@@ -254,7 +271,8 @@ test('network launcher publishes source updates to the share and caches only the
     fs.writeFileSync(path.join(source,'network-build.txt'),'1.1.7-123456789abc\n');
     const appFiles={
       'main.cjs':'updated shared app entry','package.json':JSON.stringify({version:'1.1.7',main:'main.cjs'}),
-      'index.html':'updated shared page','parser.js':'updated shared parser','styles.css':'updated shared styles',
+      'network-bootstrap.cjs':'updated network bootstrap','build-info.json':JSON.stringify({buildId:'1.1.7-test'}),
+      'index.html':'updated shared page','app.js':'updated shared app script','parser.js':'updated shared parser','preload.cjs':'updated shared preload','styles.css':'updated shared styles',
       'ocr-helper.ps1':'updated OCR helper','copy-helper.ps1':'updated PDF helper',
       'ocr-requirement.json':JSON.stringify({language:'en-GB',capability:'Language.OCR~~~en-GB~0.0.1.0',versionPolicy:'windows-managed'}),
       'license.cjs':'must not be included'
@@ -267,6 +285,7 @@ test('network launcher publishes source updates to the share and caches only the
     fs.copyFileSync(powershellScript,path.join(scripts,'Start Extractor from Network.ps1'));
     fs.copyFileSync(commandScript,path.join(scripts,'Start Extractor from Network.cmd'));
     fs.copyFileSync(path.join(root,'scripts','ExtractorRuntimeLoader.cjs'),path.join(scripts,'ExtractorRuntimeLoader.cjs'));
+    fs.copyFileSync(path.join(root,'scripts','ExtractorLauncherConfig.cjs'),path.join(scripts,'ExtractorLauncherConfig.cjs'));
     fs.copyFileSync(path.join(root,'scripts','ExtractorRuntimePackage.json'),path.join(scripts,'ExtractorRuntimePackage.json'));
     const zipScript=path.join(temporary,'compress.ps1');
     fs.writeFileSync(zipScript,"$ErrorActionPreference='Stop'\nCompress-Archive -Path (Join-Path $env:EXTRACTOR_TEST_REPO_CONTAINER '*') -DestinationPath $env:EXTRACTOR_TEST_ARCHIVE -Force\n",'utf8');
@@ -276,6 +295,7 @@ test('network launcher publishes source updates to the share and caches only the
     fs.copyFileSync(powershellScript,path.join(source,'Start Extractor from Network.ps1'));
     fs.copyFileSync(commandScript,path.join(source,'Start Extractor from Network.cmd'));
     fs.copyFileSync(path.join(root,'scripts','ExtractorRuntimeLoader.cjs'),path.join(source,'ExtractorRuntimeLoader.cjs'));
+    fs.copyFileSync(path.join(root,'scripts','ExtractorLauncherConfig.cjs'),path.join(source,'ExtractorLauncherConfig.cjs'));
     fs.copyFileSync(path.join(root,'scripts','ExtractorRuntimePackage.json'),path.join(source,'ExtractorRuntimePackage.json'));
 
     const atomFeed=`<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>tag:github.com,2008:Grit::Commit/${commit}</id></entry></feed>`;
@@ -285,8 +305,8 @@ test('network launcher publishes source updates to the share and caches only the
     ],{encoding:'utf8',windowsHide:true,timeout:120000,env:{...process.env,EXTRACTOR_NETWORK_UPDATE_TESTS:'1',EXTRACTOR_TEST_COMMIT:commit,EXTRACTOR_TEST_ARCHIVE:archive,EXTRACTOR_TEST_FEED_CONTENT:atomFeed}});
     runUpdater();
 
-    const sharedApp=path.join(source,'.extractor-apps',commit,'resources','app');
-    assert.equal(fs.readFileSync(path.join(source,'.extractor-current.txt'),'utf8').trim(),commit);
+    const sharedApp=path.join(source,'resources','app');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(sharedApp,'build-info.json'),'utf8').replace(/^\uFEFF/, '')).commit,commit);
     assert.equal(fs.readFileSync(path.join(sharedApp,'main.cjs'),'utf8'),'updated shared app entry');
     assert.equal(fs.readFileSync(path.join(sharedApp,'parser.js'),'utf8'),'updated shared parser');
     assert.equal(fs.readFileSync(path.join(sharedApp,'vendor','xlsx.full.min.js'),'utf8'),'updated workbook library');
@@ -294,6 +314,7 @@ test('network launcher publishes source updates to the share and caches only the
     assert.equal(fs.existsSync(path.join(runtime,'44.7.0','Extractor.exe')),true);
     assert.equal(fs.existsSync(path.join(runtime,'44.7.0','resources','app','parser.js')),false);
     assert.equal(fs.existsSync(path.join(runtime,'44.7.0','resources','app','ExtractorRuntimeLoader.cjs')),true);
+    assert.equal(fs.existsSync(path.join(runtime,'44.7.0','resources','app','ExtractorLauncherConfig.cjs')),true);
     assert.equal(fs.existsSync(path.join(runtime,'44.7.0','resources','app','package.json')),true);
     assert.equal(fs.existsSync(path.join(runtime,'44.7.0','network-build.txt')),false);
     assert.equal(fs.existsSync(path.join(runtime,'44.7.0','Start Extractor from Network.ps1')),false);

@@ -309,6 +309,27 @@ function Replace-ExtractorRuntimeFile([string]$SourcePath, [string]$DestinationP
   }
 }
 
+function Write-ExtractorAtomicTextFile([string]$DestinationPath, [string]$Contents) {
+  $fullDestination = [IO.Path]::GetFullPath($DestinationPath)
+  $destinationDirectory = [IO.Path]::GetDirectoryName($fullDestination)
+  if (-not (Test-Path -LiteralPath $destinationDirectory -PathType Container)) {
+    New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+  }
+  $temporaryPath = Join-Path $destinationDirectory ('.' + [IO.Path]::GetFileName($fullDestination) + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
+  $replacementBackup = Join-Path $destinationDirectory ('.' + [IO.Path]::GetFileName($fullDestination) + '.' + [guid]::NewGuid().ToString('N') + '.bak')
+  try {
+    [IO.File]::WriteAllText($temporaryPath, $Contents, [System.Text.UTF8Encoding]::new($false))
+    if ([IO.File]::Exists($fullDestination)) {
+      [IO.File]::Replace($temporaryPath, $fullDestination, $replacementBackup)
+    } else {
+      [IO.File]::Move($temporaryPath, $fullDestination)
+    }
+  } finally {
+    if ([IO.File]::Exists($temporaryPath)) { [IO.File]::Delete($temporaryPath) }
+    if ([IO.File]::Exists($replacementBackup)) { [IO.File]::Delete($replacementBackup) }
+  }
+}
+
 function New-SharedExtractorBuild([string]$CommitSha) {
   $updatesDirectory = Join-Path $source '.extractor-update'
   New-Item -ItemType Directory -Path $updatesDirectory -Force | Out-Null
@@ -372,7 +393,7 @@ function New-SharedExtractorBuild([string]$CommitSha) {
       $newAppInstalled = $true
       if (-not (Test-ExtractorAppReady $liveApp)) { throw 'The replacement shared application failed its completeness check.' }
 
-      foreach ($launcherName in @('Start Extractor from Network.ps1','Start Extractor from Network.cmd','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')) {
+      foreach ($launcherName in @('Start Extractor from Network.ps1','Start Extractor from Network.cmd','ExtractorRuntimeLoader.cjs','ExtractorLauncherConfig.cjs','ExtractorRuntimePackage.json')) {
         $updatedLauncher = Join-Path $scriptsSource $launcherName
         if (Test-Path -LiteralPath $updatedLauncher -PathType Leaf) {
           $temporaryLauncher = Join-Path $source (".$launcherName.$([guid]::NewGuid().ToString('N')).tmp")
@@ -478,8 +499,9 @@ if ($updateWillReset -and -not $NoLaunch -and -not $PrepareLocalAppOnly) {
   exit 0
 }
 $runtimeLoaderSource = Join-Path $source 'ExtractorRuntimeLoader.cjs'
+$runtimeConfigHelperSource = Join-Path $source 'ExtractorLauncherConfig.cjs'
 $runtimePackageSource = Join-Path $source 'ExtractorRuntimePackage.json'
-foreach ($requiredLoaderFile in @($runtimeLoaderSource,$runtimePackageSource)) {
+foreach ($requiredLoaderFile in @($runtimeLoaderSource,$runtimeConfigHelperSource,$runtimePackageSource)) {
   if (-not (Test-Path -LiteralPath $requiredLoaderFile -PathType Leaf)) {
     throw 'The shared Extractor package is missing its runtime loader. Copy the complete updated network package and try again.'
   }
@@ -509,7 +531,7 @@ $runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot
         $runtimeStageFull = [IO.Path]::GetFullPath($runtimeStage)
         if (-not $runtimeStageFull.StartsWith($runtimePrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'The temporary Electron runtime path is outside its selected folder.' }
         $excludedDirectories = @((Join-Path $source 'resources\app'),(Join-Path $source 'data'),(Join-Path $source '.extractor-app-sessions'),(Join-Path $source '.extractor-apps'),(Join-Path $source '.extractor-update'))
-        $excludedRuntimeFiles = @('debug.log','network-build.txt','.extractor-current.txt','.extractor-head-cache.json','.extractor-update.lock','.extractor-update.pending','Start Extractor from Network.cmd','Start Extractor from Network.ps1','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')
+        $excludedRuntimeFiles = @('debug.log','network-build.txt','.extractor-current.txt','.extractor-head-cache.json','.extractor-update.lock','.extractor-update.pending','Start Extractor from Network.cmd','Start Extractor from Network.ps1','ExtractorRuntimeLoader.cjs','ExtractorLauncherConfig.cjs','ExtractorRuntimePackage.json')
         try {
           New-Item -ItemType Directory -Path $runtimeStage | Out-Null
           Write-Progress -Activity 'Checking Extractor updates' -Status 'Preparing the Windows Electron runtime on this PC (first launch only)...' -PercentComplete 80
@@ -559,6 +581,7 @@ if (-not $hasSandboxReadAccess) {
 # application directory, then loads that local copy.
 $runtimeLoaderDirectory = Join-Path $runtimeTarget 'resources\app'
 $runtimeLoaderPath = Join-Path $runtimeLoaderDirectory 'ExtractorRuntimeLoader.cjs'
+$runtimeConfigHelperPath = Join-Path $runtimeLoaderDirectory 'ExtractorLauncherConfig.cjs'
 $runtimePackagePath = Join-Path $runtimeLoaderDirectory 'package.json'
 $runtimeLoaderMarker = Join-Path $runtimeLoaderDirectory '.extractor-runtime-loader'
 $loaderHash = (Get-FileHash -LiteralPath $runtimeLoaderSource -Algorithm SHA256).Hash
@@ -577,10 +600,11 @@ while (-not $runtimeLoaderLock) {
 try {
   New-Item -ItemType Directory -Path $runtimeLoaderDirectory -Force | Out-Null
   $installedSignature = if (Test-Path -LiteralPath $runtimeLoaderMarker -PathType Leaf) { (Get-Content -LiteralPath $runtimeLoaderMarker -Raw).Trim() } else { '' }
-  $loaderReady = $installedSignature -eq $loaderSignature -and (Test-Path -LiteralPath $runtimeLoaderPath -PathType Leaf) -and (Test-Path -LiteralPath $runtimePackagePath -PathType Leaf)
+  $loaderReady = $installedSignature -eq $loaderSignature -and (Test-Path -LiteralPath $runtimeLoaderPath -PathType Leaf) -and (Test-Path -LiteralPath $runtimeConfigHelperPath -PathType Leaf) -and (Test-Path -LiteralPath $runtimePackagePath -PathType Leaf)
   if (-not $loaderReady) {
     foreach ($filePair in @(
       @{Source=$runtimeLoaderSource;Destination=$runtimeLoaderPath},
+      @{Source=$runtimeConfigHelperSource;Destination=$runtimeConfigHelperPath},
       @{Source=$runtimePackageSource;Destination=$runtimePackagePath}
     )) {
       $temporaryFile = "$($filePair.Destination).$([guid]::NewGuid().ToString('N')).tmp"
@@ -600,7 +624,7 @@ try {
 # Earlier launcher builds copied these bootstrap files along with Electron.
 # Remove them so a local runtime can never mistake itself for the network
 # updater when it starts the packaged loader.
-foreach ($runtimeBootstrapFile in @('network-build.txt','Start Extractor from Network.cmd','Start Extractor from Network.ps1','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')) {
+foreach ($runtimeBootstrapFile in @('network-build.txt','Start Extractor from Network.cmd','Start Extractor from Network.ps1','ExtractorRuntimeLoader.cjs','ExtractorLauncherConfig.cjs','ExtractorRuntimePackage.json')) {
   $runtimeBootstrapPath = Join-Path $runtimeTarget $runtimeBootstrapFile
   if (Test-Path -LiteralPath $runtimeBootstrapPath -PathType Leaf) { Remove-Item -LiteralPath $runtimeBootstrapPath -Force }
 }
@@ -617,9 +641,20 @@ if (-not $NoLaunch -or $PrepareLocalAppOnly) {
     profileRoot = [IO.Path]::GetFullPath($ProfileRoot)
     runtimeRoot = $RuntimeRoot
   } | ConvertTo-Json -Depth 4
-  $launcherConfigTemp = "$launcherConfigPath.$([guid]::NewGuid().ToString('N')).tmp"
-  [IO.File]::WriteAllText($launcherConfigTemp,$launcherConfig,[Text.Encoding]::UTF8)
-  Move-Item -LiteralPath $launcherConfigTemp -Destination $launcherConfigPath -Force
+  $validatedLauncherConfig = $launcherConfig | ConvertFrom-Json -ErrorAction Stop
+  if ([string]::IsNullOrWhiteSpace([string]$validatedLauncherConfig.networkRoot) -or [string]::IsNullOrWhiteSpace([string]$validatedLauncherConfig.lastLocalApplication)) {
+    throw 'The new local Extractor launcher settings did not contain the required network and application paths.'
+  }
+  $networkRootMarkerPath = Join-Path $runtimeTarget 'extractor-network-root.txt'
+  Write-ExtractorAtomicTextFile $networkRootMarkerPath ([IO.Path]::GetFullPath($source) + "`n")
+  if (Test-Path -LiteralPath $launcherConfigPath -PathType Leaf) {
+    try {
+      $previousLauncherConfig = Get-Content -LiteralPath $launcherConfigPath -Raw
+      $null = $previousLauncherConfig | ConvertFrom-Json -ErrorAction Stop
+      Write-ExtractorAtomicTextFile "$launcherConfigPath.bak" $previousLauncherConfig
+    } catch {}
+  }
+  Write-ExtractorAtomicTextFile $launcherConfigPath $launcherConfig
 }
 
 if ($PrepareLocalAppOnly) {
