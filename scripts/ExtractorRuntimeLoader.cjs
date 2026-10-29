@@ -4,7 +4,35 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { app, dialog, BrowserWindow, protocol } = require('electron');
-const { parseLauncherConfigText } = require('./ExtractorLauncherConfig.cjs');
+let parseLauncherConfigText;
+try {
+  ({ parseLauncherConfigText } = require('./ExtractorLauncherConfig.cjs'));
+} catch {
+  // Older launch scripts install this loader before they know about the
+  // helper file. Keep the loader able to recover on that first repair launch.
+  parseLauncherConfigText = text => {
+    const source = String(text ?? '').replace(/^\uFEFF/, '').trim();
+    if (!source) throw new Error('launcher settings are empty');
+    try {
+      const value = JSON.parse(source);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('launcher settings must be a JSON object');
+      return value;
+    } catch (error) {
+      const repaired = source.replace(/^[,\s]+(?=\{)/, '');
+      if (repaired !== source) {
+        try {
+          const value = JSON.parse(repaired);
+          if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+        } catch {}
+      }
+      const match = source.match(/"networkRoot"\s*:\s*"((?:\\.|[^"\\])*)"/i);
+      if (match) {
+        try { return { networkRoot: JSON.parse(`"${match[1]}"`), recoveredFromMalformedJson: true }; } catch {}
+      }
+      throw new Error(`launcher settings are not valid JSON: ${error.message}`);
+    }
+  };
+}
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'fareextractor', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 process.env.FARE_EXTRACTOR_SCHEME_REGISTERED = '1';
