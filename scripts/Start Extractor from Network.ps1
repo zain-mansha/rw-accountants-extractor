@@ -27,15 +27,17 @@ if (-not $runtimeTarget.StartsWith($runtimePrefix, [StringComparison]::OrdinalIg
 $repositoryOwner = 'zain-mansha'
 $repositoryName = 'rw-accountants-extractor'
 $repositoryBranch = 'main'
-$currentBuildFile = Join-Path $source '.extractor-current.txt'
-$buildRoot = Join-Path $source '.extractor-apps'
+$applicationDirectory = Join-Path $source 'resources\app'
 $initialBuildSha = ''
-if (Test-Path -LiteralPath $currentBuildFile -PathType Leaf) {
-  $initialBuildSha = (Get-Content -LiteralPath $currentBuildFile -Raw).Trim()
+try {
+  $initialBuildInfo = Get-Content -LiteralPath (Join-Path $applicationDirectory 'build-info.json') -Raw | ConvertFrom-Json
+  $initialBuildSha = [string]$initialBuildInfo.commit
   if ($initialBuildSha -notmatch '^[a-f0-9]{40}$') { $initialBuildSha = '' }
-}
+} catch { $initialBuildSha = '' }
+$sessionDirectory = Join-Path $source '.extractor-app-sessions'
+$updatePendingPath = Join-Path $source '.extractor-update.pending'
 $requiredAppFiles = @(
-  'main.cjs', 'network-bootstrap.cjs', 'package.json', 'index.html', 'parser.js', 'styles.css',
+  'main.cjs', 'network-bootstrap.cjs', 'package.json', 'index.html', 'app.js', 'preload.cjs', 'parser.js', 'styles.css',
   'vendor\xlsx.full.min.js', 'ocr-helper.ps1', 'copy-helper.ps1', 'ocr-requirement.json', 'build-info.json'
 )
 
@@ -48,13 +50,6 @@ function Test-ExtractorAppReady([string]$Directory) {
 }
 
 function Get-CurrentExtractorApp {
-  if (Test-Path -LiteralPath $currentBuildFile -PathType Leaf) {
-    $currentBuild = (Get-Content -LiteralPath $currentBuildFile -Raw).Trim()
-    if ($currentBuild -match '^[a-f0-9]{40}$') {
-      $currentApp = Join-Path (Join-Path $buildRoot $currentBuild) 'resources\app'
-      if (Test-ExtractorAppReady $currentApp) { return $currentApp }
-    }
-  }
   $packagedApp = Join-Path $source 'resources\app'
   if (Test-ExtractorAppReady $packagedApp) { return $packagedApp }
   return $null
@@ -203,15 +198,42 @@ try {
   throw "Required en-GB Windows OCR is unavailable, so Extractor has not started. $installDetail An administrator can install it with: DISM /Online /Add-Capability /CapabilityName:$capability"
 }
 
+function Get-InstalledExtractorCommit {
+  try {
+    $info = Get-Content -LiteralPath (Join-Path (Join-Path $source 'resources\app') 'build-info.json') -Raw | ConvertFrom-Json
+    $commit = [string]$info.commit
+    if ($commit -match '^[a-f0-9]{40}$') { return $commit }
+  } catch { }
+  return ''
+}
+
+function Get-ActiveExtractorSessions {
+  if (-not (Test-Path -LiteralPath $sessionDirectory -PathType Container)) { return @() }
+  $active = @()
+  $staleBefore = [DateTime]::UtcNow.AddSeconds(-90)
+  foreach ($session in Get-ChildItem -LiteralPath $sessionDirectory -Filter '*.json' -File -ErrorAction SilentlyContinue) {
+    if ($session.LastWriteTimeUtc -lt $staleBefore) {
+      Remove-Item -LiteralPath $session.FullName -Force -ErrorAction SilentlyContinue
+    } else { $active += $session.Name }
+  }
+  return $active
+}
+
 function New-SharedExtractorBuild([string]$CommitSha) {
   $updatesDirectory = Join-Path $source '.extractor-update'
   New-Item -ItemType Directory -Path $updatesDirectory -Force | Out-Null
-  New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
   $archivePath = Join-Path $updatesDirectory "source-$CommitSha.zip"
   $extractDirectory = Join-Path $updatesDirectory "extract-$CommitSha"
-  $targetRoot = Join-Path $buildRoot $CommitSha
-  $stageRoot = Join-Path $buildRoot ".staging-$CommitSha-$([guid]::NewGuid().ToString('N'))"
+  $stageRoot = Join-Path $updatesDirectory "stage-$CommitSha-$([guid]::NewGuid().ToString('N'))"
+  $backupApp = Join-Path $updatesDirectory "previous-app-$([guid]::NewGuid().ToString('N'))"
+  $pendingCreated = $false
+  $appMovedToBackup = $false
+  $newAppInstalled = $false
   try {
+    if (Test-Path -LiteralPath $updatePendingPath -PathType Leaf) { Remove-Item -LiteralPath $updatePendingPath -Force }
+    [IO.File]::WriteAllText($updatePendingPath, "$CommitSha`n", [Text.Encoding]::ASCII)
+    $pendingCreated = $true
+    Write-Output 'EXTRACTOR_UPDATE_WAIT_NOTICE: Extractor is notifying open workspaces before updating the shared application.'
     if ($env:EXTRACTOR_NETWORK_UPDATE_TESTS -eq '1') {
       Copy-Item -LiteralPath $env:EXTRACTOR_TEST_ARCHIVE -Destination $archivePath -Force
     } else {
@@ -229,7 +251,7 @@ function New-SharedExtractorBuild([string]$CommitSha) {
       throw 'The downloaded GitHub source is missing the Extractor application files.'
     }
 
-    $applicationStage = Join-Path $stageRoot 'resources\app'
+    $applicationStage = Join-Path $stageRoot 'app'
     New-Item -ItemType Directory -Path $applicationStage -Force | Out-Null
     Get-ChildItem -LiteralPath $extractorSource -Force | Where-Object { $_.Name -notin @('license.cjs','license-config.json') } | ForEach-Object {
       Copy-Item -LiteralPath $_.FullName -Destination $applicationStage -Recurse -Force
@@ -243,23 +265,44 @@ function New-SharedExtractorBuild([string]$CommitSha) {
     [IO.File]::WriteAllText((Join-Path $applicationStage 'build-info.json'), (@{buildId=$buildId;commit=$CommitSha} | ConvertTo-Json -Depth 4), [Text.Encoding]::UTF8)
     if (-not (Test-ExtractorAppReady $applicationStage)) { throw 'The updated Extractor application is incomplete; the existing shared version has been kept.' }
 
-    New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
-    if (Test-Path -LiteralPath $targetRoot) { Remove-Item -LiteralPath $targetRoot -Recurse -Force }
-    Move-Item -LiteralPath $stageRoot -Destination $targetRoot
-
-    foreach ($launcherName in @('Start Extractor from Network.ps1','Start Extractor from Network.cmd','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')) {
-      $updatedLauncher = Join-Path $scriptsSource $launcherName
-      if (Test-Path -LiteralPath $updatedLauncher -PathType Leaf) {
-        $temporaryLauncher = Join-Path $source (".$launcherName.$([guid]::NewGuid().ToString('N')).tmp")
-        Copy-Item -LiteralPath $updatedLauncher -Destination $temporaryLauncher -Force
-        Move-Item -LiteralPath $temporaryLauncher -Destination (Join-Path $source $launcherName) -Force
-      }
+    $sessionDeadline = [DateTime]::UtcNow.AddMinutes(10)
+    while ($true) {
+      $activeSessions = @(Get-ActiveExtractorSessions)
+      if ($activeSessions.Count -eq 0) { break }
+      if ([DateTime]::UtcNow -ge $sessionDeadline) { throw 'The update is ready, but other users still have Extractor open. Close their Extractor windows and launch again; the shared files have not been changed.' }
+      Write-Progress -Activity 'Checking Extractor updates' -Status "Waiting for $($activeSessions.Count) Extractor session(s) to close before replacing shared files..." -PercentComplete 55
+      Start-Sleep -Seconds 1
     }
-    $markerTemp = "$currentBuildFile.$([guid]::NewGuid().ToString('N')).tmp"
-    [IO.File]::WriteAllText($markerTemp, "$CommitSha`n", [Text.Encoding]::ASCII)
-    Move-Item -LiteralPath $markerTemp -Destination $currentBuildFile -Force
-    return (Join-Path $targetRoot 'resources\app')
+
+    $liveApp = Join-Path $source 'resources\app'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $liveApp) -Force | Out-Null
+    if (Test-Path -LiteralPath $liveApp) { Move-Item -LiteralPath $liveApp -Destination $backupApp; $appMovedToBackup = $true }
+    try {
+      Move-Item -LiteralPath $applicationStage -Destination $liveApp
+      $newAppInstalled = $true
+      if (-not (Test-ExtractorAppReady $liveApp)) { throw 'The replacement shared application failed its completeness check.' }
+
+      foreach ($launcherName in @('Start Extractor from Network.ps1','Start Extractor from Network.cmd','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')) {
+        $updatedLauncher = Join-Path $scriptsSource $launcherName
+        if (Test-Path -LiteralPath $updatedLauncher -PathType Leaf) {
+          $temporaryLauncher = Join-Path $source (".$launcherName.$([guid]::NewGuid().ToString('N')).tmp")
+          Copy-Item -LiteralPath $updatedLauncher -Destination $temporaryLauncher -Force
+          Move-Item -LiteralPath $temporaryLauncher -Destination (Join-Path $source $launcherName) -Force
+        }
+      }
+
+      $networkBuildTemp = Join-Path $source ".network-build.$([guid]::NewGuid().ToString('N')).tmp"
+      [IO.File]::WriteAllText($networkBuildTemp, "$buildId`n", [Text.Encoding]::ASCII)
+      Move-Item -LiteralPath $networkBuildTemp -Destination (Join-Path $source 'network-build.txt') -Force
+      if ($appMovedToBackup -and (Test-Path -LiteralPath $backupApp)) { Remove-Item -LiteralPath $backupApp -Recurse -Force; $appMovedToBackup = $false }
+    } catch {
+      if ($newAppInstalled -and (Test-Path -LiteralPath $liveApp)) { Remove-Item -LiteralPath $liveApp -Recurse -Force -ErrorAction SilentlyContinue }
+      if ($appMovedToBackup -and (Test-Path -LiteralPath $backupApp)) { Move-Item -LiteralPath $backupApp -Destination $liveApp -Force; $appMovedToBackup = $false }
+      throw
+    }
+    return $liveApp
   } finally {
+    if ($pendingCreated -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) { Remove-Item -LiteralPath $updatePendingPath -Force -ErrorAction SilentlyContinue }
     foreach ($temporaryPath in @($archivePath,$extractDirectory,$stageRoot)) {
       if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -271,33 +314,55 @@ $applicationDirectory = Get-CurrentExtractorApp
 $commitSha = ''
 try {
   $commitSha = Get-LatestExtractorCommit
-  $updatedDirectory = Join-Path (Join-Path $buildRoot $commitSha) 'resources\app'
-  if (-not (Test-ExtractorAppReady $updatedDirectory)) {
+  if (-not $applicationDirectory) { throw 'The shared application folder is incomplete.' }
+  if ((Get-InstalledExtractorCommit) -ne $commitSha) {
     $updateLockPath = Join-Path $source '.extractor-update.lock'
     $updateLock = $null
     $updateDeadline = [DateTime]::UtcNow.AddMinutes(10)
     while (-not $updateLock) {
       try { $updateLock = [IO.File]::Open($updateLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
       catch [IO.IOException] {
-        $applicationDirectory = Get-CurrentExtractorApp
-        if ((Test-ExtractorAppReady $updatedDirectory)) { break }
+        if ((Get-InstalledExtractorCommit) -eq $commitSha) { break }
         if ([DateTime]::UtcNow -ge $updateDeadline) { throw 'Another Extractor update did not finish within 10 minutes. Try launching again.' }
         Write-Progress -Activity 'Checking Extractor updates' -Status 'Waiting for another user to finish the shared update...' -PercentComplete 20
         Start-Sleep -Milliseconds 500
       }
     }
     try {
-      if (-not (Test-ExtractorAppReady $updatedDirectory)) {
+      if ($updateLock) {
+        $commitSha = Get-LatestExtractorCommit
+      }
+      if ((Get-InstalledExtractorCommit) -ne $commitSha) {
         Write-Progress -Activity 'Checking Extractor updates' -Status 'Downloading and preparing the update on the shared network folder...' -PercentComplete 35
-        $updatedDirectory = New-SharedExtractorBuild $commitSha
+        $applicationDirectory = New-SharedExtractorBuild $commitSha
       }
     } finally {
       if ($updateLock) { $updateLock.Dispose() }
     }
   }
-  if (Test-ExtractorAppReady $updatedDirectory) { $applicationDirectory = $updatedDirectory }
+  if ((Get-InstalledExtractorCommit) -eq $commitSha -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) {
+    $recoveryLockPath = Join-Path $source '.extractor-update.lock'
+    $recoveryLock = $null
+    $recoveryDeadline = [DateTime]::UtcNow.AddMinutes(10)
+    while (-not $recoveryLock -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) {
+      try { $recoveryLock = [IO.File]::Open($recoveryLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+      catch [IO.IOException] {
+        if ([DateTime]::UtcNow -ge $recoveryDeadline) { throw 'Another Extractor update is still finishing. Try launching again in a few minutes.' }
+        Start-Sleep -Milliseconds 500
+      }
+    }
+    if ($recoveryLock) {
+      try {
+        if ((Get-InstalledExtractorCommit) -eq $commitSha -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) {
+          Remove-Item -LiteralPath $updatePendingPath -Force -ErrorAction SilentlyContinue
+        }
+      } finally { $recoveryLock.Dispose() }
+    }
+  }
+  $applicationDirectory = Get-CurrentExtractorApp
   Write-Progress -Activity 'Checking Extractor updates' -Status 'Shared application files are current.' -PercentComplete 70
 } catch {
+  if ($_.Exception.Message -match 'other users still have Extractor open') { throw "The update could not be applied because another user still has Extractor open. Close all Extractor windows and launch again. $($_.Exception.Message)" }
   if (-not $applicationDirectory) { throw "Extractor could not check GitHub or find a usable application on the network. $($_.Exception.Message)" }
   Write-Warning "GitHub could not be reached, so Extractor will use the last complete version on the network. $($_.Exception.Message)"
 }
@@ -339,8 +404,8 @@ $runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot
         $runtimeStage = Join-Path $RuntimeRoot "$runtimeVersion.staging-$([guid]::NewGuid().ToString('N'))"
         $runtimeStageFull = [IO.Path]::GetFullPath($runtimeStage)
         if (-not $runtimeStageFull.StartsWith($runtimePrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'The temporary Electron runtime path is outside its selected folder.' }
-        $excludedDirectories = @((Join-Path $source 'resources\app'),(Join-Path $source 'data'),$buildRoot,(Join-Path $source '.extractor-update'))
-        $excludedRuntimeFiles = @('debug.log','network-build.txt','.extractor-current.txt','.extractor-head-cache.json','.extractor-update.lock','Start Extractor from Network.cmd','Start Extractor from Network.ps1','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')
+        $excludedDirectories = @((Join-Path $source 'resources\app'),(Join-Path $source 'data'),(Join-Path $source '.extractor-app-sessions'),(Join-Path $source '.extractor-apps'),(Join-Path $source '.extractor-update'))
+        $excludedRuntimeFiles = @('debug.log','network-build.txt','.extractor-current.txt','.extractor-head-cache.json','.extractor-update.lock','.extractor-update.pending','Start Extractor from Network.cmd','Start Extractor from Network.ps1','ExtractorRuntimeLoader.cjs','ExtractorRuntimePackage.json')
         try {
           New-Item -ItemType Directory -Path $runtimeStage | Out-Null
           Write-Progress -Activity 'Checking Extractor updates' -Status 'Preparing the Windows Electron runtime on this PC (first launch only)...' -PercentComplete 80
@@ -481,4 +546,3 @@ if (-not $NoLaunch) {
   Write-Output "Electron runtime prepared: $runtimeTarget"
   if ($commitSha) { Write-Output "GitHub source commit: $commitSha" }
 }
-

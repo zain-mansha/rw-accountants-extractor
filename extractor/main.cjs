@@ -39,11 +39,16 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
     let finished=false;
     let splashReady=false;
     let updateNoticeReceived=false;
+    let waitNoticeReceived=false;
     const showUpdateNotice=()=>{
       if(!splashReady||!updateNoticeReceived)return;
       splash.webContents.executeJavaScript("document.getElementById('title').textContent='Applying update';document.getElementById('copy').textContent='An update is ready. Extractor will restart automatically to apply it.'").catch(()=>{});
     };
-    splash.webContents.once('did-finish-load',()=>{splashReady=true;showUpdateNotice();});
+    const showWaitNotice=()=>{
+      if(!splashReady||!waitNoticeReceived||updateNoticeReceived)return;
+      splash.webContents.executeJavaScript("document.getElementById('title').textContent='Update in progress';document.getElementById('copy').textContent='Open workspaces are moving to the update screen and will reopen automatically when the shared application is ready.'").catch(()=>{});
+    };
+    splash.webContents.once('did-finish-load',()=>{splashReady=true;showWaitNotice();showUpdateNotice();});
     const fail=message=>{
       if(finished)return;
       finished=true;
@@ -62,7 +67,7 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
       env:{...process.env,FARE_EXTRACTOR_BOOTSTRAP:'1'}
     });
     child.stdout.setEncoding('utf8');
-    child.stdout.on('data',chunk=>{output=(output+chunk).slice(-4000);if(output.includes('EXTRACTOR_UPDATE_RESET_NOTICE:')){updateNoticeReceived=true;showUpdateNotice();}});
+    child.stdout.on('data',chunk=>{output=(output+chunk).slice(-4000);if(output.includes('EXTRACTOR_UPDATE_WAIT_NOTICE:')){waitNoticeReceived=true;showWaitNotice();}if(output.includes('EXTRACTOR_UPDATE_RESET_NOTICE:')){updateNoticeReceived=true;showUpdateNotice();}});
     child.stderr.setEncoding('utf8');
     child.stderr.on('data',chunk=>{output=(output+chunk).slice(-4000);});
     child.once('error',error=>fail(error.message));
@@ -79,11 +84,14 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
   return;
 }
 
-protocol.registerSchemesAsPrivileged([{scheme:'fareextractor',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
+if(process.env.FARE_EXTRACTOR_SCHEME_REGISTERED!=='1')protocol.registerSchemesAsPrivileged([{scheme:'fareextractor',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.setName('R&W Accountants Extractor');
 const profileRoot=path.resolve(process.env.FARE_EXTRACTOR_PROFILE_ROOT||path.join(app.getPath('appData'),'Extractor','Profiles'));
 const workspaceArgument=process.argv.find(argument=>argument.startsWith('--workspace='));
 const requestedWorkspaceId=workspaceArgument?.slice('--workspace='.length)||'';
+const sharedApplicationDirectory=process.env.FARE_EXTRACTOR_SHARED_APP||'';
+const sharedNetworkRoot=sharedApplicationDirectory?path.resolve(sharedApplicationDirectory,'..','..'):'';
+const sharedUpdatePendingPath=sharedNetworkRoot?path.join(sharedNetworkRoot,'.extractor-update.pending'):'';
 const workspaceProfiles=readWorkspaceProfilesSync(profileRoot);
 const activeWorkspace=workspaceProfiles.find(profile=>profile.id===requestedWorkspaceId)||null;
 const dataDirectory=activeWorkspace?workspaceDirectory(profileRoot,activeWorkspace.id):path.join(profileRoot,'_login');
@@ -111,6 +119,25 @@ ipcMain.handle('workspace-open',(_event,id)=>{
   relaunchWorkspace(id);return {ok:true};
 });
 ipcMain.handle('workspace-logout',()=>{relaunchWorkspace();return {ok:true};});
+ipcMain.handle('network-update-prepare',async(event,state)=>{
+  if(!mainWindow||event.sender!==mainWindow.webContents)throw new Error('The Extractor workspace could not be verified for update handoff.');
+  const serialized=JSON.stringify({version:1,savedAt:new Date().toISOString(),state:state&&typeof state==='object'?state:{}});
+  if(Buffer.byteLength(serialized,'utf8')>100*1024*1024)throw new Error('This workspace is too large to save for the update.');
+  const recoveryPath=path.join(dataDirectory,'network-update-state.json'),temporaryPath=`${recoveryPath}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  await fs.writeFile(temporaryPath,serialized,{encoding:'utf8',flag:'wx'});
+  await fs.rm(recoveryPath,{force:true});
+  await fs.rename(temporaryPath,recoveryPath);
+  relaunchWorkspace(activeWorkspace?.id||'');
+  return {ok:true};
+});
+ipcMain.handle('network-update-take-state',async()=>{
+  const recoveryPath=path.join(dataDirectory,'network-update-state.json');
+  try{
+    const saved=JSON.parse(await fs.readFile(recoveryPath,'utf8'));
+    await fs.rm(recoveryPath,{force:true});
+    return saved?.version===1&&saved.state&&typeof saved.state==='object'?saved.state:null;
+  }catch(error){if(error?.code!=='ENOENT')console.warn(`Could not restore workspace after a network update: ${error.message}`);return null;}
+});
 ipcMain.handle('ocr-pdf',async(_event,payload)=>{
   const filePath=typeof payload==='string'?payload:payload?.filePath;
   const password=typeof payload==='object'&&typeof payload?.password==='string'?payload.password:'';
@@ -223,5 +250,16 @@ app.whenReady().then(async()=>{
 mainWindow=new BrowserWindow({width:1440,height:920,minWidth:1040,minHeight:700,title:activeWorkspace?`R&W Accountants | Extractor · ${activeWorkspace.username}`:'R&W Accountants | Extractor',backgroundColor:'#f4f7f6',show:false,autoHideMenuBar:true,webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,spellcheck:false,preload:path.join(root,'preload.cjs')}});
   Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'File',submenu:[{role:'quit'}]},{label:'View',submenu:[{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},{label:'Help',submenu:[{label:'About R&W Accountants Extractor',click:()=>dialog.showMessageBox(mainWindow,{type:'info',title:'About R&W Accountants Extractor',message:'R&W Accountants | Extractor',detail:'Local PDF extraction software. Files are processed on this computer.'})}]}]));
   mainWindow.webContents.on('will-navigate',(event,url)=>{if(url!=='fareextractor://app/index.html')event.preventDefault();});mainWindow.webContents.on('will-attach-webview',event=>event.preventDefault());mainWindow.on('closed',()=>{mainWindow=null;});mainWindow.once('ready-to-show',()=>{if(process.env.FARE_EXTRACTOR_TEST!=='1')mainWindow.show();});await mainWindow.loadURL('fareextractor://app/index.html');
+  if(sharedUpdatePendingPath&&process.env.FARE_EXTRACTOR_TEST!=='1'){
+    let updateAnnounced=false;
+    const checkForSharedUpdate=()=>{
+      if(updateAnnounced||!fsSync.existsSync(sharedUpdatePendingPath)||!mainWindow||mainWindow.isDestroyed())return;
+      updateAnnounced=true;
+      mainWindow.webContents.send('network-update-started');
+    };
+    checkForSharedUpdate();
+    const updateWatcher=setInterval(checkForSharedUpdate,500);
+    app.once('before-quit',()=>clearInterval(updateWatcher));
+  }
 }).catch(error=>{if(process.env.FARE_EXTRACTOR_TEST==='1')console.error(error);else dialog.showErrorBox('Unable to start Extractor',error.message);app.quit();});
 app.on('window-all-closed',()=>app.quit());
