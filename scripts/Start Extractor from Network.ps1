@@ -450,8 +450,8 @@ if (-not $hasSandboxReadAccess) {
 
 # Electron's built-in `electron` module is available to a packaged app, but not
 # when its loose source directory is passed as a development app. Install a
-# tiny packaged entry point beside the per-user runtime; it loads the selected
-# immutable app version from the share without copying that app onto this PC.
+# tiny packaged entry point beside the per-user runtime; it loads the current
+# shared app folder without copying the application onto this PC.
 $runtimeLoaderDirectory = Join-Path $runtimeTarget 'resources\app'
 $runtimeLoaderPath = Join-Path $runtimeLoaderDirectory 'ExtractorRuntimeLoader.cjs'
 $runtimePackagePath = Join-Path $runtimeLoaderDirectory 'package.json'
