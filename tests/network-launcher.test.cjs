@@ -24,6 +24,8 @@ test('malformed local launcher settings recover through a valid backup or networ
   const loader=fs.readFileSync(path.join(root,'scripts','ExtractorRuntimeLoader.cjs'),'utf8');
   const launcher=fs.readFileSync(powershellScript,'utf8');
   assert.match(loader,/settingsPaths = \[launcherConfigPath, `\$\{launcherConfigPath\}\.bak`\]/);
+  assert.match(loader,/Keep the loader able to recover on that first repair launch/);
+  assert.match(loader,/replace\(\/\^\\uFEFF\//);
   assert.match(loader,/extractor-network-root\.txt/);
   assert.match(loader,/lastLocalApplication/);
   assert.match(launcher,/Write-ExtractorAtomicTextFile/);
