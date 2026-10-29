@@ -48,7 +48,11 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
       if(!splashReady||!waitNoticeReceived||updateNoticeReceived)return;
       splash.webContents.executeJavaScript("document.getElementById('title').textContent='Update in progress';document.getElementById('copy').textContent='Open workspaces are moving to the update screen and will reopen automatically when the shared application is ready.'").catch(()=>{});
     };
-    splash.webContents.once('did-finish-load',()=>{splashReady=true;showWaitNotice();showUpdateNotice();});
+    const showResumeNotice=()=>{
+      if(!splashReady||process.env.FARE_EXTRACTOR_UPDATE_RESUME!=='1')return;
+      splash.webContents.executeJavaScript("document.getElementById('title').textContent='Update in progress';document.getElementById('copy').textContent='Your workspace is reconnecting to the shared application. It will reopen automatically when it is ready.'").catch(()=>{});
+    };
+    splash.webContents.once('did-finish-load',()=>{splashReady=true;showResumeNotice();showWaitNotice();showUpdateNotice();});
     const fail=message=>{
       if(finished)return;
       finished=true;
@@ -88,7 +92,9 @@ if(process.env.FARE_EXTRACTOR_SCHEME_REGISTERED!=='1')protocol.registerSchemesAs
 app.setName('R&W Accountants Extractor');
 const profileRoot=path.resolve(process.env.FARE_EXTRACTOR_PROFILE_ROOT||path.join(app.getPath('appData'),'Extractor','Profiles'));
 const workspaceArgument=process.argv.find(argument=>argument.startsWith('--workspace='));
-const requestedWorkspaceId=workspaceArgument?.slice('--workspace='.length)||'';
+const requestedWorkspaceId=workspaceArgument?.slice('--workspace='.length)||process.env.FARE_EXTRACTOR_WORKSPACE_ID||'';
+delete process.env.FARE_EXTRACTOR_WORKSPACE_ID;
+delete process.env.FARE_EXTRACTOR_UPDATE_RESUME;
 const sharedApplicationDirectory=process.env.FARE_EXTRACTOR_SHARED_APP||'';
 const sharedNetworkRoot=sharedApplicationDirectory?path.resolve(sharedApplicationDirectory,'..','..'):'';
 const sharedUpdatePendingPath=sharedNetworkRoot?path.join(sharedNetworkRoot,'.extractor-update.pending'):'';
@@ -127,7 +133,20 @@ ipcMain.handle('network-update-prepare',async(event,state)=>{
   await fs.writeFile(temporaryPath,serialized,{encoding:'utf8',flag:'wx'});
   await fs.rm(recoveryPath,{force:true});
   await fs.rename(temporaryPath,recoveryPath);
-  relaunchWorkspace(activeWorkspace?.id||'');
+  const networkLauncher=path.join(sharedNetworkRoot,'Extractor.exe');
+  if(!sharedNetworkRoot||!fsSync.existsSync(networkLauncher))throw new Error('The network launcher could not be found. Your saved workspace is safe; close Extractor and launch it again from the shared folder.');
+  await new Promise((resolve,reject)=>{
+    const child=spawn(networkLauncher,[],{
+      cwd:sharedNetworkRoot,
+      detached:true,
+      windowsHide:true,
+      stdio:'ignore',
+      env:{...process.env,FARE_EXTRACTOR_UPDATE_RESUME:'1',FARE_EXTRACTOR_WORKSPACE_ID:activeWorkspace?.id||''}
+    });
+    child.once('error',reject);
+    child.once('spawn',()=>{child.unref();resolve();});
+  });
+  app.exit(0);
   return {ok:true};
 });
 ipcMain.handle('network-update-take-state',async()=>{
