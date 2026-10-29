@@ -319,20 +319,25 @@
   function isSupportedUpload(file){return /\.pdf$/i.test(file?.name||'')||(mode==='bank'&&/\.csv$/i.test(file?.name||''));}
   async function readCsvFile(file){const bytes=new Uint8Array(await file.arrayBuffer());if(bytes[0]===0xff&&bytes[1]===0xfe)return new TextDecoder('utf-16le').decode(bytes.subarray(2));if(bytes[0]===0xfe&&bytes[1]===0xff)return new TextDecoder('utf-16be').decode(bytes.subarray(2));return new TextDecoder('utf-8').decode(bytes);}
   function bankBalanceRetryPlan(rows,report,pageCount){
-    const pages=new Set(),regions=new Map(),addPage=value=>{const page=Number(value);if(Number.isInteger(page)&&page>0&&(!pageCount||page<=pageCount))pages.add(page);};
+    const regions=new Map(),addRegion=(page,top,bottom)=>{if(!Number.isInteger(page)||page<1||(pageCount&&page>pageCount)||!Number.isFinite(top)||!Number.isFinite(bottom)||bottom<=top)return;const old=regions.get(page);regions.set(page,old?{page,top:Math.min(old.top,top),bottom:Math.max(old.bottom,bottom)}:{page,top,bottom});};
     for(const mismatch of report?.mismatches||[]){
-      for(const index of mismatch.rowIndexes||[])addPage(rows[index]?.page);
-      addPage(mismatch.page);
-      const previous=Number.isInteger(mismatch.previousIndex)?rows[mismatch.previousIndex]:null,current=Number.isInteger(mismatch.currentIndex)?rows[mismatch.currentIndex]:rows[mismatch.endIndex],previousPage=Number(previous?.page),currentPage=Number(current?.page),previousY=Number(previous?.balanceY??previous?.ocrY),currentY=Number(current?.balanceY??current?.ocrY);
-      addPage(previousPage);addPage(currentPage);
-      if(previousPage&&previousPage===currentPage&&Number.isFinite(previousY)&&Number.isFinite(currentY)&&Math.abs(previousY-currentY)>=18){const top=Math.max(0,Math.min(previousY,currentY)-36),bottom=Math.max(previousY,currentY)+36,old=regions.get(previousPage);regions.set(previousPage,old?{page:previousPage,top:Math.min(old.top,top),bottom:Math.max(old.bottom,bottom)}:{page:previousPage,top,bottom});}
+      const currentIndex=Number.isInteger(mismatch.currentIndex)?mismatch.currentIndex:mismatch.endIndex,current=Number.isInteger(currentIndex)?rows[currentIndex]:null;
+      let previous=Number.isInteger(mismatch.previousIndex)?rows[mismatch.previousIndex]:null;
+      if(!previous&&Number.isInteger(currentIndex)){for(let index=currentIndex-1;index>=0;index--){const candidate=rows[index],balance=String(candidate?.balance??'').trim(),y=Number(candidate?.balanceY??candidate?.ocrY);if(balance&&Number.isFinite(y)&&Number(candidate?.page)>0){previous=candidate;break;}}}
+      const previousPage=Number(previous?.page),currentPage=Number(current?.page),previousY=Number(previous?.balanceY??previous?.ocrY),currentY=Number(current?.balanceY??current?.ocrY);
+      if(!previousPage||!currentPage||!Number.isFinite(previousY)||!Number.isFinite(currentY)||previousPage>currentPage)continue;
+      if(previousPage===currentPage){const top=Math.max(0,Math.min(previousY,currentY)-36),bottom=Math.max(previousY,currentY)+36;addRegion(previousPage,top,Math.max(bottom,top+18));continue;}
+      for(let page=previousPage;page<=currentPage;page++){
+        const top=page===previousPage?Math.max(0,previousY-36):0,bottom=page===currentPage?currentY+36:Number.MAX_SAFE_INTEGER;
+        addRegion(page,top,Math.max(bottom,top+18));
+      }
     }
-    return {pages:[...pages].sort((a,b)=>a-b),regions:[...regions.values()].sort((a,b)=>a.page-b.page)};
+    const orderedRegions=[...regions.values()].sort((a,b)=>a.page-b.page);return {pages:orderedRegions.map(region=>region.page),regions:orderedRegions};
   }
   async function verifyBankBalanceRows(inputRows,file,fileIndex,totalFiles,sourcePath,password='',canRetry=true,context={}){
-    let checkedRows=Array.isArray(inputRows)?inputRows:[],report=P.inspectBankBalances(checkedRows),retried=false,attempted=false;const originalMismatchCount=report.mismatches.length;
-    if(originalMismatchCount&&canRetry&&native?.ocrPdf&&sourcePath){
-      const run=context.run||{},retryPlan=bankBalanceRetryPlan(checkedRows,report,Number(run.pageCount)||0),retryPages=retryPlan.pages,retryRegions=retryPlan.regions,pageCount=Number(run.pageCount)||Math.max(1,...retryPages,1),pagesToScan=retryPages.length?retryPages:undefined,regionsToScan=retryRegions.length?retryRegions:undefined,pageLabel=regionsToScan?.length?`${regionsToScan.length} balance interval${regionsToScan.length===1?'':'s'}`:pagesToScan?.length?`${pagesToScan.length} affected page${pagesToScan.length===1?'':'s'}`:`all ${pageCount} pages`;
+    let checkedRows=Array.isArray(inputRows)?inputRows:[],report=P.inspectBankBalances(checkedRows),retried=false,attempted=false;const originalMismatchCount=report.mismatches.length,run=context.run||{},retryPlan=bankBalanceRetryPlan(checkedRows,report,Number(run.pageCount)||0);
+    if(originalMismatchCount&&canRetry&&native?.ocrPdf&&sourcePath&&retryPlan.regions.length){
+      const retryPages=retryPlan.pages,retryRegions=retryPlan.regions,pageCount=Number(run.pageCount)||Math.max(1,...retryPages,1),pagesToScan=retryPages,regionsToScan=retryRegions,pageLabel=`${originalMismatchCount} balance interval${originalMismatchCount===1?'':'s'}`;
       setProgress(fileIndex+0.9,totalFiles,`Balance mismatch found. Rechecking ${file.name} at 5\u00D7 \u00B7 ${pageLabel}`,`${fileIndex} / ${totalFiles} files`);$('#extract').textContent='Rechecking bank balances\u2026';
       try{
         attempted=true;
@@ -343,7 +348,7 @@
         const retryByPage=new Map();for(const row of retryRows){const page=Number(row.page)||0;if(!retryByPage.has(page))retryByPage.set(page,[]);retryByPage.get(page).push(row);}const pageOrder=[...new Set(checkedRows.map(row=>Number(row.page)||0))];for(const page of targetPages)if(!pageOrder.includes(page))pageOrder.push(page);pageOrder.sort((a,b)=>a&&b?a-b:a? -1:b?1:0);const mergedRows=[];for(const page of pageOrder){if(!page){mergedRows.push(...checkedRows.filter(row=>!(Number(row.page)||0)));continue;}const replacement=retryByPage.get(page),original=checkedRows.filter(row=>Number(row.page)===page);mergedRows.push(...(replacement?.length?replacement:original));}const retryReport=P.inspectBankBalances(mergedRows),hasSameOrMoreCheckpoints=retryReport.checkpointCount>=report.checkpointCount,hasSameOrMoreSegments=retryReport.checkedSegments>=report.checkedSegments,improvesReconciliation=retryReport.mismatches.length<report.mismatches.length,keepsCoverage=mergedRows.length>=checkedRows.length&&hasSameOrMoreCheckpoints&&hasSameOrMoreSegments&&retryReport.mismatches.length<=report.mismatches.length;
         if(keepsCoverage||improvesReconciliation&&hasSameOrMoreCheckpoints){checkedRows=mergedRows;report=retryReport;retried=true;}
       }catch(error){notes.push(`${file.name}: the 5x balance verification failed (${error.message}). Any unreconciled date range will be rejected.`);}
-    }
+    }else if(originalMismatchCount&&canRetry&&native?.ocrPdf&&sourcePath&&!retryPlan.regions.length)notes.push(`${file.name}: balance OCR retry skipped because it could not locate both balance boundaries. No pages outside the mismatched interval were rescanned; unreconciled transaction rows are marked REJECTED.`);
     if(report.mismatches.length){P.markBankBalanceMismatches(checkedRows,report);notes.push(`${file.name}: ${report.mismatches.length} running-balance interval${report.mismatches.length===1?'':'s'} still did not reconcile${attempted?' after the 5x OCR recheck':''}. The affected transaction date range${report.mismatches.length===1?' is':'s are'} marked REJECTED and excluded from the workbook by default.`);}
     else if(originalMismatchCount&&retried)notes.push(`${file.name}: the 5x OCR recheck resolved the running-balance mismatch; the re-read transaction rows are being used.`);
     return checkedRows;
