@@ -98,8 +98,11 @@ function relaunchWorkspace(workspaceId=''){
 }
 ipcMain.handle('workspace-list',()=>readWorkspaceProfilesSync(profileRoot).map(({id,username,createdAt})=>({id,username,createdAt})));
 ipcMain.handle('app-build-info',()=>{
-  try{return {version:app.getVersion(),buildId:String(JSON.parse(fsSync.readFileSync(path.join(__dirname,'build-info.json'),'utf8')).buildId||'')}}
-  catch{return {version:app.getVersion(),buildId:''};}
+  const appDirectory=process.env.FARE_EXTRACTOR_SHARED_APP||__dirname;
+  let version=app.getVersion(),buildId='',commit='';
+  try{version=String(JSON.parse(fsSync.readFileSync(path.join(appDirectory,'package.json'),'utf8')).version||version);}catch{}
+  try{const buildInfo=JSON.parse(fsSync.readFileSync(path.join(appDirectory,'build-info.json'),'utf8'));buildId=String(buildInfo.buildId||'');commit=String(buildInfo.commit||'');}catch{}
+  return {version,buildId,commit};
 });
 ipcMain.handle('workspace-current',()=>activeWorkspace?{id:activeWorkspace.id,username:activeWorkspace.username}:null);
 ipcMain.handle('workspace-create',async(_event,value)=>{const profile=await createWorkspace(profileRoot,value);return {id:profile.id,username:profile.username};});
