@@ -873,6 +873,87 @@
     const text=String(value||'');
     return /\bPETERBOROUGH\s+BAZAAR\s+LIMITED\b/i.test(text)||/pbazaar\.co\.uk/i.test(text)||/104\s*2318\s*66/.test(text);
   }
+  function isParkersText(value){
+    const text=String(value||'');
+    return /\bPARKERS\b/i.test(text)||/Parker\s+Motor\s+Services\s+Ltd/i.test(text)||/thepartspeople\.co\.uk/i.test(text);
+  }
+  function parkersInvoicePage(pageLines,text=''){
+    const content=String(text||pageLines.map(line=>String(line.text||'')).join(' '));
+    return isParkersText(content)&&/\bINVOICE\b/i.test(content)&&/\bTax\s+Point\b/i.test(content)&&/\bDocument\s+No\.?\b/i.test(content)&&
+      pageLines.some(line=>/^\s*GOODS\s*$/i.test(String(line.text||'')))&&pageLines.some(line=>/^\s*VAT\s*$/i.test(String(line.text||'')))&&pageLines.some(line=>/^\s*TOTAL\s*$/i.test(String(line.text||'')));
+  }
+  function parkersAnchorValue(pageLines,labelPattern,valuePattern,{maxDistance=46,minXGap=6}={}){
+    const lines=Array.isArray(pageLines)?pageLines:[],labels=lines.filter(line=>labelPattern.test(String(line.text||'').trim()));
+    for(const label of labels){
+      const text=String(label.text||'').trim(),inline=text.replace(labelPattern,'').trim();
+      const inlineMatch=inline.match(valuePattern);
+      if(inlineMatch)return {raw:inlineMatch[0],line:label};
+      const right=(Number(label.x)||0)+(Number(label.width)||0),tolerance=Math.max(maxDistance,(Number(label.height)||20)*1.65);
+      const candidates=lines.filter(line=>Number(line.page)===Number(label.page)&&Number(line.x)>=right+minXGap&&Math.abs((Number(line.y)||0)-(Number(label.y)||0))<=tolerance)
+        .map(line=>({line,match:String(line.text||'').match(valuePattern)})).filter(item=>item.match)
+        .sort((a,b)=>Math.abs((Number(a.line.y)||0)-(Number(label.y)||0))-Math.abs((Number(b.line.y)||0)-(Number(label.y)||0))||Number(a.line.x)-Number(b.line.x));
+      if(candidates.length)return {raw:candidates[0].match[0],line:candidates[0].line};
+    }
+    return null;
+  }
+  function parkersDocumentNumber(pageLines){
+    const found=parkersAnchorValue(pageLines,/^\s*Document\s+No\.?\s*[:#]?\s*/i,/[A-Z0-9][A-Z0-9-]{4,19}/i);
+    const raw=String(found?.raw||'').replace(/\s+/g,'').replace(/[^A-Z0-9-]/gi,'');
+    return /^[-A-Z0-9]{5,20}$/i.test(raw)&&((raw.match(/\d/g)||[]).length>=5)?raw:'';
+  }
+  function parkersDate(pageLines){
+    const found=parkersAnchorValue(pageLines,/^\s*Tax\s+Point\s*[:#]?\s*/i,/\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{2,4}/);
+    return parseDate(String(found?.raw||'').replace(/\s+/g,''));
+  }
+  function parkersPrintedMoney(value){
+    const raw=String(value||'').trim().replace(/[\u00A3$\u20AC]/g,'').replace(/\s+/g,'');
+    if(!/^[+-]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)[.,]\d{2}$/.test(raw))return null;
+    return invoiceAmount(raw);
+  }
+  function parkersSummaryAmount(pageLines,kind){
+    const lines=Array.isArray(pageLines)?pageLines:[],totalLabel=lines.filter(line=>/^\s*TOTAL\s*$/i.test(String(line.text||''))).sort((a,b)=>(Number(b.y)||0)-(Number(a.y)||0))[0];
+    if(!totalLabel)return null;
+    const goodsLabel=lines.filter(line=>/^\s*GOODS\s*$/i.test(String(line.text||''))).sort((a,b)=>Math.abs((Number(a.x)||0)-(Number(totalLabel.x)||0))-Math.abs((Number(b.x)||0)-(Number(totalLabel.x)||0)))[0];
+    const vatLabels=lines.filter(line=>/^\s*VAT\s*$/i.test(String(line.text||''))).sort((a,b)=>Math.abs((Number(a.x)||0)-(Number(totalLabel.x)||0))-Math.abs((Number(b.x)||0)-(Number(totalLabel.x)||0)));
+    const vatLabel=vatLabels.find(line=>Math.abs((Number(line.x)||0)-(Number(totalLabel.x)||0))<=Math.max(90,(Number(totalLabel.width)||0)*1.4)&&(!goodsLabel||Number(line.y)>Number(goodsLabel.y)&&Number(line.y)<Number(totalLabel.y)));
+    const anchors={goods:goodsLabel,vat:vatLabel,total:totalLabel},anchor=anchors[kind];
+    if(!anchor&&kind!=='vat')return null;
+    if(anchor){
+      const inline=String(anchor.text||'').replace(/^\s*(?:GOODS|VAT|TOTAL)\s*[:#]?\s*/i,'').trim(),inlineValue=parkersPrintedMoney(inline);
+      if(inlineValue!==null)return inlineValue;
+      const y=Number(anchor.y)||0,right=(Number(anchor.x)||0)+(Number(anchor.width)||0),tolerance=Math.max(24,(Number(anchor.height)||20)*1.45);
+      const candidates=lines.filter(line=>Number(line.page)===Number(anchor.page)&&Number(line.x)>=right+12&&Math.abs((Number(line.y)||0)-y)<=tolerance)
+        .map(line=>({line,value:parkersPrintedMoney(line.text)})).filter(item=>item.value!==null)
+        .sort((a,b)=>Math.abs((Number(a.line.y)||0)-y)-Math.abs((Number(b.line.y)||0)-y)||Number(a.line.x)-Number(b.line.x));
+      if(candidates.length)return candidates[0].value;
+    }
+    if(kind==='vat'){
+      // Windows OCR occasionally drops the VAT heading from the rightmost
+      // TOTAL table while retaining the invoice's adjacent Goods/Vat summary.
+      // Use that printed VAT cell only when both labels share a row and their
+      // printed amounts align on the same row; never derive VAT from a rate.
+      const leftGoods=lines.filter(line=>/^\s*Goods\s*$/i.test(String(line.text||''))&&Number(line.x)<Number(totalLabel.x)-20),leftVat=lines.filter(line=>/^\s*Vat\s*$/i.test(String(line.text||''))&&Number(line.x)<Number(totalLabel.x)-20);
+      for(const goods of leftGoods)for(const vat of leftVat){
+        const labelTolerance=Math.max(16,Math.max(Number(goods.height)||20,Number(vat.height)||20)*0.8);
+        if(Number(vat.x)<=Number(goods.x)||Math.abs((Number(vat.y)||0)-(Number(goods.y)||0))>labelTolerance)continue;
+        const paired=(label)=>lines.filter(line=>Number(line.page)===Number(label.page)&&Number(line.x)>Number(label.x)+8&&Number(line.x)<Number(totalLabel.x)-12&&(Number(line.y)||0)>=(Number(label.y)||0)&&((Number(line.y)||0)-(Number(label.y)||0))<=Math.max(90,(Number(label.height)||20)*4.2)).map(line=>({line,value:parkersPrintedMoney(line.text)})).filter(item=>item.value!==null);
+        const goodsValues=paired(goods),vatValues=paired(vat),matches=[];
+        for(const goodsValue of goodsValues)for(const vatValue of vatValues){
+          const rowTolerance=Math.max(14,((Number(goodsValue.line.height)||20)+(Number(vatValue.line.height)||20))*0.65),rowGap=Math.abs((Number(goodsValue.line.y)||0)-(Number(vatValue.line.y)||0));
+          if(rowGap<=rowTolerance)matches.push({value:vatValue.value,score:rowGap+Math.abs((Number(goodsValue.line.y)||0)-(Number(goods.y)||0))/4+Math.abs((Number(vatValue.line.y)||0)-(Number(vat.y)||0))/4});
+        }
+        if(matches.length)return matches.sort((a,b)=>a.score-b.score)[0].value;
+      }
+    }
+    return null;
+  }
+  function parseParkersInvoice(flat,source='',ocrLines){
+    const allLines=Array.isArray(ocrLines)?ocrLines:[],page=Number(allLines[0]?.page)||1,lines=allLines.filter(line=>(Number(line.page)||1)===page),text=String(flat||lines.map(line=>String(line.text||'')).join(' '));
+    const fullNumber=parkersDocumentNumber(lines),number=fullNumber?normalizeInvoiceNumber(fullNumber):'',date=parkersDate(lines),vat=parkersSummaryAmount(lines,'vat'),total=parkersSummaryAmount(lines,'total');
+    const credit=lines.some(line=>/^\s*CREDIT(?:\s+NOTE)?\s*$/i.test(String(line.text||'')))||Number(total)<0,documentType=credit?'CREDIT NOTE':'INVOICE',complete=Boolean(number&&date&&vat!==null&&total!==null);
+    const rejectedReason=complete?'':!number?'Parkers Document No. could not be confirmed from the invoice.':!date?'Parkers Tax Point date could not be confirmed; a 5x OCR retry is required.':total===null?'Printed Parkers TOTAL could not be confirmed from the invoice summary.':'Printed Parkers VAT amount could not be confirmed from the invoice summary.';
+    return {invoiceNumber:number,originalInvoiceNumber:fullNumber,date,supplier:'Parker Motor Services Ltd',subtotal:'',vat:vat??'',total:total??'',documentType,isInvoiceDocument:parkersInvoicePage(lines,text),currency:'GBP',source,accepted:complete,rejected:!complete,rejectedReason,confidence:complete?'ACCEPTED':'REJECTED',retryOcr:!complete,review:false,layoutId:'parkers-tax-point-document-summary'};
+  }
   function isShahidHalalText(value){
     const text=String(value||'');
     return /\bSHAH[I]D\s+HALAL\s+POULTRY\b/i.test(text)||/\bSHAHD\s+HALAL\s+POULTRY\b/i.test(text)||/\bSAAHID\s+HALAL\s+POULTRY\b/i.test(text)||/07973\s*658\s*417/.test(text)||/159\s*5722\s*76/.test(text);
@@ -2101,6 +2182,7 @@
     {id:'marion-trading',name:'Marion Trading',kind:'supplier',detect:isMarionTradingText,parse:(flat,source,lines)=>parseMarionInvoice(flat,source,lines)},
     {id:'monolith',name:'Monolith',kind:'supplier',detect:isMonolithText,parse:(flat,source,lines)=>parseMonolithInvoice(flat,source,lines)},
     {id:'peterborough-bazaar',name:'Peterborough Bazaar',kind:'supplier',detect:isPeterboroughBazaarText,parse:(flat,source,lines)=>parsePeterboroughBazaarInvoice(flat,source,lines)},
+    {id:'parkers',name:'Parker Motor Services Ltd',kind:'supplier',status:'Review',detect:isParkersText,parse:(flat,source,lines)=>parseParkersInvoice(flat,source,lines)},
     {id:'deens-produce',name:'Deens Produce',kind:'supplier',detect:isDeensProduceText,parse:(flat,source,lines)=>parseDeensProduceInvoice(flat,source,lines)},
     {id:'liberty-frozen-foods',name:'Liberty Frozen Foods',kind:'supplier',detect:isLibertyFrozenFoodsText,parse:(flat,source,lines)=>parseLibertyFrozenFoodsInvoice(flat,source,lines)},
     {id:'isaac-wholesale',name:'Isaac Wholesale Ltd',kind:'supplier',detect:isIsaacWholesaleText,parse:(flat,source,lines)=>parseIsaacWholesaleInvoice(flat,source,lines)},
@@ -2159,6 +2241,15 @@
     if(!lines.length){if(/\bE\s*\.?\s*P\s*\.?\s*A\s*\.?\s*FOODS?\s+LTD\b|\bEPA\s+FOODS\b/i.test(String(text||'')))return [];if(isEagleFoodsText(text)&&isEagleNonInvoicePage(text)&&!eagleInvoicePage([],text))return [];if(isIsaacWholesaleText(text)&&isaacSummaryPage([{text:String(text||'')}])&&!isaacInvoicePageText(text))return [];const row=parseInvoiceRobust(text,source,undefined,options);row.profileId=identifyInvoiceProfile(text)?.id||'generic';return row.profileId==='isaac-wholesale'&&!row.isInvoiceDocument?[]:disambiguateGeneratedShahidReferences([row]);}
     const pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b);
     const pageLines=new Map(pages.map(page=>[page,lines.filter(line=>(Number(line.page)||1)===page).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0))]));
+    const parkersPages=pages.filter(page=>isParkersText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
+    if(parkersPages.length){
+      const parkersRows=parkersPages.flatMap(page=>{
+        const items=pageLines.get(page)||[],pageText=items.map(line=>String(line.text||'')).join(' ');
+        if(!parkersInvoicePage(items,pageText))return [];
+        const row=parseInvoiceRobust(pageText,source,items,options);row.page=page;row.sourcePages=[page];row.profileId='parkers';return [row];
+      }),otherLines=lines.filter(line=>!parkersPages.includes(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
+      return [...otherRows,...parkersRows].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
+    }
     const isaacPages=pages.filter(page=>isIsaacWholesaleText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
     if(isaacPages.length){
       const isaacRows=parseIsaacWholesaleBatch(new Map(isaacPages.map(page=>[page,pageLines.get(page)])),source),otherLines=lines.filter(line=>!isaacPages.includes(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];

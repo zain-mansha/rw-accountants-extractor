@@ -1,16 +1,22 @@
 param(
   [string]$RuntimeRoot = (Join-Path $env:LOCALAPPDATA 'Programs\ExtractorRuntime'),
   [string]$ProfileRoot = (Join-Path $env:LOCALAPPDATA 'Extractor\Profiles'),
+  [string]$NetworkSource = '',
+  [string]$LocalBuildId = '',
+  [switch]$PrepareLocalAppOnly,
   [switch]$NoLaunch
 )
 
 $ErrorActionPreference = 'Stop'
-$source = [IO.Path]::GetFullPath($PSScriptRoot)
+$sourceRoot = if (-not [string]::IsNullOrWhiteSpace($NetworkSource)) { $NetworkSource } elseif (-not [string]::IsNullOrWhiteSpace($env:FARE_EXTRACTOR_NETWORK_ROOT)) { $env:FARE_EXTRACTOR_NETWORK_ROOT } else { $PSScriptRoot }
+$source = [IO.Path]::GetFullPath($sourceRoot)
 $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
 if ([string]::IsNullOrWhiteSpace($localAppData)) {
   throw 'Windows did not provide a local application-data folder for this account.'
 }
 $RuntimeRoot = [IO.Path]::GetFullPath($RuntimeRoot)
+$localExtractorRoot = [IO.Path]::GetFullPath((Join-Path $localAppData 'Programs\Extractor'))
+$localApplicationsRoot = Join-Path $localExtractorRoot 'Applications'
 $runtimeVersionFile = Join-Path $source 'version'
 if (-not (Test-Path -LiteralPath $runtimeVersionFile -PathType Leaf)) {
   throw 'The shared Extractor package is missing Electron runtime version information.'
@@ -53,6 +59,66 @@ function Get-CurrentExtractorApp {
   $packagedApp = Join-Path $source 'resources\app'
   if (Test-ExtractorAppReady $packagedApp) { return $packagedApp }
   return $null
+}
+
+function New-LocalExtractorAppCopy([string]$ApplicationDirectory) {
+  $buildId = ''
+  try {
+    $buildInfo = Get-Content -LiteralPath (Join-Path $ApplicationDirectory 'build-info.json') -Raw | ConvertFrom-Json
+    $buildId = [string]$buildInfo.buildId
+  } catch { }
+  if ($buildId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') {
+    $buildId = ''
+    try { $buildId = (Get-Content -LiteralPath (Join-Path $source 'network-build.txt') -Raw).Trim() } catch { }
+  }
+  if ($buildId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') {
+    throw 'The shared Extractor build does not have a safe version identifier for its local copy.'
+  }
+
+  New-Item -ItemType Directory -Path $localApplicationsRoot -Force | Out-Null
+  $localRootFull = [IO.Path]::GetFullPath($localApplicationsRoot).TrimEnd('\') + '\'
+  $target = [IO.Path]::GetFullPath((Join-Path $localApplicationsRoot $buildId))
+  if (-not $target.StartsWith($localRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The local Extractor application path is outside its selected folder.'
+  }
+  if ((Test-ExtractorAppReady $target)) { return $target }
+
+  $lockPath = Join-Path $localApplicationsRoot '.install.lock'
+  $lock = $null
+  $deadline = [DateTime]::UtcNow.AddMinutes(5)
+  while (-not $lock) {
+    try { $lock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+    catch [IO.IOException] {
+      if (Test-ExtractorAppReady $target) { return $target }
+      if ([DateTime]::UtcNow -ge $deadline) { throw "Another Extractor launch could not finish preparing this PC's local application copy. Try launching again." }
+      Start-Sleep -Milliseconds 250
+    }
+  }
+  $stage = Join-Path $localApplicationsRoot ".$buildId.staging-$([guid]::NewGuid().ToString('N'))"
+  $backup = Join-Path $localApplicationsRoot ".$buildId.previous-$([guid]::NewGuid().ToString('N'))"
+  try {
+    if (Test-ExtractorAppReady $target) { return $target }
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    & "$env:SystemRoot\System32\robocopy.exe" $ApplicationDirectory $stage /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+    $copyResult = $LASTEXITCODE
+    if ($copyResult -ge 8) { throw "Windows could not copy the shared Extractor application to this PC (Robocopy code $copyResult). Check network access and free disk space." }
+    if (-not (Test-ExtractorAppReady $stage)) { throw 'The local Extractor copy failed its completeness check; the shared application has not been changed.' }
+    if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $backup }
+    try {
+      Move-Item -LiteralPath $stage -Destination $target
+      if (-not (Test-ExtractorAppReady $target)) { throw 'The local Extractor copy failed its final completeness check.' }
+      if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
+    } catch {
+      if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue }
+      if (Test-Path -LiteralPath $backup) { Move-Item -LiteralPath $backup -Destination $target -Force }
+      throw
+    }
+    return $target
+  } finally {
+    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($lock) { $lock.Dispose() }
+  }
 }
 
 function Get-ExtractorCommitFromFeed([string]$FeedContent) {
@@ -207,6 +273,19 @@ function Get-InstalledExtractorCommit {
   return ''
 }
 
+function Get-InstalledExtractorBuildId {
+  try {
+    $info = Get-Content -LiteralPath (Join-Path (Join-Path $source 'resources\app') 'build-info.json') -Raw | ConvertFrom-Json
+    $buildId = [string]$info.buildId
+    if ($buildId -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') { return $buildId }
+  } catch { }
+  try {
+    $buildId = (Get-Content -LiteralPath (Join-Path $source 'network-build.txt') -Raw).Trim()
+    if ($buildId -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') { return $buildId }
+  } catch { }
+  return ''
+}
+
 function Get-ActiveExtractorSessions {
   if (-not (Test-Path -LiteralPath $sessionDirectory -PathType Container)) { return @() }
   $active = @()
@@ -323,10 +402,18 @@ function New-SharedExtractorBuild([string]$CommitSha) {
 Write-Progress -Activity 'Checking Extractor updates' -Status 'Checking the shared network application against GitHub...' -PercentComplete 10
 $applicationDirectory = Get-CurrentExtractorApp
 $commitSha = ''
+$sharedBuildId = Get-InstalledExtractorBuildId
+$localBuildId = if ($LocalBuildId -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') { $LocalBuildId } else { '' }
+$sharedChangedSinceLocal = $localBuildId -and $sharedBuildId -and $localBuildId -ne $sharedBuildId
 try {
-  $commitSha = Get-LatestExtractorCommit
   if (-not $applicationDirectory) { throw 'The shared application folder is incomplete.' }
-  if ((Get-InstalledExtractorCommit) -ne $commitSha) {
+  if ($sharedChangedSinceLocal) {
+    $commitSha = Get-InstalledExtractorCommit
+    Write-Progress -Activity 'Checking Extractor updates' -Status 'The shared build changed since this PC last launched. Syncing it locally; GitHub will be checked next launch.' -PercentComplete 35
+  } else {
+    $commitSha = Get-LatestExtractorCommit
+  }
+  if ($commitSha -and (Get-InstalledExtractorCommit) -ne $commitSha) {
     $updateLockPath = Join-Path $source '.extractor-update.lock'
     $updateLock = $null
     $updateDeadline = [DateTime]::UtcNow.AddMinutes(60)
@@ -351,7 +438,7 @@ try {
       if ($updateLock) { $updateLock.Dispose() }
     }
   }
-  if ((Get-InstalledExtractorCommit) -eq $commitSha -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) {
+  if ($commitSha -and (Get-InstalledExtractorCommit) -eq $commitSha -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) {
     $recoveryLockPath = Join-Path $source '.extractor-update.lock'
     $recoveryLock = $null
     $recoveryDeadline = [DateTime]::UtcNow.AddMinutes(60)
@@ -373,7 +460,6 @@ try {
   $applicationDirectory = Get-CurrentExtractorApp
   Write-Progress -Activity 'Checking Extractor updates' -Status 'Shared application files are current.' -PercentComplete 70
 } catch {
-  if ($_.Exception.Message -match 'other users still have Extractor open') { throw "The update could not be applied because another user still has Extractor open. Close all Extractor windows and launch again. $($_.Exception.Message)" }
   if (-not $applicationDirectory) { throw "Extractor could not check GitHub or find a usable application on the network. $($_.Exception.Message)" }
   Write-Warning "GitHub could not be reached, so Extractor will use the last complete version on the network. $($_.Exception.Message)"
 }
@@ -381,8 +467,15 @@ if (-not $applicationDirectory -or -not (Test-ExtractorAppReady $applicationDire
   throw 'No complete Extractor application is available on the shared network folder.'
 }
 $updateWillReset = $commitSha -match '^[a-f0-9]{40}$' -and $initialBuildSha -ne $commitSha
-if ($updateWillReset -and -not $NoLaunch) {
+if ($updateWillReset -and -not $NoLaunch -and -not $PrepareLocalAppOnly) {
   Write-Output 'EXTRACTOR_UPDATE_RESET_NOTICE: An update is ready. Extractor will restart automatically to apply it.'
+  $restartPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    $restartPowerShell = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+  }
+  $restartArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -RuntimeRoot "' + $RuntimeRoot + '" -ProfileRoot "' + $ProfileRoot + '"'
+  Start-Process -FilePath $restartPowerShell -ArgumentList $restartArguments -WorkingDirectory $source -NoNewWindow
+  exit 0
 }
 $runtimeLoaderSource = Join-Path $source 'ExtractorRuntimeLoader.cjs'
 $runtimePackageSource = Join-Path $source 'ExtractorRuntimePackage.json'
@@ -461,8 +554,9 @@ if (-not $hasSandboxReadAccess) {
 
 # Electron's built-in `electron` module is available to a packaged app, but not
 # when its loose source directory is passed as a development app. Install a
-# tiny packaged entry point beside the per-user runtime; it loads the current
-# shared app folder without copying the application onto this PC.
+# tiny packaged entry point beside the per-user runtime. The bootstrap checks
+# GitHub and the shared folder, copies the selected build into this PC's local
+# application directory, then loads that local copy.
 $runtimeLoaderDirectory = Join-Path $runtimeTarget 'resources\app'
 $runtimeLoaderPath = Join-Path $runtimeLoaderDirectory 'ExtractorRuntimeLoader.cjs'
 $runtimePackagePath = Join-Path $runtimeLoaderDirectory 'package.json'
@@ -511,6 +605,31 @@ foreach ($runtimeBootstrapFile in @('network-build.txt','Start Extractor from Ne
   if (Test-Path -LiteralPath $runtimeBootstrapPath -PathType Leaf) { Remove-Item -LiteralPath $runtimeBootstrapPath -Force }
 }
 
+$localApplicationDirectory = ''
+if (-not $NoLaunch -or $PrepareLocalAppOnly) {
+  $localApplicationDirectory = New-LocalExtractorAppCopy $applicationDirectory
+  $launcherConfigPath = Join-Path $runtimeTarget 'extractor-launcher.json'
+  $launcherConfig = @{
+    networkRoot = $source
+    sharedApplication = [IO.Path]::GetFullPath($applicationDirectory)
+    applicationsRoot = $localApplicationsRoot
+    lastLocalApplication = [IO.Path]::GetFullPath($localApplicationDirectory)
+    profileRoot = [IO.Path]::GetFullPath($ProfileRoot)
+    runtimeRoot = $RuntimeRoot
+  } | ConvertTo-Json -Depth 4
+  $launcherConfigTemp = "$launcherConfigPath.$([guid]::NewGuid().ToString('N')).tmp"
+  [IO.File]::WriteAllText($launcherConfigTemp,$launcherConfig,[Text.Encoding]::UTF8)
+  Move-Item -LiteralPath $launcherConfigTemp -Destination $launcherConfigPath -Force
+}
+
+if ($PrepareLocalAppOnly) {
+  [void](Ensure-ExtractorEnglishOcr $applicationDirectory)
+  Write-Progress -Activity 'Checking Extractor updates' -Status 'The local application copy is ready.' -PercentComplete 100 -Completed
+  $encodedLocalPath = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($localApplicationDirectory)))
+  Write-Output "EXTRACTOR_LOCAL_APP_PATH:$encodedLocalPath"
+  exit 0
+}
+
 if (-not $NoLaunch) {
   [void](Ensure-ExtractorEnglishOcr $applicationDirectory)
   New-Item -ItemType Directory -Path $ProfileRoot -Force | Out-Null
@@ -522,10 +641,10 @@ if (-not $NoLaunch) {
       $shortcutPath = Join-Path $desktop 'R&W Accountants Extractor.lnk'
       $shell = New-Object -ComObject WScript.Shell
       $shortcut = $shell.CreateShortcut($shortcutPath)
-      $shortcut.TargetPath = Join-Path $source 'Extractor.exe'
-      $shortcut.WorkingDirectory = $source
-      $shortcut.IconLocation = "$(Join-Path $source 'Extractor.exe'),0"
-      $shortcut.Description = 'Launch the latest R&W Accountants Extractor directly from the shared network folder'
+      $shortcut.TargetPath = $runtimeExecutable
+      $shortcut.WorkingDirectory = $runtimeTarget
+      $shortcut.IconLocation = "$runtimeExecutable,0"
+      $shortcut.Description = 'Launch the local R&W Accountants Extractor; it checks for shared-network updates first'
       $shortcut.Save()
       [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
       Write-Output "Desktop shortcut: $shortcutPath"
@@ -535,8 +654,14 @@ if (-not $NoLaunch) {
   }
   Write-Progress -Activity 'Checking Extractor updates' -Status 'Starting the latest shared application...' -PercentComplete 100 -Completed
   $previousSharedApp = $env:FARE_EXTRACTOR_SHARED_APP
+  $previousLocalApp = $env:FARE_EXTRACTOR_LOCAL_APP
+  $previousProfileRoot = $env:FARE_EXTRACTOR_PROFILE_ROOT
+  $previousNetworkRoot = $env:FARE_EXTRACTOR_NETWORK_ROOT
   $previousRunAsNode = $env:ELECTRON_RUN_AS_NODE
   $env:FARE_EXTRACTOR_SHARED_APP = [IO.Path]::GetFullPath($applicationDirectory)
+  $env:FARE_EXTRACTOR_LOCAL_APP = [IO.Path]::GetFullPath($localApplicationDirectory)
+  $env:FARE_EXTRACTOR_PROFILE_ROOT = [IO.Path]::GetFullPath($ProfileRoot)
+  $env:FARE_EXTRACTOR_NETWORK_ROOT = [IO.Path]::GetFullPath($source)
   Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
   try {
     $extractorProcess = Start-Process -FilePath $runtimeExecutable -WorkingDirectory $runtimeTarget -PassThru
@@ -548,6 +673,12 @@ if (-not $NoLaunch) {
   } finally {
     if ($null -eq $previousSharedApp) { Remove-Item Env:FARE_EXTRACTOR_SHARED_APP -ErrorAction SilentlyContinue }
     else { $env:FARE_EXTRACTOR_SHARED_APP = $previousSharedApp }
+    if ($null -eq $previousLocalApp) { Remove-Item Env:FARE_EXTRACTOR_LOCAL_APP -ErrorAction SilentlyContinue }
+    else { $env:FARE_EXTRACTOR_LOCAL_APP = $previousLocalApp }
+    if ($null -eq $previousProfileRoot) { Remove-Item Env:FARE_EXTRACTOR_PROFILE_ROOT -ErrorAction SilentlyContinue }
+    else { $env:FARE_EXTRACTOR_PROFILE_ROOT = $previousProfileRoot }
+    if ($null -eq $previousNetworkRoot) { Remove-Item Env:FARE_EXTRACTOR_NETWORK_ROOT -ErrorAction SilentlyContinue }
+    else { $env:FARE_EXTRACTOR_NETWORK_ROOT = $previousNetworkRoot }
     if ($null -eq $previousRunAsNode) { Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
     else { $env:ELECTRON_RUN_AS_NODE = $previousRunAsNode }
   }
@@ -555,5 +686,6 @@ if (-not $NoLaunch) {
   Write-Progress -Activity 'Checking Extractor updates' -Status 'Shared application files are ready.' -PercentComplete 100 -Completed
   Write-Output "Shared application: $applicationDirectory"
   Write-Output "Electron runtime prepared: $runtimeTarget"
+  if ($localApplicationDirectory) { Write-Output "Local application copy: $localApplicationDirectory" }
   if ($commitSha) { Write-Output "GitHub source commit: $commitSha" }
 }

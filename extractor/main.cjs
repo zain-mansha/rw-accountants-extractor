@@ -10,9 +10,9 @@ let publishNetworkBootstrap=()=>({updated:false});
 try{publishNetworkBootstrap=require('./network-bootstrap.cjs').publishNetworkBootstrap;}
 catch(error){if(error?.code!=='MODULE_NOT_FOUND'||!String(error?.message||'').startsWith("Cannot find module './network-bootstrap.cjs'"))throw error;}
 
-// The executable in the shared network package is a click-to-launch bootstrap.
-// It refreshes the shared application files from GitHub, then runs that shared
-// application with a per-user Electron runtime and workspace data.
+// The executable in the shared network package is an installer/update bootstrap.
+// It refreshes the shared source, then prepares and launches a per-user local app
+// copy with isolated workspace data.
 const networkPackageDirectory=path.dirname(process.execPath);
 const networkBuildFile=path.join(networkPackageDirectory,'network-build.txt');
 const bootstrapRefresh=publishNetworkBootstrap({
@@ -97,7 +97,6 @@ delete process.env.FARE_EXTRACTOR_WORKSPACE_ID;
 delete process.env.FARE_EXTRACTOR_UPDATE_RESUME;
 const sharedApplicationDirectory=process.env.FARE_EXTRACTOR_SHARED_APP||'';
 const sharedNetworkRoot=sharedApplicationDirectory?path.resolve(sharedApplicationDirectory,'..','..'):'';
-const sharedUpdatePendingPath=sharedNetworkRoot?path.join(sharedNetworkRoot,'.extractor-update.pending'):'';
 const workspaceProfiles=readWorkspaceProfilesSync(profileRoot);
 const activeWorkspace=workspaceProfiles.find(profile=>profile.id===requestedWorkspaceId)||null;
 const dataDirectory=activeWorkspace?workspaceDirectory(profileRoot,activeWorkspace.id):path.join(profileRoot,'_login');
@@ -112,7 +111,7 @@ function relaunchWorkspace(workspaceId=''){
 }
 ipcMain.handle('workspace-list',()=>readWorkspaceProfilesSync(profileRoot).map(({id,username,createdAt})=>({id,username,createdAt})));
 ipcMain.handle('app-build-info',()=>{
-  const appDirectory=process.env.FARE_EXTRACTOR_SHARED_APP||__dirname;
+  const appDirectory=process.env.FARE_EXTRACTOR_LOCAL_APP||process.env.FARE_EXTRACTOR_SHARED_APP||__dirname;
   let version=app.getVersion(),buildId='',commit='';
   try{version=String(JSON.parse(fsSync.readFileSync(path.join(appDirectory,'package.json'),'utf8')).version||version);}catch{}
   try{const buildInfo=JSON.parse(fsSync.readFileSync(path.join(appDirectory,'build-info.json'),'utf8'));buildId=String(buildInfo.buildId||'');commit=String(buildInfo.commit||'');}catch{}
@@ -269,16 +268,5 @@ app.whenReady().then(async()=>{
 mainWindow=new BrowserWindow({width:1440,height:920,minWidth:1040,minHeight:700,title:activeWorkspace?`R&W Accountants | Extractor · ${activeWorkspace.username}`:'R&W Accountants | Extractor',backgroundColor:'#f4f7f6',show:false,autoHideMenuBar:true,webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,spellcheck:false,preload:path.join(root,'preload.cjs')}});
   Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'File',submenu:[{role:'quit'}]},{label:'View',submenu:[{role:'resetZoom'},{role:'zoomIn'},{role:'zoomOut'},{role:'togglefullscreen'}]},{label:'Help',submenu:[{label:'About R&W Accountants Extractor',click:()=>dialog.showMessageBox(mainWindow,{type:'info',title:'About R&W Accountants Extractor',message:'R&W Accountants | Extractor',detail:'Local PDF extraction software. Files are processed on this computer.'})}]}]));
   mainWindow.webContents.on('will-navigate',(event,url)=>{if(url!=='fareextractor://app/index.html')event.preventDefault();});mainWindow.webContents.on('will-attach-webview',event=>event.preventDefault());mainWindow.on('closed',()=>{mainWindow=null;});mainWindow.once('ready-to-show',()=>{if(process.env.FARE_EXTRACTOR_TEST!=='1')mainWindow.show();});await mainWindow.loadURL('fareextractor://app/index.html');
-  if(sharedUpdatePendingPath&&process.env.FARE_EXTRACTOR_TEST!=='1'){
-    let updateAnnounced=false;
-    const checkForSharedUpdate=()=>{
-      if(updateAnnounced||!fsSync.existsSync(sharedUpdatePendingPath)||!mainWindow||mainWindow.isDestroyed())return;
-      updateAnnounced=true;
-      mainWindow.webContents.send('network-update-started');
-    };
-    checkForSharedUpdate();
-    const updateWatcher=setInterval(checkForSharedUpdate,500);
-    app.once('before-quit',()=>clearInterval(updateWatcher));
-  }
 }).catch(error=>{if(process.env.FARE_EXTRACTOR_TEST==='1')console.error(error);else dialog.showErrorBox('Unable to start Extractor',error.message);app.quit();});
 app.on('window-all-closed',()=>app.quit());

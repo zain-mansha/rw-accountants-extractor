@@ -530,6 +530,34 @@ try {
         }catch{}
       }
     }
+    # Parkers prints an authoritative GOODS / VAT / TOTAL summary at the page
+    # foot. If full-page OCR loses the decimal in its TOTAL cell, re-read a
+    # narrow band positioned from the printed TOTAL label during the same 5x
+    # retry. Keep the label in the crop so it cannot drift to an item price.
+    $parkersText=($pageLines.ToArray()|ForEach-Object{[string]$_.text}) -join ' '
+    if(-not $bankRegion -and $Scale -ge 4.5 -and $parkersText -match 'PARKERS|Parker\s+Motor\s+Services|thepartspeople\.co\.uk'){
+      $summaryGoods=@($pageLines.ToArray()|Where-Object{[string]$_.text -match '^\s*GOODS\s*$'})
+      $summaryTotals=@($pageLines.ToArray()|Where-Object{[string]$_.text -match '^\s*TOTAL\s*$'})
+      foreach($summaryTotal in $summaryTotals){
+        $goodsLabel=$summaryGoods|Where-Object{[math]::Abs([double]$_.x-[double]$summaryTotal.x) -le [math]::Max(80.0,[double]$summaryTotal.width) -and [double]$_.y -lt [double]$summaryTotal.y}|Sort-Object {[math]::Abs(([double]$summaryTotal.y-[double]$_.y))}|Select-Object -First 1
+        if(!$goodsLabel){continue}
+        $totalY=[double]$summaryTotal.y;$goodsY=[double]$goodsLabel.y;$rowGap=$totalY-$goodsY
+        if($rowGap -le 0 -or $rowGap -gt [math]::Max(260.0,([double]$goodsLabel.height+[double]$summaryTotal.height)*5.0)){continue}
+        $nearbyTotal=@($pageLines.ToArray()|Where-Object{$_.page -eq $summaryTotal.page -and [double]$_.x -ge ([double]$summaryTotal.x+[double]$summaryTotal.width-4.0) -and [math]::Abs([double]$_.y-$totalY) -le [math]::Max(30.0,[double]$summaryTotal.height*1.5)}|Sort-Object {[math]::Abs([double]$_.y-$totalY)}|Select-Object -First 1)
+        if($nearbyTotal.Count -and [string]$nearbyTotal[0].text -match '^\s*[+-]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)[.,]\s*\d{2}\s*$'){continue}
+        $left=[math]::Max(0.0,[double]$summaryTotal.x-24.0);$top=[math]::Max(0.0,$totalY-[double]$summaryTotal.height*0.8);$bandWidth=[math]::Max(360.0,[double]$summaryTotal.width+360.0);$bandHeight=[math]::Max(52.0,[double]$summaryTotal.height*2.2)
+        try{
+          $focusedTotal=Read-EnhancedReceiptRegion $bitmap $Scale $left $top $bandWidth $bandHeight $engine $page
+          $moneyMatches=[regex]::Matches([string]$focusedTotal.Text,'(?<![\d.,])[+-]?\s*(?:(?:\d{1,3}(?:[ ,]\d{3})+)|\d+)[.,]\s*\d{2}(?!\d)')
+          $moneyValues=@($moneyMatches|ForEach-Object{$_.Value -replace '\s+',''}|Select-Object -Unique)
+          if($moneyValues.Count -eq 1){
+            $focusedValue=[string]$moneyValues[0]
+            if($nearbyTotal.Count){$nearbyTotal[0].text=$focusedValue}
+            else{$focusedLine=[pscustomobject]@{page=$index+1;text=$focusedValue;x=$left+$bandWidth-90.0;y=$totalY;width=80.0;height=[double]$summaryTotal.height};$pageLines.Add($focusedLine);$ocrLines.Add($focusedLine)}
+          }
+        }catch{}
+      }
+    }
     # Shahid Halal Poultry's current invoice amount is the value beside the
     # footer TOTAL label. A pound glyph can be mistaken for a leading 2 (for
     # example £1,196.18 -> 21,196.18); when the parser flags that shape, retry
