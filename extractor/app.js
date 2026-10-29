@@ -204,6 +204,14 @@
     const text=lines.map(line=>String(line.text||'')).filter(Boolean).join('\n'),parsed=P.parseOcrBank(lines,text,file.name),liveRows=parsed.map(row=>({...row,source:file.name,sourcePath:filePath,include:true,liveProcessing:true})),page=Number(progress.page)||1,pages=Number(progress.pageCount)||page;
     rows.splice(rowStart,rows.length-rowStart,...liveRows);setProgress(processedFiles+(page/pages)*0.9,totalFiles,'Reading '+file.name+' · page '+page+' of '+pages+' · '+liveRows.length+' transactions found',processedFiles+' / '+totalFiles+' files · page '+page+' / '+pages);renderResult();
   }
+  async function revealBankRowsProgressively(inputRows,file,filePath,processedFiles,totalFiles){
+    const total=inputRows.length;if(!total)return;
+    for(let index=0;index<total;index++){
+      rows.push({...inputRows[index],source:file.name,sourcePath:filePath,include:inputRows[index].include===false?false:true,liveProcessing:true});
+      setProgress(processedFiles+((index+1)/total)*0.85,totalFiles,'Reading '+file.name+' · transaction '+(index+1)+' of '+total,processedFiles+' / '+totalFiles+' files · '+(index+1)+' / '+total+' transactions');renderResult();
+      if(index+1<total)await new Promise(resolve=>requestAnimationFrame(resolve));
+    }
+  }
   function upsertReceiptRows(newRows,filePath){
     for(const row of newRows){const sourcePath=filePath||row.sourcePath||'',page=Math.max(1,Number(row.page)||1),existing=rows.find(item=>item.mode==='receipt'&&item.sourcePath===sourcePath&&Number(item.page)===page),next={...row,sourcePath,page,source:row.source||row.sourceName||'',mode:'receipt'};if(next.status==='ACCEPTED'&&!receiptFieldsComplete(next)){next.status='REJECTED';next.accepted=false;next.rejected=true;next.rejectedReason=receiptStatusReason(next);}if(existing)Object.assign(existing,next);else rows.push(next);}
     rows=P.sortReceiptRowsByPdfPage?P.sortReceiptRowsByPdfPage(rows,files.map((file,index)=>({source:file.name,sourcePath:filePathFor(index)}))):rows;
@@ -300,10 +308,10 @@
   async function verifyBankBalanceRows(inputRows,file,fileIndex,totalFiles,sourcePath,password='',canRetry=true){
     let checkedRows=Array.isArray(inputRows)?inputRows:[],report=P.inspectBankBalances(checkedRows),retried=false,attempted=false;const originalMismatchCount=report.mismatches.length;
     if(originalMismatchCount&&canRetry&&native?.ocrPdf&&sourcePath){
-      setProgress(fileIndex,totalFiles,`Balance mismatch found. Rechecking ${file.name} at 5x resolution`,`${fileIndex} / ${totalFiles} files`);$('#extract').textContent='Rechecking bank balances\u2026';
+      setProgress(fileIndex+0.9,totalFiles,`Balance mismatch found. Rechecking ${file.name} at 5x resolution`,`${fileIndex} / ${totalFiles} files`);$('#extract').textContent='Rechecking bank balances\u2026';
       try{
         attempted=true;
-        const requestId=`bank-retry-${fileIndex}-${Date.now()}`,removeOcrListener=native.onOcrProgress?native.onOcrProgress(progress=>{if(progress.requestId!==requestId)return;const page=Number(progress.page)||1,pageCount=Number(progress.pageCount)||1;setProgress(fileIndex+(page/pageCount)*0.9,totalFiles,`Rechecking ${file.name} at 5× · page ${page} of ${pageCount}`,`${fileIndex} / ${totalFiles} files · page ${page} / ${pageCount}`);}):()=>{};let scan;try{try{scan=await native.ocrPdf(sourcePath,password,{scale:5,requestId});}catch(firstError){if(!/password-protected/i.test(firstError.message||''))throw firstError;password=await askForPdfPassword(file.name);if(password===null)throw new Error('Password entry was cancelled. The bank statement was not rechecked.');scan=await native.ocrPdf(sourcePath,password,{scale:5,requestId});}}finally{removeOcrListener();}
+        const requestId=`bank-retry-${fileIndex}-${Date.now()}`,removeOcrListener=native.onOcrProgress?native.onOcrProgress(progress=>{if(progress.requestId!==requestId)return;const page=Number(progress.page)||1,pageCount=Number(progress.pageCount)||1;setProgress(fileIndex+0.9+(page/pageCount)*0.09,totalFiles,`Rechecking ${file.name} at 5× · page ${page} of ${pageCount}`,`${fileIndex} / ${totalFiles} files · page ${page} / ${pageCount}`);}):()=>{};let scan;try{try{scan=await native.ocrPdf(sourcePath,password,{scale:5,requestId});}catch(firstError){if(!/password-protected/i.test(firstError.message||''))throw firstError;password=await askForPdfPassword(file.name);if(password===null)throw new Error('Password entry was cancelled. The bank statement was not rechecked.');scan=await native.ocrPdf(sourcePath,password,{scale:5,requestId});}}finally{removeOcrListener();}
         const retryRows=scan.lines?.length?P.parseOcrBank(scan.lines,scan.text||'',file.name):P.parseBank(scan.text||'',file.name),retryReport=P.inspectBankBalances(retryRows),hasSameOrMoreCheckpoints=retryReport.checkpointCount>=report.checkpointCount,hasSameOrMoreSegments=retryReport.checkedSegments>=report.checkedSegments,improvesReconciliation=retryReport.mismatches.length<report.mismatches.length,keepsCoverage=retryRows.length>=checkedRows.length&&hasSameOrMoreCheckpoints&&hasSameOrMoreSegments&&retryReport.mismatches.length<=report.mismatches.length;
         if(keepsCoverage||improvesReconciliation&&hasSameOrMoreCheckpoints){checkedRows=retryRows;report=retryReport;retried=true;}
       }catch(error){notes.push(`${file.name}: the 5x balance verification failed (${error.message}). Any unreconciled date range will be rejected.`);}
@@ -319,9 +327,9 @@
       setProgress(fileIndex,totalFiles,`Reading ${file.name}`,`${fileIndex} / ${totalFiles} ${fileLabel}`);
       try{
         if(mode==='bank'&&/\.csv$/i.test(file.name)){
-          let transactions=P.parseBankCsv(await readCsvFile(file),file.name);
+          let transactions=P.parseBankCsv(await readCsvFile(file),file.name);if(transactions.length)await revealBankRowsProgressively(transactions,file,sourcePath,fileIndex,totalFiles);
           if(!transactions.length)notes.push(`${file.name}: no transaction rows were found. The CSV needs a date column and either a signed amount or separate money-in and money-out columns.`);
-          transactions=await verifyBankBalanceRows(transactions,file,fileIndex,totalFiles,sourcePath,'',false);rows.push(...transactions.map(row=>({...row,include:row.include===false?false:true,sourcePath})));extractedCount=transactions.length;
+          transactions=await verifyBankBalanceRows(transactions,file,fileIndex,totalFiles,sourcePath,'',false);rows.splice(rowStart,rows.length-rowStart,...transactions.map(row=>({...row,include:row.include===false?false:true,sourcePath})));extractedCount=transactions.length;
         }else{
         let parsed=await P.parsePdf(await file.arrayBuffer(),mode,file.name);pageCount=Number(parsed.info?.pages)||1;if(mode==='invoice'){extractedCount=parsed.invoices?.length||0;if(Array.isArray(parsed.info?.pageItems)&&parsed.info.pageItems.length===pageCount){const pageLines=parsed.info.pageItems.flatMap((items,index)=>(items||[]).map(line=>({...line,page:index+1})));collectEagleSummaryRows(eagleStatementRows,pageLines,file,sourcePath);}}else if(mode==='receipt')extractedCount=parsed.receipts?.length||0;
         const parsedInvoiceRows=mode==='invoice'?(parsed.invoices||[parsed.invoice]).filter(Boolean):[],hasUnreadableInvoice=parsedInvoiceRows.some(invoice=>invoice.retryOcr||invoice.total===''||invoice.total===null||invoice.total===undefined||invoice.isInvoiceDocument!==false&&invoice.documentType!=='DELIVERY NOTE'&&(invoice.vat===''||invoice.vat===null||invoice.vat===undefined)),hasPolishDelivery=parsedInvoiceRows.some(invoice=>invoice.profileId==='polish-village-bread'&&invoice.documentType==='DELIVERY NOTE');
@@ -335,7 +343,7 @@
           }catch(error){notes.push(`${file.name}: Windows OCR could not read this PDF (${error.message}).`);}
         }
         if(!parsed.info.hasText){notes.push(file.name+': no readable text was recovered.');if(mode==='invoice')await appendInvoiceRows([{invoiceNumber:'',date:'',supplier:'',subtotal:'',vat:'',total:'',currency:'GBP',source:file.name,page:1,confidence:'REJECTED',rejectedReason:'No selectable text was recovered from this PDF.',review:false,accepted:false,rejected:true}],sourcePath);else if(mode==='receipt'){const run=ocrRuns.get(fileIndex),visualPages=run?.visualPages?.length?run.visualPages:Array.from({length:pageCount},(_,index)=>index+1),placeholders=P.parseReceiptBatch('',file.name,[],{auditUnmatchedPages:true,pageCount,visualPages});upsertReceiptRows(placeholders,sourcePath);}}
-        else if(mode==='bank'){const transactions=await verifyBankBalanceRows(parsed.transactions||[],file,fileIndex,totalFiles,sourcePath,ocrRuns.get(fileIndex)?.password||'',true);rows.splice(rowStart,rows.length-rowStart,...transactions.map(row=>({...row,include:row.include===false?false:true,sourcePath})));extractedCount=transactions.length;}
+        else if(mode==='bank'){const sourceBankRows=parsed.transactions||[];if(rows.length===rowStart&&sourceBankRows.length)await revealBankRowsProgressively(sourceBankRows,file,sourcePath,fileIndex,totalFiles);const transactions=await verifyBankBalanceRows(sourceBankRows,file,fileIndex,totalFiles,sourcePath,ocrRuns.get(fileIndex)?.password||'',true);rows.splice(rowStart,rows.length-rowStart,...transactions.map(row=>({...row,include:row.include===false?false:true,sourcePath})));extractedCount=transactions.length;}
         else if(mode==='receipt')upsertReceiptRows((parsed.receipts||[]).map(row=>({...row,source:file.name})),sourcePath);
         else await appendInvoiceRows((parsed.invoices||[parsed.invoice]).filter(Boolean).map(row=>({...row,source:file.name,sourcePath})),sourcePath);
         }
