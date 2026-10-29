@@ -149,3 +149,7 @@ body{background:#f3f6f5;color:var(--ink)}
 .badge.reject{background:#fff0e8;color:#a63a12;border:1px solid #f0b08f}
 .bank-rejected td{background:#fff6f4}
 .bank-status-reason{display:block;max-width:260px;margin-top:4px;color:#9b3c30;font-size:10px;line-height:1.4}
+
+.progress-panel.progress-panel-fixed{position:fixed;left:270px;right:18px;bottom:14px;z-index:5;margin:0;box-shadow:0 10px 28px #173f3226}
+@media(max-width:980px){.progress-panel.progress-panel-fixed{left:236px;right:14px}}
+@media(max-width:680px){.progress-panel.progress-panel-fixed{left:12px;right:12px;bottom:10px}}
