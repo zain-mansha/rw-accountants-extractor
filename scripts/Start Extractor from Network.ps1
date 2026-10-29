@@ -265,7 +265,7 @@ function New-SharedExtractorBuild([string]$CommitSha) {
     [IO.File]::WriteAllText((Join-Path $applicationStage 'build-info.json'), (@{buildId=$buildId;commit=$CommitSha} | ConvertTo-Json -Depth 4), [Text.Encoding]::UTF8)
     if (-not (Test-ExtractorAppReady $applicationStage)) { throw 'The updated Extractor application is incomplete; the existing shared version has been kept.' }
 
-    $sessionDeadline = [DateTime]::UtcNow.AddMinutes(10)
+    $sessionDeadline = [DateTime]::UtcNow.AddMinutes(60)
     while ($true) {
       $activeSessions = @(Get-ActiveExtractorSessions)
       if ($activeSessions.Count -eq 0) { break }
@@ -318,12 +318,12 @@ try {
   if ((Get-InstalledExtractorCommit) -ne $commitSha) {
     $updateLockPath = Join-Path $source '.extractor-update.lock'
     $updateLock = $null
-    $updateDeadline = [DateTime]::UtcNow.AddMinutes(10)
+    $updateDeadline = [DateTime]::UtcNow.AddMinutes(60)
     while (-not $updateLock) {
       try { $updateLock = [IO.File]::Open($updateLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
       catch [IO.IOException] {
         if ((Get-InstalledExtractorCommit) -eq $commitSha) { break }
-        if ([DateTime]::UtcNow -ge $updateDeadline) { throw 'Another Extractor update did not finish within 10 minutes. Try launching again.' }
+        if ([DateTime]::UtcNow -ge $updateDeadline) { throw 'Another Extractor update did not finish within 60 minutes. Try launching again.' }
         Write-Progress -Activity 'Checking Extractor updates' -Status 'Waiting for another user to finish the shared update...' -PercentComplete 20
         Start-Sleep -Milliseconds 500
       }
@@ -343,7 +343,7 @@ try {
   if ((Get-InstalledExtractorCommit) -eq $commitSha -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) {
     $recoveryLockPath = Join-Path $source '.extractor-update.lock'
     $recoveryLock = $null
-    $recoveryDeadline = [DateTime]::UtcNow.AddMinutes(10)
+    $recoveryDeadline = [DateTime]::UtcNow.AddMinutes(60)
     while (-not $recoveryLock -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) {
       try { $recoveryLock = [IO.File]::Open($recoveryLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
       catch [IO.IOException] {
