@@ -877,6 +877,7 @@
     const text=String(value||'');
     return /\bSHAH[I]D\s+HALAL\s+POULTRY\b/i.test(text)||/\bSHAHD\s+HALAL\s+POULTRY\b/i.test(text)||/\bSAAHID\s+HALAL\s+POULTRY\b/i.test(text)||/07973\s*658\s*417/.test(text)||/159\s*5722\s*76/.test(text);
   }
+  function isIsaacWholesaleText(value){const text=String(value||'');return /\bISAAC\s+WHOLESALE\b/i.test(text)||/isaacwholesale\.co\.uk/i.test(text)||/885\s*230\s*414/.test(text);}
   function isEagleFoodsText(value){const text=String(value||'');return /\bEAGLE\s*FOODS?\s*(?:LTD|LIMITED)\b/i.test(text)||/\bEAGLEFOODS\b/i.test(text)||/sales\s*@\s*eaglefoods\.co\.uk/i.test(text)||/823\s*9589\s*88/.test(text);}
   function isEagleNonInvoicePage(value){const text=String(value||'');return /\bstatement\s+of\s+account\b/i.test(text)||/\b(?:interpretation|force\s+majeure|intellectual\s+property\s+rights|business\s+day)\b/i.test(text)||/\bterms\s+and\s+conditions\b/i.test(text)&&(/\bEagle\s*Foods?\b/i.test(text)||/04994847/.test(text));}
   function eagleDate(value){
@@ -1994,6 +1995,101 @@
     const complete=Boolean(number.short&&date&&confirmedVat!==null&&total!==null),rejectedReason=complete?'':!number.short?'Freshways invoice number could not be confirmed.':!date?'Freshways invoice date could not be confirmed.':total===null?'Printed Freshways Invoice Total could not be confirmed.':vatCurrencyGlyphSuspect?'Freshways VAT may have the pound sign misread as a digit; a 5x OCR confirmation is required.':'Printed Freshways VAT could not be confirmed.';
     return {invoiceNumber:number.short,originalInvoiceNumber:number.full,date,supplier:'Freshways',subtotal:'',vat:confirmedVat??'',total:total??'',documentType:'INVOICE',isInvoiceDocument:true,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',rejectedReason,confidence:complete?'ACCEPTED':'REJECTED',retryOcr:!complete||vatCurrencyGlyphSuspect,review:false,layoutId:'freshways-invoice-footer',profileId:'freshways',freshwaysVatOcrAmbiguous:vatCurrencyGlyphSuspect};
   }
+  function isaacInvoiceNumber(value){
+    const text=String(value||'').toUpperCase().replace(/[OQ]/g,'0').replace(/[IL|]/g,'1');
+    const match=text.match(/(?:^|[-/\s])([0-9]{3,})\s*$/);
+    return match?match[1]:'';
+  }
+  function isaacInvoiceDate(value){
+    const text=String(value||'').toUpperCase().replace(/\b0CT\b/g,'OCT').replace(/\b5EP\b/g,'SEP');
+    const monthDate=text.match(/([0-9OQIL|](?:\s*[0-9OQIL|])?)\s*[-/.]\s*([A-Z0-9]{3})\s*[-/.]\s*(20\d{2})/);
+    if(monthDate){
+      const day=monthDate[1].replace(/\s/g,'').replace(/[OQ]/g,'0').replace(/[IL|]/g,'1'),months={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12},month=months[monthDate[2]];
+      if(month)return parseDate(`${day}/${month}/${monthDate[3]}`);
+    }
+    const numeric=text.match(/\b\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*20\d{2}\b/);
+    return parseDate(numeric?.[0]||'');
+  }
+  function isaacMoney(value){
+    const match=String(value||'').replace(/[\u00A3$]/g,' ').match(/\(?-?\d[\d,\s]*[.,]\s*\d{2}\)?/);
+    return match?invoiceAmount(match[0]):null;
+  }
+  function isaacLabeledValue(lines,labelPattern,parseValue,kind='row'){
+    const items=Array.isArray(lines)?lines.filter(line=>line&&String(line.text||'').trim()):[],matches=items.filter(line=>labelPattern.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0));
+    for(const label of matches){
+      const labelText=String(label.text||''),labelMatch=labelText.match(labelPattern),inline=labelMatch?labelText.slice((labelMatch.index||0)+labelMatch[0].length).replace(/^\s*[:#.-]?\s*/,''):'';
+      const direct=parseValue(inline);if(direct!==null&&direct!==undefined&&direct!=='')return direct;
+      const labelX=Number(label.x)||0,labelY=Number(label.y)||0,labelHeight=Math.max(1,Number(label.height)||20),labelWidth=Math.max(String(labelText).length*8,Number(label.width)||0),samePage=items.filter(line=>line!==label&&(line.page===undefined||label.page===undefined||Number(line.page)===Number(label.page)));
+      const candidates=[];
+      for(const line of samePage){
+        const value=parseValue(line.text);if(value===null||value===undefined||value==='')continue;
+        const x=Number(line.x)||0,y=Number(line.y)||0,height=Math.max(1,Number(line.height)||labelHeight),delta=y-labelY;
+        // Account balance is a separate statement figure and must never be
+        // eligible as an invoice total, even when OCR places it unusually
+        // close to the invoice footer.
+        if(kind==='row'&&samePage.some(other=>/\baccount\s+balance\b/i.test(String(other.text||''))&&Math.abs(y-(Number(other.y)||0))<=Math.max(8,height*.8)&&x>(Number(other.x)||0)+(Number(other.width)||String(other.text||'').length*8)*.35))continue;
+        if(kind==='below'){
+          if(delta<labelHeight*.35||delta>labelHeight*4.5||x<labelX-labelHeight*2.5||x>labelX+labelWidth+labelHeight*12)continue;
+        }else{
+          if(Math.abs(delta)>Math.max(42,labelHeight*1.8)||x<labelX+labelWidth*.35)continue;
+        }
+        const horizontalGap=Math.max(0,x-(labelX+labelWidth));
+        candidates.push({value,score:Math.abs(delta)/labelHeight+horizontalGap/(labelHeight*2)});
+      }
+      candidates.sort((a,b)=>a.score-b.score);if(candidates.length)return candidates[0].value;
+    }
+    return null;
+  }
+  function isaacInvoicePageText(value){
+    const text=String(value||'');
+    return isIsaacWholesaleText(text)&&/\bsales\s+invoice\b/i.test(text)&&/\binvoice\s+to\b/i.test(text)&&(/\binvoice\s+(?:no\.?|number|#)\b/i.test(text)||/\binvoice\s+date\b/i.test(text));
+  }
+  function isaacHeader(lines,flat=''){
+    const source=String(flat||lines?.map(line=>String(line.text||'')).join(' ')||'');
+    const number=isaacLabeledValue(lines,/\binvoice\s*(?:no\.?|number|#)\b/i,isaacInvoiceNumber,'below')||isaacInvoiceNumber(source.match(/\binvoice\s*(?:no\.?|number|#)\b\s*[:#.-]?\s*([A-Z0-9| -]{3,}?)(?=\s+invoice\s+date|\s+ship\s+route|$)/i)?.[1]||'');
+    const date=isaacLabeledValue(lines,/\binvoice\s+date\b/i,isaacInvoiceDate,'below')||isaacInvoiceDate(source.match(/\binvoice\s+date\b\s*[:#.-]?\s*([0-9OQIL|\s/-]{1,8}\s*[-/.]\s*[A-Z0-9]{3}\s*[-/.]\s*20\d{2}|\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*20\d{2})/i)?.[1]||'');
+    return {fullNumber:number,date};
+  }
+  function isaacInvoicePage(lines){
+    const text=(lines||[]).map(line=>String(line.text||'')).join(' ');
+    return isaacInvoicePageText(text);
+  }
+  function isaacSummaryPage(lines){
+    const text=(lines||[]).map(line=>String(line.text||'')).join(' ');
+    return /\b(?:invoice|account|sales)\s+summary\b|\bstatement\s+of\s+account\b|\bTOTAL\s+DELTA[- ]ARA\b/i.test(text)||/\bINVOICE\s+[1-4]\s*:/i.test(text)&&/\bSOLD\b.*\bBALANCE\b/i.test(text);
+  }
+  function parseIsaacWholesaleInvoice(flat,source='',ocrLines){
+    const lines=Array.isArray(ocrLines)?ocrLines.filter(line=>line&&String(line.text||'').trim()):[],pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b),pageGroups=new Map(pages.map(page=>[page,lines.filter(line=>(Number(line.page)||1)===page)])),invoicePage=pages.find(page=>isaacInvoicePage(pageGroups.get(page)||[])),headerLines=invoicePage?pageGroups.get(invoicePage):lines,header=isaacHeader(headerLines,flat),number=header.fullNumber.slice(-4),date=header.date;
+    let total=null,vat=null;
+    for(const page of [...pages].reverse()){
+      const pageLines=pageGroups.get(page)||[];
+      if(total===null)total=isaacLabeledValue(pageLines,/\binvoice\s+total\b/i,isaacMoney,'row');
+      if(vat===null)vat=isaacLabeledValue(pageLines,/\bVAT\s+total\b/i,isaacMoney,'row');
+    }
+    if(!lines.length){
+      const inlineTotal=String(flat||'').match(/\binvoice\s+total\s*:?\s*[\u00A3$]?\s*(\d[\d,\s]*[.,]\s*\d{2})/i),inlineVat=String(flat||'').match(/\bVAT\s+total\s*:?\s*[\u00A3$]?\s*(\d[\d,\s]*[.,]\s*\d{2})/i);
+      total=inlineTotal?isaacMoney(inlineTotal[1]):null;vat=inlineVat?isaacMoney(inlineVat[1]):null;
+    }
+    const invoiceDocument=isaacInvoicePageText(String(flat||lines.map(line=>String(line.text||'')).join(' '))),complete=Boolean(invoiceDocument&&number&&date&&total!==null&&vat!==null),reason=complete?'':!invoiceDocument?'This document does not appear to be an Isaac Wholesale invoice.':!number?'Isaac Wholesale invoice number could not be confirmed.':!date?'Isaac Wholesale invoice date could not be confirmed.':total===null?'Printed Isaac Wholesale Invoice Total could not be confirmed.':'Printed Isaac Wholesale VAT Total could not be confirmed.';
+    return {invoiceNumber:number,originalInvoiceNumber:header.fullNumber,date,supplier:'Isaac Wholesale Ltd',subtotal:'',vat:vat??'',total:total??'',documentType:'INVOICE',isInvoiceDocument:invoiceDocument,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,confidence:complete?'ACCEPTED':'REJECTED',retryOcr:Boolean(invoiceDocument&&(!complete||!lines.length)),review:false,layoutId:'isaac-wholesale-invoice-total',profileId:'isaac-wholesale'};
+  }
+  function parseIsaacWholesaleBatch(pageLines,source){
+    const pages=[...new Set(pageLines.keys())].sort((a,b)=>a-b),isaacPages=pages.filter(page=>isIsaacWholesaleText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))),groups=[];
+    for(const page of isaacPages){
+      const lines=pageLines.get(page)||[],flat=lines.map(line=>String(line.text||'')).join(' '),header=isaacHeader(lines,flat),starts=isaacInvoicePage(lines);
+      if(isaacSummaryPage(lines))continue;
+      if(starts){
+        const previous=groups.at(-1);
+        if(previous&&(header.fullNumber&&previous.fullNumber===header.fullNumber||!header.fullNumber&&(previous.date&&header.date===previous.date||/\bcontinued\b/i.test(flat)))){previous.pages.push(page);continue;}
+        groups.push({page,fullNumber:header.fullNumber,date:header.date,pages:[page]});
+      }else if(groups.length&&(/\bcontinued\b/i.test(flat)||header.fullNumber&&groups.at(-1).fullNumber===header.fullNumber))groups.at(-1).pages.push(page);
+      else if(groups.length&&/\b(?:product|quantity|unit\s+price|tax\s+rate)\b/i.test(flat))groups.at(-1).pages.push(page);
+    }
+    return groups.map(group=>{
+      const groupedLines=group.pages.flatMap(page=>pageLines.get(page)||[]),text=groupedLines.map(line=>String(line.text||'')).join(' '),row=parseIsaacWholesaleInvoice(text,source,groupedLines);
+      return {...row,page:group.page,sourcePages:group.pages};
+    });
+  }
   // Keep supplier/document-specific parsing isolated here. Detection uses
   // document content, never just the file name, because users often rename
   // statements and batch PDFs from several suppliers together.
@@ -2007,6 +2103,7 @@
     {id:'peterborough-bazaar',name:'Peterborough Bazaar',kind:'supplier',detect:isPeterboroughBazaarText,parse:(flat,source,lines)=>parsePeterboroughBazaarInvoice(flat,source,lines)},
     {id:'deens-produce',name:'Deens Produce',kind:'supplier',detect:isDeensProduceText,parse:(flat,source,lines)=>parseDeensProduceInvoice(flat,source,lines)},
     {id:'liberty-frozen-foods',name:'Liberty Frozen Foods',kind:'supplier',detect:isLibertyFrozenFoodsText,parse:(flat,source,lines)=>parseLibertyFrozenFoodsInvoice(flat,source,lines)},
+    {id:'isaac-wholesale',name:'Isaac Wholesale Ltd',kind:'supplier',detect:isIsaacWholesaleText,parse:(flat,source,lines)=>parseIsaacWholesaleInvoice(flat,source,lines)},
     {id:'dairy-fresh',name:'Dairy Fresh',kind:'supplier',status:'Under development',detect:isDairyFreshText,parse:(flat,source,lines)=>parseDairyFreshInvoice(flat,source,lines)},
     {id:'maspo',name:'Maspo',kind:'supplier',detect:flat=>/\bMASPO(?:\s+FOOD)?\s+LTD\b/i.test(flat)||maspoFooterInvoice(flat),parse:(flat,source,lines)=>parseMaspoInvoice(flat,source,lines)},
     {id:'polish-village-bread',name:'Polish Village Bread',kind:'supplier',detect:isPolishVillageBreadText,parse:(flat,source,lines,options)=>parseWzInvoice(flat,source,lines,options)},
@@ -2059,9 +2156,14 @@
   }
   function parseInvoiceBatch(text,source='',ocrLines,options={}){
     const lines=Array.isArray(ocrLines)?ocrLines.filter(line=>line&&String(line.text||'').trim()):[];
-    if(!lines.length){if(/\bE\s*\.?\s*P\s*\.?\s*A\s*\.?\s*FOODS?\s+LTD\b|\bEPA\s+FOODS\b/i.test(String(text||'')))return [];if(isEagleFoodsText(text)&&isEagleNonInvoicePage(text)&&!eagleInvoicePage([],text))return [];const row=parseInvoiceRobust(text,source,undefined,options);row.profileId=identifyInvoiceProfile(text)?.id||'generic';return disambiguateGeneratedShahidReferences([row]);}
+    if(!lines.length){if(/\bE\s*\.?\s*P\s*\.?\s*A\s*\.?\s*FOODS?\s+LTD\b|\bEPA\s+FOODS\b/i.test(String(text||'')))return [];if(isEagleFoodsText(text)&&isEagleNonInvoicePage(text)&&!eagleInvoicePage([],text))return [];if(isIsaacWholesaleText(text)&&isaacSummaryPage([{text:String(text||'')}])&&!isaacInvoicePageText(text))return [];const row=parseInvoiceRobust(text,source,undefined,options);row.profileId=identifyInvoiceProfile(text)?.id||'generic';return row.profileId==='isaac-wholesale'&&!row.isInvoiceDocument?[]:disambiguateGeneratedShahidReferences([row]);}
     const pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b);
     const pageLines=new Map(pages.map(page=>[page,lines.filter(line=>(Number(line.page)||1)===page).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0))]));
+    const isaacPages=pages.filter(page=>isIsaacWholesaleText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
+    if(isaacPages.length){
+      const isaacRows=parseIsaacWholesaleBatch(new Map(isaacPages.map(page=>[page,pageLines.get(page)])),source),otherLines=lines.filter(line=>!isaacPages.includes(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
+      return [...otherRows,...isaacRows].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
+    }
     const eaglePages=pages.filter(page=>isEagleFoodsText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
     if(eaglePages.length){
       const eagleRows=parseEagleFoodsBatch(new Map(eaglePages.map(page=>[page,pageLines.get(page)])),source),eagleTermsPages=pages.filter(page=>isEagleNonInvoicePage((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))),otherLines=lines.filter(line=>!eaglePages.includes(Number(line.page)||1)&&!eagleTermsPages.includes(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
