@@ -6,7 +6,9 @@ const fsSync=require('node:fs');
 const {execFile,spawn}=require('node:child_process');
 const crypto=require('node:crypto');
 const {readWorkspaceProfilesSync,workspaceDirectory,createWorkspace}=require('./workspaces.cjs');
-const {publishNetworkBootstrap}=require('./network-bootstrap.cjs');
+let publishNetworkBootstrap=()=>({updated:false});
+try{publishNetworkBootstrap=require('./network-bootstrap.cjs').publishNetworkBootstrap;}
+catch(error){if(error?.code!=='MODULE_NOT_FOUND'||!String(error?.message||'').startsWith("Cannot find module './network-bootstrap.cjs'"))throw error;}
 
 // The executable in the shared network package is a click-to-launch bootstrap.
 // It refreshes the shared application files from GitHub, then runs that shared

@@ -35,7 +35,7 @@ if (Test-Path -LiteralPath $currentBuildFile -PathType Leaf) {
   if ($initialBuildSha -notmatch '^[a-f0-9]{40}$') { $initialBuildSha = '' }
 }
 $requiredAppFiles = @(
-  'main.cjs', 'package.json', 'index.html', 'parser.js', 'styles.css',
+  'main.cjs', 'network-bootstrap.cjs', 'package.json', 'index.html', 'parser.js', 'styles.css',
   'vendor\xlsx.full.min.js', 'ocr-helper.ps1', 'copy-helper.ps1', 'ocr-requirement.json', 'build-info.json'
 )
 

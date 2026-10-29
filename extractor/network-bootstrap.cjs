@@ -15,17 +15,19 @@ function publishNetworkBootstrap({packaged,sharedApplication,applicationDirector
   const cacheRoot=path.join(networkRoot,'.extractor-apps')+path.sep;
   if(!fs.existsSync(path.join(networkRoot,'network-build.txt'))||!appDirectory.toLowerCase().startsWith(cacheRoot.toLowerCase()))return {updated:false};
 
-  const target=path.join(networkRoot,'resources','app','main.cjs');
-  if(path.resolve(target).toLowerCase()===path.resolve(sourceFile).toLowerCase())return {updated:false};
-  const temporary=`${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  try{
-    fs.copyFileSync(sourceFile,temporary);
-    fs.renameSync(temporary,target);
-    return {updated:true};
-  }catch(error){
-    try{fs.rmSync(temporary,{force:true});}catch{}
-    return {updated:false,error:error?.message||String(error)};
+  const appRoot=path.join(networkRoot,'resources','app'),helperSource=path.join(appDirectory,'network-bootstrap.cjs'),helperTarget=path.join(appRoot,'network-bootstrap.cjs'),mainTarget=path.join(appRoot,'main.cjs');
+  const publishFile=(source,target)=>{
+    if(path.resolve(target).toLowerCase()===path.resolve(source).toLowerCase())return {updated:false};
+    const temporary=`${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try{fs.copyFileSync(source,temporary);fs.renameSync(temporary,target);return {updated:true};}
+    catch(error){try{fs.rmSync(temporary,{force:true});}catch{}return {updated:false,error:error?.message||String(error)};}
+  };
+  // Install the dependency first so a click on the shared executable can
+  // never expose a main.cjs that requires a missing network-bootstrap.cjs.
+  if(fs.existsSync(helperSource)){
+    const helper=publishFile(helperSource,helperTarget);if(helper.error)return helper;
   }
+  return publishFile(sourceFile,mainTarget);
 }
 
 module.exports={publishNetworkBootstrap};
