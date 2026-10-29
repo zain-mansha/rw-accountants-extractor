@@ -29,6 +29,11 @@ $repositoryName = 'rw-accountants-extractor'
 $repositoryBranch = 'main'
 $currentBuildFile = Join-Path $source '.extractor-current.txt'
 $buildRoot = Join-Path $source '.extractor-apps'
+$initialBuildSha = ''
+if (Test-Path -LiteralPath $currentBuildFile -PathType Leaf) {
+  $initialBuildSha = (Get-Content -LiteralPath $currentBuildFile -Raw).Trim()
+  if ($initialBuildSha -notmatch '^[a-f0-9]{40}$') { $initialBuildSha = '' }
+}
 $requiredAppFiles = @(
   'main.cjs', 'package.json', 'index.html', 'parser.js', 'styles.css',
   'vendor\xlsx.full.min.js', 'ocr-helper.ps1', 'copy-helper.ps1', 'ocr-requirement.json', 'build-info.json'
@@ -299,6 +304,10 @@ try {
 if (-not $applicationDirectory -or -not (Test-ExtractorAppReady $applicationDirectory)) {
   throw 'No complete Extractor application is available on the shared network folder.'
 }
+$updateWillReset = $commitSha -match '^[a-f0-9]{40}$' -and $initialBuildSha -ne $commitSha
+if ($updateWillReset -and -not $NoLaunch) {
+  Write-Output 'EXTRACTOR_UPDATE_RESET_NOTICE: An update is ready. Extractor will restart automatically to apply it.'
+}
 $runtimeLoaderSource = Join-Path $source 'ExtractorRuntimeLoader.cjs'
 $runtimePackageSource = Join-Path $source 'ExtractorRuntimePackage.json'
 foreach ($requiredLoaderFile in @($runtimeLoaderSource,$runtimePackageSource)) {
@@ -472,3 +481,4 @@ if (-not $NoLaunch) {
   Write-Output "Electron runtime prepared: $runtimeTarget"
   if ($commitSha) { Write-Output "GitHub source commit: $commitSha" }
 }
+
