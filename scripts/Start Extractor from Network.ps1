@@ -219,6 +219,17 @@ function Get-ActiveExtractorSessions {
   return $active
 }
 
+function Replace-ExtractorRuntimeFile([string]$SourcePath, [string]$DestinationPath) {
+  $backupPath = "$DestinationPath.$([guid]::NewGuid().ToString('N')).bak"
+  try {
+    [IO.File]::Replace($SourcePath, $DestinationPath, $backupPath)
+  } finally {
+    if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+      Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 function New-SharedExtractorBuild([string]$CommitSha) {
   $updatesDirectory = Join-Path $source '.extractor-update'
   New-Item -ItemType Directory -Path $updatesDirectory -Force | Out-Null
@@ -480,12 +491,12 @@ try {
     )) {
       $temporaryFile = "$($filePair.Destination).$([guid]::NewGuid().ToString('N')).tmp"
       Copy-Item -LiteralPath $filePair.Source -Destination $temporaryFile -Force
-      if (Test-Path -LiteralPath $filePair.Destination -PathType Leaf) { [IO.File]::Replace($temporaryFile,$filePair.Destination,$null) }
+      if (Test-Path -LiteralPath $filePair.Destination -PathType Leaf) { Replace-ExtractorRuntimeFile $temporaryFile $filePair.Destination }
       else { Move-Item -LiteralPath $temporaryFile -Destination $filePair.Destination }
     }
     $temporaryMarker = "$runtimeLoaderMarker.$([guid]::NewGuid().ToString('N')).tmp"
     [IO.File]::WriteAllText($temporaryMarker,$loaderSignature,[Text.Encoding]::ASCII)
-    if (Test-Path -LiteralPath $runtimeLoaderMarker -PathType Leaf) { [IO.File]::Replace($temporaryMarker,$runtimeLoaderMarker,$null) }
+    if (Test-Path -LiteralPath $runtimeLoaderMarker -PathType Leaf) { Replace-ExtractorRuntimeFile $temporaryMarker $runtimeLoaderMarker }
     else { Move-Item -LiteralPath $temporaryMarker -Destination $runtimeLoaderMarker }
   }
 } finally {
