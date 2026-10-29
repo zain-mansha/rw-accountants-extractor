@@ -24,7 +24,7 @@ if(bootstrapRefresh.error)console.warn(`Could not refresh the network click-to-l
 if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
   app.whenReady().then(()=>{
     const splash=new BrowserWindow({width:460,height:205,resizable:false,show:true,autoHideMenuBar:true,title:'Extractor',backgroundColor:'#f4f7f4',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
-    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f7f4;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:340px}.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#08796c}.title{font-size:20px;font-weight:700;margin:12px 0 7px}.copy{color:#60736d;line-height:1.5}.track{height:7px;margin-top:22px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:35%;border-radius:8px;background:#0d8276;animation:move 1.4s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(180px)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title">Checking shared updates</div><div class="copy">Checking GitHub and preparing the latest shared application files.</div><div class="track"><div class="bar"></div></div></main>';
+    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f7f4;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:340px}.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#08796c}.title{font-size:20px;font-weight:700;margin:12px 0 7px}.copy{color:#60736d;line-height:1.5;min-height:42px}.track{height:7px;margin-top:22px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:35%;border-radius:8px;background:#0d8276;animation:move 1.4s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(180px)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title" id="title">Checking shared updates</div><div class="copy" id="copy">Checking GitHub and preparing the latest shared application files.</div><div class="track"><div class="bar"></div></div></main>';
     splash.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(html));
 
     const launcher=path.join(networkPackageDirectory,'Start Extractor from Network.cmd');
@@ -35,6 +35,13 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
     }
     let output='';
     let finished=false;
+    let splashReady=false;
+    let updateNoticeReceived=false;
+    const showUpdateNotice=()=>{
+      if(!splashReady||!updateNoticeReceived)return;
+      splash.webContents.executeJavaScript("document.getElementById('title').textContent='Applying update';document.getElementById('copy').textContent='An update is ready. Extractor will restart automatically to apply it.'").catch(()=>{});
+    };
+    splash.webContents.once('did-finish-load',()=>{splashReady=true;showUpdateNotice();});
     const fail=message=>{
       if(finished)return;
       finished=true;
@@ -53,7 +60,7 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
       env:{...process.env,FARE_EXTRACTOR_BOOTSTRAP:'1'}
     });
     child.stdout.setEncoding('utf8');
-    child.stdout.on('data',chunk=>{output=(output+chunk).slice(-4000);});
+    child.stdout.on('data',chunk=>{output=(output+chunk).slice(-4000);if(output.includes('EXTRACTOR_UPDATE_RESET_NOTICE:')){updateNoticeReceived=true;showUpdateNotice();}});
     child.stderr.setEncoding('utf8');
     child.stderr.on('data',chunk=>{output=(output+chunk).slice(-4000);});
     child.once('error',error=>fail(error.message));
