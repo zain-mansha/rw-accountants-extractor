@@ -158,3 +158,4 @@ body{background:#f3f6f5;color:var(--ink)}
 @keyframes network-update-progress{to{transform:translateX(185%)}}
 @media(max-width:980px){.progress-panel.progress-panel-fixed{left:236px;right:14px}}
 @media(max-width:680px){.progress-panel.progress-panel-fixed{left:12px;right:12px;bottom:10px}}
+.company-status-review{border-color:#bddfce;background:#edf8f2;color:#176348}
