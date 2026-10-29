@@ -116,6 +116,7 @@ ipcMain.handle('ocr-pdf',async(_event,payload)=>{
   const password=typeof payload==='object'&&typeof payload?.password==='string'?payload.password:'';
   const scale=typeof payload==='object'&&Number.isFinite(Number(payload?.scale))?Math.min(5,Math.max(1.5,Number(payload.scale))):2.5;
   const pages=typeof payload==='object'&&Array.isArray(payload?.pages)?payload.pages.map(Number).filter(page=>Number.isInteger(page)&&page>0):[];
+  const bankRetryRegions=typeof payload==='object'&&Array.isArray(payload?.bankRetryRegions)?payload.bankRetryRegions.map(region=>({page:Number(region?.page),top:Number(region?.top),bottom:Number(region?.bottom)})).filter(region=>Number.isInteger(region.page)&&region.page>0&&Number.isFinite(region.top)&&Number.isFinite(region.bottom)&&region.top>=0&&region.bottom>region.top):[];
   const focusPages=typeof payload==='object'&&Array.isArray(payload?.focusPages)?payload.focusPages.map(Number).filter(page=>Number.isInteger(page)&&page>0):[];
   const dairyFooterRows=typeof payload==='object'&&Array.isArray(payload?.dairyFooterRows)?payload.dairyFooterRows.map(row=>({page:Number(row?.page),vatY:Number(row?.vatY),totalY:Number(row?.totalY)})).filter(row=>Number.isInteger(row.page)&&row.page>0&&Number.isFinite(row.vatY)&&Number.isFinite(row.totalY)&&row.vatY>0&&row.totalY>row.vatY):[];
   if(typeof filePath!=='string'||path.extname(filePath).toLowerCase()!=='.pdf')throw new Error('OCR accepts PDF files only.');
@@ -146,7 +147,7 @@ ipcMain.handle('ocr-pdf',async(_event,payload)=>{
       ocrPath=readableCopy;ocrPassword='';
     }
     const helper=path.join(__dirname,'ocr-helper.ps1');
-    const args=['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',ocrPath,'-Password',ocrPassword,'-Scale',String(scale)];if(pages.length)args.push('-PageList',pages.join(','));if(focusPages.length)args.push('-FocusPageList',focusPages.join(','));if(dairyFooterRows.length)args.push('-DairyFooterRows',JSON.stringify(dairyFooterRows));
+    const args=['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',ocrPath,'-Password',ocrPassword,'-Scale',String(scale)];if(pages.length)args.push('-PageList',pages.join(','));if(focusPages.length)args.push('-FocusPageList',focusPages.join(','));if(dairyFooterRows.length)args.push('-DairyFooterRows',JSON.stringify(dairyFooterRows));if(bankRetryRegions.length)args.push('-BankRetryRegions',JSON.stringify(bankRetryRegions));
     return await new Promise((resolve,reject)=>{
       const child=spawn('powershell.exe',args,{windowsHide:true,stdio:['ignore','pipe','pipe']});let buffer='',parsedResult=null,stderr='';
       const consume=line=>{const value=String(line||'').trim();if(!value)return;if(value.startsWith('PAGE:')){try{mainWindow?.webContents.send('ocr-progress',{requestId:payload?.requestId,filePath:resolved,...JSON.parse(value.slice(5))});}catch{}return;}try{const parsed=JSON.parse(value);if(typeof parsed?.ok==='boolean')parsedResult=parsed;}catch{}};

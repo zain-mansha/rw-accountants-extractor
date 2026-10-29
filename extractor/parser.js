@@ -181,8 +181,8 @@
     const items=(Array.isArray(rows)?rows:[]).map((row,index)=>({row,index,date:String(row?.date||''),amountCents:bankRowAmountCents(row),balanceCents:bankValueCents(row?.balance)})).filter(item=>item.date||item.amountCents!==null||item.balanceCents!==null).sort((a,b)=>a.date&&b.date?a.date.localeCompare(b.date)||a.index-b.index:a.index-b.index);
     const mismatches=[];
     for(const item of items){
-      if(item.row?.balanceMovementUnreadable||item.balanceCents!==null&&item.amountCents===null)mismatches.push({startIndex:item.index,endIndex:item.index,rowIndexes:[item.index],previousDate:'',date:item.date,expectedCents:item.balanceCents??0,actualCents:item.balanceCents??0,differenceCents:0,page:item.row?.page||'',unreadableMovement:true});
-      else if(item.row?.balanceExpected&&item.date&&item.balanceCents===null)mismatches.push({startIndex:item.index,endIndex:item.index,rowIndexes:[item.index],previousDate:'',date:item.date,expectedCents:0,actualCents:0,differenceCents:0,page:item.row?.page||'',missingBalance:true});
+      if(item.row?.balanceMovementUnreadable||item.balanceCents!==null&&item.amountCents===null)mismatches.push({startIndex:item.index,endIndex:item.index,rowIndexes:[item.index],previousIndex:null,currentIndex:item.index,previousDate:'',date:item.date,expectedCents:item.balanceCents??0,actualCents:item.balanceCents??0,differenceCents:0,page:item.row?.page||'',unreadableMovement:true});
+      else if(item.row?.balanceExpected&&item.date&&item.balanceCents===null)mismatches.push({startIndex:item.index,endIndex:item.index,rowIndexes:[item.index],previousIndex:null,currentIndex:item.index,previousDate:'',date:item.date,expectedCents:0,actualCents:0,differenceCents:0,page:item.row?.page||'',missingBalance:true});
     }
     let previous=null,pending=[],leading=[],checkedSegments=0,checkpointCount=0;
     for(const item of items){
@@ -193,13 +193,13 @@
         const segmentRows=pending.map(entry=>entry.index),hasUnknownMovement=pending.some(entry=>entry.amountCents===null);
         if(pending.length&&!hasUnknownMovement){
           checkedSegments++;const expected=previous.balanceCents+pending.reduce((sum,entry)=>sum+entry.amountCents,0),difference=item.balanceCents-expected;
-          if(difference!==0)mismatches.push({startIndex:segmentRows[0],endIndex:item.index,rowIndexes:segmentRows,previousDate:previous.date,date:item.date,expectedCents:expected,actualCents:item.balanceCents,differenceCents:difference,page:item.row?.page||''});
+          if(difference!==0)mismatches.push({startIndex:segmentRows[0],endIndex:item.index,rowIndexes:segmentRows,previousIndex:previous.index,currentIndex:item.index,previousDate:previous.date,date:item.date,expectedCents:expected,actualCents:item.balanceCents,differenceCents:difference,page:item.row?.page||''});
         }
       }else{
         const openingItem=leading.find(entry=>bankValueCents(entry.row?.openingBalance)!==null),opening=bankValueCents(openingItem?.row?.openingBalance),leadingRows=leading,hasUnknownMovement=leadingRows.some(entry=>entry.amountCents===null);
         if(opening!==null&&leadingRows.length&&!hasUnknownMovement){
           checkedSegments++;const expected=opening+leadingRows.reduce((sum,entry)=>sum+entry.amountCents,0),difference=item.balanceCents-expected;
-          if(difference!==0)mismatches.push({startIndex:leadingRows[0].index,endIndex:item.index,rowIndexes:leadingRows.map(entry=>entry.index),previousDate:'',date:item.date,expectedCents:expected,actualCents:item.balanceCents,differenceCents:difference,page:item.row?.page||''});
+          if(difference!==0)mismatches.push({startIndex:leadingRows[0].index,endIndex:item.index,rowIndexes:leadingRows.map(entry=>entry.index),previousIndex:openingItem?.index??null,currentIndex:item.index,previousDate:'',date:item.date,expectedCents:expected,actualCents:item.balanceCents,differenceCents:difference,page:item.row?.page||''});
         }
       }
       previous=item;pending=[];leading=[];
@@ -356,13 +356,13 @@
         const details=[inlineDateDetail,primary?.text,...extraLines.map(line=>line.text)].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
         const balanceLine=items.filter(line=>line.x>=upper&&line.x<header.balanceX+Math.max(35,(header.balanceWidth||0)*1.5)&&Math.abs(line.y-movement.line.y)<=Math.max(18,(header.headerHeight||0)*0.8)).sort((a,b)=>Math.abs(a.y-movement.line.y)-Math.abs(b.y-movement.line.y))[0],balanceValue=balanceLine?readMoney(balanceLine.text):null;
         const value=Math.abs(movement.value),payment=movement.kind==='payment'?value:'',receipt=movement.kind==='receipt'?value:'';
-        output.push({date:iso,details:details||'Bank transaction',receipt,payment,balance:balanceValue??'',balanceExpected:true,amount:movement.kind==='receipt'?value:-value,source,page,confidence:'Barclays labelled OCR columns',review:true});
+        output.push({date:iso,details:details||'Bank transaction',receipt,payment,balance:balanceValue??'',balanceExpected:true,amount:movement.kind==='receipt'?value:-value,source,page,ocrY:Number(movement.line.y)||0,balanceY:Number(balanceLine?.y)||Number(movement.line.y)||0,confidence:'Barclays labelled OCR columns',review:true});
       }
       for(const dateRecord of dates){
         if(usedDateLines.has(dateRecord.line))continue;
         const balanceLine=items.filter(line=>line.x>=upper&&line.x<header.balanceX+Math.max(35,(header.balanceWidth||0)*1.5)&&Math.abs(line.y-dateRecord.line.y)<=Math.max(Number(dateRecord.line.height)||0,Number(header.headerHeight)||0)*0.8).sort((a,b)=>Math.abs(a.y-dateRecord.line.y)-Math.abs(b.y-dateRecord.line.y))[0],balanceValue=balanceLine?readMoney(balanceLine.text):null;
         const {day,month}=dateRecord.parsed;let year=context?.endYear||Number(String(text).match(/\b(20\d{2})\b/)?.[1])||new Date().getFullYear();if(context?.startMonth&&context?.endMonth)year=(context.startMonth>context.endMonth&&month>=context.startMonth)?(context.startYear||year):context.endYear||year;else if(context?.endYear){const statementMatch=String(text).match(/statement\s+date\s+(\d{1,2})\s+([A-Za-z]{3,9})\s+(20\d{2})/i),statementMonth=statementMatch?months[statementMatch[2].slice(0,3).toLowerCase()]:0;if(statementMonth&&statementMonth<=2&&month>=10)year=context.endYear-1;}
-        const iso=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`,detail=items.filter(line=>line.x>=dateBoundary&&line.x<descriptionBoundary&&Math.abs(line.y-dateRecord.line.y)<=Math.max(Number(dateRecord.line.height)||0,Number(header.headerHeight)||0)).map(line=>line.text).filter(value=>value!==dateRecord.line.text).join(' ').trim();output.push({date:iso,details:detail||'Transaction amount not read',receipt:'',payment:'',amount:'',balance:balanceValue??'',balanceExpected:true,source,page,confidence:'REJECTED',review:true,balanceMovementUnreadable:true});
+        const iso=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`,detail=items.filter(line=>line.x>=dateBoundary&&line.x<descriptionBoundary&&Math.abs(line.y-dateRecord.line.y)<=Math.max(Number(dateRecord.line.height)||0,Number(header.headerHeight)||0)).map(line=>line.text).filter(value=>value!==dateRecord.line.text).join(' ').trim();output.push({date:iso,details:detail||'Transaction amount not read',receipt:'',payment:'',amount:'',balance:balanceValue??'',balanceExpected:true,source,page,ocrY:Number(dateRecord.line.y)||0,balanceY:Number(balanceLine?.y)||Number(dateRecord.line.y)||0,confidence:'REJECTED',review:true,balanceMovementUnreadable:true});
       }
     }
     return output;
@@ -381,7 +381,7 @@
       for(let i=0;i<movements.length;i++){
         const movement=movements[i],dateLine=[...dates].reverse().find(d=>d.y<=movement.y+8);if(!dateLine)continue;const date=cleanDate(dateLine.text);if(!date)continue;
         const nextY=movements[i+1]?.y??(movement.y+90),detailLines=pageLines.filter(l=>l.x>=160&&l.x<420&&l.y>=movement.y-5&&l.y<nextY-2).sort((a,b)=>a.y-b.y),detail=detailLines.map(l=>l.text).join(' ').replace(/\s+/g,' ').trim();
-        output.push({date,details:detail||'Bank transaction',receipt:movement.kind==='receipt'?movement.value:'',payment:movement.kind==='payment'?movement.value:'',amount:movement.kind==='receipt'?movement.value:-movement.value,source,page:movement.page||1,confidence:'Review OCR row',review:true});
+        output.push({date,details:detail||'Bank transaction',receipt:movement.kind==='receipt'?movement.value:'',payment:movement.kind==='payment'?movement.value:'',amount:movement.kind==='receipt'?movement.value:-movement.value,source,page:movement.page||1,ocrY:Number(movement.y)||0,balanceY:Number(movement.y)||0,confidence:'Review OCR row',review:true});
       }
     }
     const opening=bankOpeningBalance(`${text}\n${ocrLines.map(line=>line?.text||'').join('\n')}`);if(output.length&&opening!==null)output[0].openingBalance=opening;return output;

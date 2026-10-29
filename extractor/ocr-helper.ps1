@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Path,[string]$Password='',[double]$Scale=2.5,[string]$PageList='',[string]$FocusPageList='',[string]$DairyFooterRows='[]')
+param([Parameter(Mandatory=$true)][string]$Path,[string]$Password='',[double]$Scale=2.5,[string]$PageList='',[string]$FocusPageList='',[string]$DairyFooterRows='[]',[string]$BankRetryRegions='[]')
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -386,29 +386,43 @@ try {
   if($PageList){$pageIndexes=@($PageList.Split(',')|ForEach-Object{[int]$n=0;if([int]::TryParse($_,[ref]$n)-and $n -ge 1 -and $n -le $pdf.PageCount){$n-1}}|Sort-Object -Unique)}else{$pageIndexes=@(0..($pdf.PageCount-1))}
   $focusPageNumbers=@($FocusPageList.Split([char]44)|ForEach-Object{[int]$n=0;if([int]::TryParse($_,[ref]$n)-and $n -ge 1 -and $n -le $pdf.PageCount){$n}}|Sort-Object -Unique)
   $dairyFooterRows=@();try{$dairyFooterRows=@($DairyFooterRows|ConvertFrom-Json)}catch{$dairyFooterRows=@()}
+  $bankRetryRegions=@();try{$bankRetryRegions=@($BankRetryRegions|ConvertFrom-Json)}catch{$bankRetryRegions=@()}
   $processedPageCount=0
   foreach($index in $pageIndexes) {
     $page=$pdf.GetPage($index)
     $pageLines=New-Object System.Collections.Generic.List[object]
     $stream=New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
-    # Higher rendering resolution preserves small decimal marks and digits.
+    # A bank reconciliation retry rereads only the printed vertical interval
+    # between the last confirmed balance and the first mismatched one.
+    $bankRegion=$bankRetryRegions|Where-Object{[int]$_.page -eq ($index+1)}|Select-Object -First 1
+    $regionTop=0.0
     $options=New-Object Windows.Data.Pdf.PdfPageRenderOptions
-    $options.DestinationWidth=[uint32]([math]::Round($page.Size.Width*$Scale))
-    $options.DestinationHeight=[uint32]([math]::Round($page.Size.Height*$Scale))
+    if($bankRegion){
+      $regionTop=[math]::Max(0.0,[double]$bankRegion.top)
+      $regionBottom=[math]::Min([double]$page.Size.Height*2.0,[double]$bankRegion.bottom)
+      $sourceTop=$regionTop/2.0;$sourceHeight=[math]::Max(1.0,($regionBottom-$regionTop)/2.0)
+      $options.SourceRect=[Windows.Foundation.Rect]::new(0.0,$sourceTop,[double]$page.Size.Width,$sourceHeight)
+      $options.DestinationWidth=[uint32]([math]::Round($page.Size.Width*$Scale))
+      $options.DestinationHeight=[uint32]([math]::Max(1,[math]::Round($sourceHeight*$Scale)))
+    }else{
+      # Higher rendering resolution preserves small decimal marks and digits.
+      $options.DestinationWidth=[uint32]([math]::Round($page.Size.Width*$Scale))
+      $options.DestinationHeight=[uint32]([math]::Round($page.Size.Height*$Scale))
+    }
     Await($page.RenderToStreamAsync($stream,$options)) | Out-Null
     $stream.Seek(0)
     $decoder=Await ([Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime])
     $bitmap=Await($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap,Windows.Graphics,ContentType=WindowsRuntime])
     $result=Await($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult,Windows.Media.Ocr,ContentType=WindowsRuntime])
     if($result.Text){$parts.Add($result.Text)}
-    foreach($line in $result.Lines){$words=@($line.Words);if($words.Count){$rect=$words[0].BoundingRect;$geometryScale=2.0/$Scale;$ocrLine=[pscustomobject]@{page=$index+1;text=$line.Text;x=[double]$rect.X*$geometryScale;y=[double]$rect.Y*$geometryScale;width=[double]$rect.Width*$geometryScale;height=[double]$rect.Height*$geometryScale;confidence=(Get-OcrLineConfidence $line)};$ocrLines.Add($ocrLine);$pageLines.Add($ocrLine)}}
+    foreach($line in $result.Lines){$words=@($line.Words);if($words.Count){$rect=$words[0].BoundingRect;$geometryScale=2.0/$Scale;$ocrY=if($bankRegion){$regionTop+[double]$rect.Y*$geometryScale}else{[double]$rect.Y*$geometryScale};$ocrLine=[pscustomobject]@{page=$index+1;text=$line.Text;x=[double]$rect.X*$geometryScale;y=$ocrY;width=[double]$rect.Width*$geometryScale;height=[double]$rect.Height*$geometryScale;confidence=(Get-OcrLineConfidence $line)};$ocrLines.Add($ocrLine);$pageLines.Add($ocrLine)}}
     $hasVisualContent=$pageLines.Count -gt 0
     if(-not $hasVisualContent){try{$hasVisualContent=(Get-SoftwareBitmapInkRatio $bitmap) -ge 0.012}catch{$hasVisualContent=$false}}
     if($hasVisualContent){$visualPages.Add($index+1)}
     # Some multi-page receipt scans rotate individual slips by 180 degrees.
     # Retry only sparse, nonblank pages at 5x, and map coordinates back to the
     # original page so the ordinary supplier parsers can still read totals.
-    if($Scale -ge 4.5 -and $hasVisualContent -and $pageLines.Count -lt 5){
+    if(-not $bankRegion -and $Scale -ge 4.5 -and $hasVisualContent -and $pageLines.Count -lt 5){
       $drawingCopy=$null
       try{
         $drawingCopy=Copy-SoftwareBitmapToDrawingBitmap $bitmap
@@ -427,8 +441,8 @@ try {
     # Summary labels vary across scanned Maspo layouts: the printed text may
     # omit "in" or be read as "tn". Include all forms so the VAT cell gets its
     # dedicated 5x crop retry even when the full-page OCR label is imperfect.
-    $summaryLabels=@($pageLines.ToArray()|Where-Object{[string]$_.text -match '\btot[a-z]{0,2}\s+(?:(?:in|tn)\s+)?GBP\b'})
-    $closesInvoice=@($pageLines.ToArray()|Where-Object{[string]$_.text -match '^\s*total\s*:'}).Count -and @($pageLines.ToArray()|Where-Object{[string]$_.text -match '\bin\s+words\s*:'}).Count
+    $summaryLabels=if($bankRegion){@()}else{@($pageLines.ToArray()|Where-Object{[string]$_.text -match '\btot[a-z]{0,2}\s+(?:(?:in|tn)\s+)?GBP\b'})}
+    $closesInvoice=if($bankRegion){$false}else{@($pageLines.ToArray()|Where-Object{[string]$_.text -match '^\s*total\s*:'}).Count -and @($pageLines.ToArray()|Where-Object{[string]$_.text -match '\bin\s+words\s*:'}).Count}
     foreach($label in $summaryLabels){$candidates=@($pageLines.ToArray()|Where-Object{$_.y -ge ($label.y-18) -and $_.y -le ($label.y+190) -and $_.x -ge ($label.x+300) -and $_.x -le ($label.x+390) -and [string]$_.text -match '^[\s0-9OoMmEe\u00DF\u1E9E.,;:-]+$' -and [string]$_.text -match '\d|[OoMm]'});foreach($candidate in $candidates){$raw=[string]$candidate.text;if($raw -match '^\s*(?:0+(?:[.,;]0{1,2})?|[Oo][.,;]?[Oo]{0,2}|[Oo][Mm]|ODO)\s*$'){continue};if($raw -match '^\s*-?\d[\d\s,]*[.,]\s*\d{2}\s*$'){continue};if(-not $closesInvoice -and $raw -match '[.,;]' -and $raw -notmatch '[OoMm]'){continue};try{$improved=[string](Read-EnhancedVatCell $bitmap $Scale $candidate $engine $page);if($improved -match '^\s*[Oo]\s*$'){$candidate.text='0.00'}elseif($improved -match '^[\s0-9OoMmEe\u00DF\u1E9E.,;:-]+$' -and $improved -match '\d'){$candidate.text=$improved.Trim();if($candidate.text -match '^\s*0\s*$'){$candidate.text='0.00'}}}catch{}}
     }
     # On some long invoices the closing page's compact VAT table is legible
@@ -447,7 +461,7 @@ try {
     # Dairy Fresh repeats supplier artwork down the right edge, which makes full-page OCR
     # merge the amount column with its logo. On a requested 5x retry, scan only the closing
     # invoice page and only the compact printed footer region below the final product row.
-    if($Scale -ge 4.5 -and $focusPageNumbers -contains ($index+1)){
+    if(-not $bankRegion -and $Scale -ge 4.5 -and $focusPageNumbers -contains ($index+1)){
       # Use the left-hand product-description column to find the last item.
       # Quantity digits and stray watermark marks in the right columns can sit
       # below the footer, so they must not move the crop start past the totals.
@@ -490,7 +504,7 @@ try {
     # `VAT Total` footer row. On the 5x retry, enlarge only that footer cell if
     # full-page OCR missed it; never substitute a product VAT rate or derive it.
     $peterboroughText=($pageLines.ToArray()|ForEach-Object{[string]$_.text}) -join ' '
-    if($Scale -ge 4.5 -and $peterboroughText -match 'Peterborough\s+Bazaar|pbazaar\.co\.uk|104\s*2318\s*66'){
+    if(-not $bankRegion -and $Scale -ge 4.5 -and $peterboroughText -match 'Peterborough\s+Bazaar|pbazaar\.co\.uk|104\s*2318\s*66'){
       $footerVatLabels=@($pageLines.ToArray()|Where-Object{[string]$_.text -match '^\s*VAT\s+Total\s*:?\s*$' -and [double]$_.x -gt 1000 -and [double]$_.y -gt 1800})
       foreach($label in $footerVatLabels){
         $nearby=@($pageLines.ToArray()|Where-Object{$_.page -eq $label.page -and [math]::Abs([double]$_.y-[double]$label.y) -le 32 -and [double]$_.x -ge ([double]$label.x+140) -and [string]$_.text -match '\d'}|Sort-Object {[math]::Abs([double]$_.y-[double]$label.y)}|Select-Object -First 1)
@@ -518,7 +532,7 @@ try {
     # only that total cell at 5x and replace it only with a complete printed
     # amount. BALANCE and G TOTAL are deliberately outside this search.
     $shahidText=($pageLines.ToArray()|ForEach-Object{[string]$_.text}) -join ' '
-    if($Scale -ge 4.5 -and ($shahidText -match 'SHAH[I]D\s+HALAL\s+POULTRY|SHAHD\s+HALAL\s+POULTRY|SAAHID\s+HALAL\s+POULTRY|07973\s*658\s*417|159\s*5722\s*76')){
+    if(-not $bankRegion -and $Scale -ge 4.5 -and ($shahidText -match 'SHAH[I]D\s+HALAL\s+POULTRY|SHAHD\s+HALAL\s+POULTRY|SAAHID\s+HALAL\s+POULTRY|07973\s*658\s*417|159\s*5722\s*76')){
       $shahidTotalLabels=@($pageLines.ToArray()|Where-Object{[string]$_.text -match '^\s*TOTAL\s*:?\s*$' -and [double]$_.x -gt 850 -and [double]$_.y -gt 1900 -and [double]$_.y -lt 2700})
       foreach($label in $shahidTotalLabels){
         $amountCells=@($pageLines.ToArray()|Where-Object{$_.page -eq $label.page -and [math]::Abs([double]$_.y-[double]$label.y) -le 28 -and [double]$_.x -ge ([double]$label.x+100) -and [string]$_.text -match '\d'}|Sort-Object {[math]::Abs([double]$_.y-[double]$label.y)}|Select-Object -First 1)
@@ -542,7 +556,7 @@ try {
     # OCR that cell separately so a clear printed 223,26 is not left as an
     # ambiguous `22S,Ã¤6`. Only replace the original text when the focused scan
     # returns a complete amount with two decimal digits.
-    if($Scale -ge 4.5){
+    if(-not $bankRegion -and $Scale -ge 4.5){
       $wzTotals=@($pageLines.ToArray()|Where-Object{[string]$_.text -match '^\s*total\s*$' -and [double]$_.y -lt 360})
       foreach($label in $wzTotals){
         $candidates=@($pageLines.ToArray()|Where-Object{$_.page -eq $label.page -and [math]::Abs([double]$_.y-[double]$label.y) -le 38 -and [double]$_.x -ge ([double]$label.x+180) -and [double]$_.x -lt 2050 -and ([string]$_.text).Length -le 16 -and [string]$_.text -match '\d' -and [string]$_.text -notmatch '[A-Za-z]{3,}'}|Sort-Object {[double]$_.x})
@@ -563,7 +577,7 @@ try {
     # (for example `.26` from `Â£31.26`), so rescan that exact printed amount
     # cell from the 5x page render. Never derive the receipt total from the
     # separate supplier totals below it.
-    if($Scale -ge 4.5 -and @($pageLines.ToArray()|Where-Object{[string]$_.text -match '\b(?:MFG|MOTOR\s+FUEL)\b'}).Count -and @($pageLines.ToArray()|Where-Object{[string]$_.text -match '\b(?:UNLEADED|DIESEL)\b'}).Count){
+    if(-not $bankRegion -and $Scale -ge 4.5 -and @($pageLines.ToArray()|Where-Object{[string]$_.text -match '\b(?:MFG|MOTOR\s+FUEL)\b'}).Count -and @($pageLines.ToArray()|Where-Object{[string]$_.text -match '\b(?:UNLEADED|DIESEL)\b'}).Count){
       $mfgTotalLabels=@($pageLines.ToArray()|Where-Object{
         $labelText=[regex]::Replace([string]$_.text,'[^A-Za-z0-9]','').ToUpperInvariant()
         [double]$_.x -lt 300 -and [double]$_.y -gt 550 -and [double]$_.y -lt 1050 -and $labelText.Length -ge 4 -and $labelText.Length -le 7 -and $labelText.StartsWith('TO')
@@ -581,7 +595,7 @@ try {
     # joins its label to the amount (for example `TO r AL` and `€30.01`). On
     # the single high-resolution retry, rescan the compact receipt-total band
     # beside the pump line and retain its original page coordinates.
-    if($Scale -ge 4.5){
+    if(-not $bankRegion -and $Scale -ge 4.5){
       $fuelRows=@($pageLines.ToArray()|Where-Object{$fuelText=([regex]::Replace([string]$_.text,'[^A-Za-z0-9]','')).ToUpperInvariant();$fuelText -match 'UN[I1]?LEADED|DIESEL|PETROL' -and $fuelText -notmatch 'PETROLEUM'}|Sort-Object {[double]$_.y})
       if($fuelRows.Count){$fuelY=[double]$fuelRows[0].y;$focus=Read-EnhancedReceiptRegion $bitmap $Scale 0 ($fuelY+70) 800 200 $engine $page;if($focus.Text){$parts.Add($focus.Text);foreach($line in $focus.Lines){$line.page=$index+1;$pageLines.Add($line);$ocrLines.Add($line)}}
         $totalCell=[pscustomobject]@{x=400.0;y=$fuelY+105.0;width=400.0;height=65.0};try{$printedTotal=[string](Read-EnhancedVatCell $bitmap $Scale $totalCell $engine $page);if($printedTotal -match '^\s*\D?\s*\d[\d\s,]*[.,]\s*\d{2}\s*\D?\s*$'){$focusedAmount=[pscustomobject]@{page=$index+1;text=$printedTotal.Trim();x=500.0;y=$fuelY+135.0;width=130.0;height=28.0};$pageLines.Add($focusedAmount);$ocrLines.Add($focusedAmount)}}catch{}
