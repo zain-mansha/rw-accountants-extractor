@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' fareextractor://app blob: data:; script-src 'self' fareextractor://app 'unsafe-inline'; style-src 'self' fareextractor://app 'unsafe-inline'; object-src 'none'">
   <title>R&amp;W Accountants | Extractor</title>
-  <link rel="stylesheet" href="fareextractor://app/styles.css?v=1.1.11-build-label">
+  <link rel="stylesheet" href="fareextractor://app/styles.css?v=1.1.12-build-label">
 </head>
 <body>
   <section id="workspace-login" class="workspace-login">
@@ -15,7 +15,7 @@
         <span class="eyebrow">DOCUMENT WORKSPACE</span>
         <h1>Good work starts<br>with clear records.</h1>
         <p>Choose your workspace to process statements, invoices and receipts on this computer.</p>
-        <div class="login-assurance"><span class="assurance-icon">âœ“</span><div><strong>Stored separately for each username</strong><span>PDFs are processed locally and never uploaded.</span></div></div>
+        <div class="login-assurance"><span class="assurance-icon">OK</span><div><strong>Stored separately for each username</strong><span>PDFs are processed locally and never uploaded.</span></div></div>
       </div>
       <div class="login-card">
         <div class="login-card-heading"><span class="eyebrow">SIGN IN</span><h2>Welcome back</h2><p>Use your username to open your workspace.</p></div>
@@ -24,13 +24,13 @@
           <div class="login-field-row"><input id="workspace-username" name="username" maxlength="40" autocomplete="username" placeholder="Enter your username" required><button class="button primary" type="submit">Continue</button></div>
         </form>
         <div id="workspace-feedback" class="workspace-feedback" role="status" hidden></div>
-        <button id="workspace-create" class="create-workspace" type="button">ï¼‹ Create a new user</button>
+        <button id="workspace-create" class="create-workspace" type="button">+ Create a new user</button>
         <div class="workspace-divider"><span>OR OPEN A RECENT WORKSPACE</span></div>
-        <div id="workspace-list" class="workspace-list"><p class="workspace-empty">Loading workspacesâ€¦</p></div>
+        <div id="workspace-list" class="workspace-list"><p class="workspace-empty">Loading workspaces...</p></div>
         <p class="login-footnote">No password is used. Usernames separate local workspaces; they are not security credentials.</p>
       </div>
     </div>
-    <div class="login-footer">R&amp;W Accountants <span>Â·</span> Extractor <span>Â·</span> Local document processing</div>
+    <div class="login-footer">R&amp;W Accountants <span> | </span> Extractor <span> | </span> Local document processing</div>
   </section>
 
   <div id="app-workspace" class="app-shell" hidden>
@@ -38,22 +38,22 @@
       <div class="sidebar-brand"><span class="brand-mark">R&amp;W</span><div><strong>R&amp;W Accountants</strong><small>EXTRACTOR</small></div></div>
       <div class="sidebar-section-label">YOUR WORKSPACE</div>
       <nav class="modes" aria-label="Workspace">
-        <button class="mode active" data-mode="bank"><span class="nav-icon">â†”</span><span><strong>Bank statements</strong><small>Transactions and balances</small></span></button>
-        <button class="mode" data-mode="invoice"><span class="nav-icon">â–¤</span><span><strong>Invoices</strong><small>Supplier documents</small></span></button>
-        <button class="mode" data-mode="receipt"><span class="nav-icon">â–§</span><span><strong>Fuel receipts</strong><small>Receipt totals and dates</small></span></button>
-        <button class="mode" data-mode="companies"><span class="nav-icon">â—«</span><span><strong>Compatible companies</strong><small>Banks and suppliers</small></span></button>
-        <button class="mode" data-mode="vt-import"><span class="nav-icon">â‡¥</span><span><strong>VT Import</strong><small>Prepare split entries</small></span></button>
+        <button class="mode active" data-mode="bank"><span class="nav-icon">BS</span><span><strong>Bank statements</strong><small>Transactions and balances</small></span></button>
+        <button class="mode" data-mode="invoice"><span class="nav-icon">IN</span><span><strong>Invoices</strong><small>Supplier documents</small></span></button>
+        <button class="mode" data-mode="receipt"><span class="nav-icon">FR</span><span><strong>Fuel receipts</strong><small>Receipt totals and dates</small></span></button>
+        <button class="mode" data-mode="companies"><span class="nav-icon">CO</span><span><strong>Compatible companies</strong><small>Banks and suppliers</small></span></button>
+        <button class="mode" data-mode="vt-import"><span class="nav-icon">VT</span><span><strong>VT Import</strong><small>Prepare split entries</small></span></button>
       </nav>
       <div class="sidebar-spacer"></div>
       <div class="sidebar-local"><span class="local-dot"></span><div><strong>Private by design</strong><small>Files stay on this computer</small></div></div>
-      <div class="sidebar-user"><span id="workspace-avatar" class="avatar">U</span><div class="sidebar-user-copy"><strong id="workspace-username-label">Workspace</strong><small>Local user space</small></div><button id="switch-workspace" class="switch-user" type="button" title="Switch user" aria-label="Switch user">â‡„</button></div>
+      <div class="sidebar-user"><span id="workspace-avatar" class="avatar">U</span><div class="sidebar-user-copy"><strong id="workspace-username-label">Workspace</strong><small>Local user space</small></div><button id="switch-workspace" class="switch-user" type="button" title="Switch user" aria-label="Switch user">SW</button></div>
     </aside>
 
     <main class="main-content">
-      <header class="topbar"><div><span class="topbar-kicker">R&amp;W ACCOUNTANTS Â· EXTRACTOR</span><div class="topbar-title">Your workbench</div></div><div class="topbar-right"><span id="build-info" class="build-info" role="status" aria-label="Application version">Checking versionâ€¦</span><span class="local-pill"><i></i>Ready on this device</span></div></header>
+      <header class="topbar"><div><span class="topbar-kicker">R&amp;W ACCOUNTANTS  |  EXTRACTOR</span><div class="topbar-title">Your workbench</div></div><div class="topbar-right"><span id="build-info" class="build-info" role="status" aria-label="Application version">Checking version...</span><span class="local-pill"><i></i>Ready on this device</span></div></header>
       <div class="content-area">
-        <section class="hero"><div><span class="eyebrow">EXTRACT Â· REVIEW Â· EXPORT</span><h1>Turn paperwork into<br>work you can use.</h1><p>Choose a document type, add your PDFs, review the extracted details and save a workbook.</p></div><div class="privacy"><span class="privacy-icon">âŒ‚</span><div><strong>Processed on this computer</strong><span>Your documents stay in your control.</span></div></div></section>
-        <div id="pdf-workspace"><section class="card upload-card"><div id="drop" class="drop"><div class="drop-icon">â†‘</div><h2 id="drop-title">Add bank statements</h2><p id="drop-copy">Drop selectable-text PDFs or bank transaction CSV exports here. CSV works when a statement PDF needs a password.</p><label id="choose-files-label" class="button primary" for="files">Choose PDF or CSV files</label><input id="files" type="file" accept="application/pdf,.pdf,.csv,text/csv" multiple></div><div id="file-list" class="file-list"></div><div class="actions"><button id="extract" class="button primary" disabled>Extract and review</button><button id="clear" class="button" disabled>Clear files</button></div><div id="progress-panel" class="progress-panel" hidden aria-live="polite"><div class="progress-meta"><span id="progress-label">Preparingâ€¦</span><span id="progress-count">0 / 0</span></div><progress id="progress-bar" max="100" value="0">0%</progress></div></section><section id="result" class="result" hidden></section></div>
+        <section class="hero"><div><span class="eyebrow">EXTRACT  |  REVIEW  |  EXPORT</span><h1>Turn paperwork into<br>work you can use.</h1><p>Choose a document type, add your PDFs, review the extracted details and save a workbook.</p></div><div class="privacy"><span class="privacy-icon">OK</span><div><strong>Processed on this computer</strong><span>Your documents stay in your control.</span></div></div></section>
+        <div id="pdf-workspace"><section class="card upload-card"><div id="drop" class="drop"><div class="drop-icon">&#8593;</div><h2 id="drop-title">Add bank statements</h2><p id="drop-copy">Drop selectable-text PDFs or bank transaction CSV exports here. CSV works when a statement PDF needs a password.</p><label id="choose-files-label" class="button primary" for="files">Choose PDF or CSV files</label><input id="files" type="file" accept="application/pdf,.pdf,.csv,text/csv" multiple></div><div id="file-list" class="file-list"></div><div class="actions"><button id="extract" class="button primary" disabled>Extract and review</button><button id="clear" class="button" disabled>Clear files</button></div><div id="progress-panel" class="progress-panel" hidden aria-live="polite"><div class="progress-meta"><span id="progress-label">Preparing...</span><span id="progress-count">0 / 0</span></div><progress id="progress-bar" max="100" value="0">0%</progress></div></section><section id="result" class="result" hidden></section></div>
         <section id="vt-workspace" class="vt-workspace" hidden>
           <section class="card vt-import-card"><div class="vt-intro"><div><span class="eyebrow">VT UNIVERSAL INPUT</span><h2>Prepare a VT paste sheet</h2><p>Upload an Extractor invoice or fuel receipt workbook. Review accepted and rejected rows before creating the VT paste sheet. Fuel receipts split fuel and drawings where needed.</p></div><div class="vt-privacy"><strong>Processed on this computer</strong><span>The uploaded workbook is not sent anywhere.</span></div></div>
             <div class="vt-file-row"><label class="button primary" for="vt-file">Choose Excel workbook</label><input id="vt-file" type="file" accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12"><span id="vt-file-name">No workbook selected</span><button id="vt-clear" class="button" disabled>Clear</button></div>
@@ -62,7 +62,7 @@
           <section id="vt-review" class="vt-review" hidden></section>
         </section>
         <section id="companies-workspace" class="companies-workspace" hidden><div class="companies-head"><span class="eyebrow">SUPPORTED DOCUMENT FORMATS</span><h2>Compatible banks and suppliers</h2><p>Bank statements are read from supported transaction layouts. Invoice and receipt profiles identify supplier-specific document formats.</p></div><div id="compatible-companies" class="company-groups"></div></section>
-        <footer>R&amp;W Accountants Â· Extractor <span>Â·</span> Local PDF extraction <span>Â·</span> Scanned PDFs use Windows OCR when available</footer>
+        <footer>R&amp;W Accountants  |  Extractor <span> | </span> Local PDF extraction <span> | </span> Scanned PDFs use Windows OCR when available</footer>
       </div>
     </main>
   </div>
