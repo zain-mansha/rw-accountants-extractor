@@ -386,7 +386,9 @@ try {
   if($PageList){$pageIndexes=@($PageList.Split(',')|ForEach-Object{[int]$n=0;if([int]::TryParse($_,[ref]$n)-and $n -ge 1 -and $n -le $pdf.PageCount){$n-1}}|Sort-Object -Unique)}else{$pageIndexes=@(0..($pdf.PageCount-1))}
   $focusPageNumbers=@($FocusPageList.Split([char]44)|ForEach-Object{[int]$n=0;if([int]::TryParse($_,[ref]$n)-and $n -ge 1 -and $n -le $pdf.PageCount){$n}}|Sort-Object -Unique)
   $dairyFooterRows=@();try{$dairyFooterRows=@($DairyFooterRows|ConvertFrom-Json)}catch{$dairyFooterRows=@()}
-  $bankRetryRegions=@();try{$bankRetryRegions=@($BankRetryRegions|ConvertFrom-Json)}catch{$bankRetryRegions=@()}
+  # PowerShell variable names are case-insensitive. Keep the parsed regions in
+  # a separate variable so this does not overwrite the BankRetryRegions input.
+  $parsedBankRetryRegions=$null;try{$parsedBankRetryRegions=ConvertFrom-Json -InputObject $BankRetryRegions}catch{$parsedBankRetryRegions=$null}
   $processedPageCount=0
   foreach($index in $pageIndexes) {
     $page=$pdf.GetPage($index)
@@ -394,13 +396,15 @@ try {
     $stream=New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
     # A bank reconciliation retry rereads only the printed vertical interval
     # between the last confirmed balance and the first mismatched one.
-    $bankRegion=$bankRetryRegions|Where-Object{[int]$_.page -eq ($index+1)}|Select-Object -First 1
+    $bankRegion=$parsedBankRetryRegions|Where-Object{[int]$_.page -eq ($index+1)}|Select-Object -First 1
     $regionTop=0.0
     $options=New-Object Windows.Data.Pdf.PdfPageRenderOptions
     if($bankRegion){
       $regionTop=[math]::Max(0.0,[double]$bankRegion.top)
       $regionBottom=[math]::Min([double]$page.Size.Height*2.0,[double]$bankRegion.bottom)
-      $sourceTop=$regionTop/2.0;$sourceHeight=[math]::Max(1.0,($regionBottom-$regionTop)/2.0)
+      # SourceRect uses the PDF renderer's 1.25× page-unit scale while OCR
+      # line coordinates are mapped back with 2/Scale below.
+      $sourceTop=$regionTop/2.5;$sourceHeight=[math]::Max(1.0,($regionBottom-$regionTop)/2.5)
       $options.SourceRect=[Windows.Foundation.Rect]::new(0.0,$sourceTop,[double]$page.Size.Width,$sourceHeight)
       $options.DestinationWidth=[uint32]([math]::Round($page.Size.Width*$Scale))
       $options.DestinationHeight=[uint32]([math]::Max(1,[math]::Round($sourceHeight*$Scale)))

@@ -3,6 +3,18 @@ const zlib=require('node:zlib');
 const XLSX=require('../dist/vendor/xlsx.full.min.js');
 const VT=require('../extractor/vt-export.js');
 const VTImport=require('../extractor/vt-import.js');
+test('Extractor build version and fingerprint are wired to the visible top-bar label',()=>{
+  const root=path.resolve(__dirname,'..');
+  const html=fs.readFileSync(path.join(root,'extractor','index.html'),'utf8');
+  const app=fs.readFileSync(path.join(root,'extractor','app.js'),'utf8');
+  const main=fs.readFileSync(path.join(root,'extractor','main.cjs'),'utf8');
+  const version=JSON.parse(fs.readFileSync(path.join(root,'extractor','package.json'),'utf8')).version;
+  assert.equal(version,'1.1.10');
+  assert.match(html,/<span id="build-info" class="build-info"[^>]*>Checking version/);
+  assert.match(app,/label\.textContent=version\?`v\$\{version\}/);
+  assert.match(app,/commit\.slice\(0,12\)/);
+  assert.match(main,/ipcMain\.handle\('app-build-info'/);
+});
 test('PDF page links use absolute, Excel-safe file URLs',()=>{
   assert.equal(P.pdfFileUrl('C:\\Users\\Zain M\\Invoices\\fuel #1.pdf',46),'file:///C:/Users/Zain%20M/Invoices/fuel%20%231.pdf#page=46');
   assert.equal(P.pdfFileUrl('\\\\server\\share name\\invoice.pdf',3),'file://server/share%20name/invoice.pdf#page=3');
@@ -41,6 +53,8 @@ test('Eagle Foods uses invoice pages only and statement rows only confirm existi
   const parse=lines=>P.parseInvoiceBatch(lines.map(item=>item.text).join('\n'),'Eagle Foods.pdf',lines);
   const [confirmed]=parse([...invoice,...statement]);
   assert.deepEqual([confirmed.invoiceNumber,confirmed.originalInvoiceNumber,confirmed.date,confirmed.accountCode,confirmed.supplier,confirmed.total,confirmed.vat,confirmed.status,confirmed.sourcePages],['3871','143871','2026-08-31','CMKL','Eagle Foods Ltd',1880.4,52.51,'ACCEPTED',[1]]);
+  const [missingNumber]=parse([...invoice.filter(item=>item.text!=='143871'),...statement]);
+  assert.equal(missingNumber.status,'REJECTED');assert.equal(missingNumber.invoiceNumber,'','a matching statement total must not supply an unreadable invoice number');
   assert.deepEqual(parse(statement),[],'a statement summary must never create an invoice row');
   assert.deepEqual(P.parseInvoiceBatch(statement.map(item=>item.text).join(' '),'statement-only.pdf'),[],'text-only statement pages must also be skipped');
   assert.deepEqual(parse([line(3,'Eagle Foods Ltd terms and conditions',80,20),line(3,'Interpretation and definitions',80,80)]),[],'terms pages are not invoices');
@@ -54,6 +68,119 @@ test('Eagle Foods explicit invoice summary handles zero VAT and duplicate invoic
     line(page,'Eagle Foods Ltd',80,20),line(page,'Invoice To:',80,70),line(page,'Account No:',100,120),line(page,'CMKL',300,120),line(page,'Invoice No:',100,180),line(page,'141787',300,180),line(page,'Invoice Date:',900,180),line(page,'02-AUG-26',1120,180),line(page,'Net Total',1200,800),line(page,'37.16',1400,840),line(page,'VAT Total',1500,800),line(page,'0.00',1680,840),line(page,'Invoice Total',1800,800),line(page,'37.16',2000,840)
   ],pages=[...make(1),...make(2)],rows=P.parseInvoiceBatch(pages.map(item=>item.text).join('\n'),'Eagle Foods modern.pdf',pages);
   assert.equal(rows.length,1);assert.deepEqual([rows[0].invoiceNumber,rows[0].date,rows[0].accountCode,rows[0].total,rows[0].vat,rows[0].status,rows[0].sourcePages],['1787','2026-08-02','CMKL',37.16,0,'ACCEPTED',[1,2]]);
+});
+test('Eagle Foods defers invoice summaries and fills gaps from a unique two- or three-digit invoice suffix',()=>{
+  const line=(page,text,x,y,width=String(text).length*9)=>({page,text,x,y,width,height:20,confidence:1});
+  const invoice=(reference,page=1,includeAmounts=false,date='01-SEP-26')=>[
+    line(page,'EAGLEFOODS',80,20,150),line(page,'Invoice To:',80,80),line(page,'Account No:',100,120),line(page,'CMKL',300,120),line(page,'Invoice No:',100,180),line(page,reference,300,180),line(page,'Order Date:',900,180),
+    ...(includeAmounts?[line(page,date,1100,180)]:[]),
+    ...(includeAmounts?[line(page,'VAT Total',1200,800),line(page,'0.00',1400,840),line(page,'Invoice Total',1600,800),line(page,'100.00',1800,840)]:[])
+  ];
+  const statement=(rows,page=2,statementDate='05/09/2026')=>[
+    line(page,'Eagle Foods Ltd',80,20),line(page,'Statement of Account',900,80),line(page,'Customer:',200,160),line(page,'CMKL - CHILLI MASTER (KINGS LYNN)',430,160),
+    line(page,'Statement Date:',80,260),line(page,statementDate,250,260),
+    line(page,'Document Date',200,400),line(page,'Document Type',420,400),line(page,'Document No',650,400),line(page,'Net',900,400),line(page,'VAT',1100,400),line(page,'Total',1300,400),line(page,'Balance',1500,400),line(page,'Due Date',1700,400),line(page,'Days Old',1900,400),line(page,'Amount Due',2100,400),
+    ...rows.flatMap((row,index)=>{const y=440+index*40;return [line(page,row.date,200,y),line(page,'Sales Invoice',420,y),line(page,row.number,650,y),line(page,row.net,900,y),line(page,row.vat,1100,y),line(page,row.total,1300,y),line(page,row.total,1500,y),line(page,'07-SEP-26',1700,y),line(page,'7',1900,y),line(page,row.total,2100,y)];})
+  ];
+  const parse=lines=>P.parseInvoiceBatch(lines.map(item=>item.text).join('\n'),'Eagle Foods new scans.pdf',lines),summary=[{date:'31-AUG-26',number:'144223',net:'1,958.02',vat:'35.30',total:'1,993.32'}];
+  const [threeDigit]=parse([...invoice('223'),...statement(summary)]);
+  assert.deepEqual([threeDigit.invoiceNumber,threeDigit.originalInvoiceNumber,threeDigit.date,threeDigit.total,threeDigit.vat,threeDigit.status,threeDigit.eagleSummaryConfirmed],['223','144223','2026-08-31',1993.32,35.3,'ACCEPTED',true],'a later summary links a unique three-digit invoice reference to its full document number while retaining the printed suffix');
+  const [twoDigit]=parse([...invoice('23'),...statement(summary)]);
+  assert.deepEqual([twoDigit.invoiceNumber,twoDigit.originalInvoiceNumber,twoDigit.status],['23','144223','ACCEPTED'],'two-digit suffixes can link when the document number is unique');
+  const grouped=parse([...invoice('223',1),...invoice('144223',2),...statement(summary,3)]);
+  assert.equal(grouped.length,1);assert.deepEqual([grouped[0].invoiceNumber,grouped[0].sourcePages],['223',[1,2]],'short and complete references for one document link before continuation pages are grouped');
+  const ambiguous=parse([...invoice('223'),...statement([...summary,{...summary[0],number:'154223',date:'01-SEP-26',total:'500.00',vat:'10.00'}])]);
+  assert.equal(ambiguous[0].status,'REJECTED');assert.equal(ambiguous[0].total,'');assert.match(ambiguous[0].rejectedReason,/not unique|more than one/i,'a short suffix matching two document numbers must not borrow summary values');
+  const [ambiguousRetryRow]=ambiguous,retryLines=[line(1,'EAGLEFOODS',80,20,150),line(1,'Invoice To:',80,80),line(1,'Account No:',100,120),line(1,'CMKL',300,120),line(1,'Invoice No:',100,180),line(1,'144223',300,180),line(1,'Order Date:',900,180),line(1,'31-AUG-26',1100,180),line(1,'VAT Total',1200,800),line(1,'35.30',1400,840),line(1,'Invoice Total',1600,800),line(1,'1,993.32',1800,840)], [retryCandidate]=parse(retryLines),matched=P.matchEagleRetryCandidate(ambiguousRetryRow,[retryCandidate]),merged=matched&&P.mergeInvoiceRetryCandidate(ambiguousRetryRow,matched);
+  assert.equal(matched,retryCandidate,'a 5x full document number can complete the same invoice page when it ends in the low-resolution suffix');
+  assert.deepEqual([merged.originalInvoiceNumber,merged.invoiceNumber,merged.eagleSummaryConfirmed,P.invoiceRetryAccepted(merged,retryCandidate,true)],['144223','4223',true,true],'the high-resolution reference resolves the summary ambiguity and is then checked against that exact document row');
+  const uniqueShort=parse([...invoice('23',1,true)]);
+  assert.deepEqual([uniqueShort[0].invoiceNumber,uniqueShort[0].status],['23','ACCEPTED'],'a complete short invoice reference is usable when unique in the batch');
+  const duplicateShort=parse([...invoice('23',1,true,'01-SEP-26'),...invoice('23',2,true,'02-SEP-26')]);
+  assert.ok(duplicateShort.length===2&&duplicateShort.every(row=>row.status==='REJECTED'&&/not unique/i.test(row.rejectedReason)),'a short reference repeated on separate invoices is rejected as ambiguous');
+  const older={...summary[0],total:'1,993.32',vat:'35.30'},newer={...summary[0],total:'2,010.00',vat:'40.00'},[latest]=parse([...invoice('223'),...statement([older],2,'04/09/2026'),...statement([newer],3,'05/09/2026')]);
+  assert.deepEqual([latest.originalInvoiceNumber,latest.date,latest.total,latest.vat,latest.status],['144223','2026-08-31',2010,40,'ACCEPTED'],'when summaries repeat a document with changing figures, use the newest statement for missing values');
+  const [noisyDate]=parse([...invoice('223'),...statement([{...summary[0],date:'04..SEp_26'}])]);
+  assert.equal(noisyDate.date,'2026-09-04','common OCR punctuation damage in a statement date should be normalized before matching');
+  const [crossFile]=parse(invoice('223'));crossFile.vat=0;crossFile.vatUnverified=true;crossFile.rejectedReason='placeholder VAT';
+  P.confirmEagleInvoiceRows([crossFile],P.eagleStatementRowsFromOcr(statement(summary,4)));
+  assert.deepEqual([crossFile.invoiceNumber,crossFile.originalInvoiceNumber,crossFile.date,crossFile.total,crossFile.vat,crossFile.vatUnverified,crossFile.status],['223','144223','2026-08-31',1993.32,35.30,false,'ACCEPTED'],'a later selected PDF can confirm a unique invoice reference and replace the app’s unverified VAT placeholder after the whole batch is read');
+  const [printedWins]=parse([...invoice('223',1,true,'31-AUG-26'),...statement([{...summary[0],total:'2,010.00',vat:'40.00'}])]);
+  assert.deepEqual([printedWins.originalInvoiceNumber,printedWins.total,printedWins.vat,printedWins.status],['144223',100,0,'ACCEPTED'],'summaries only fill gaps and never replace readable figures printed on the invoice');
+  const accountVariant=parse([...invoice('5417',1),...invoice('5417',2).map(item=>({...item,text:item.text==='CMKL'?'MKL':item.text})),...statement([{date:'21-SEP-26',number:'145417',net:'1,981.54',vat:'59.58',total:'2,041.12'}],3,'25/09/2026')]);
+  assert.equal(accountVariant.length,1,'page OCR variations in the account code must not duplicate a uniquely linked invoice');
+  assert.deepEqual([accountVariant[0].invoiceNumber,accountVariant[0].sourcePages,accountVariant[0].status],['5417',[1,2],'ACCEPTED']);
+});
+test('Eagle Foods handles split OCR dates and a continuation marker missing its page count',()=>{
+  const line=(page,text,x,y,width=String(text).length*9)=>({page,text,x,y,width,height:20,confidence:1});
+  const first=[line(1,'EAGLEFOODS',80,20),line(1,'Invoice To:',80,80),line(1,'Account No:',100,120),line(1,'CMKL',300,120),line(1,'Invoice No:',100,180),line(1,'142310',300,180),line(1,'Order Date:',900,180)];
+  const continuation=[line(2,'EAGLEFOODS',80,20),line(2,'Page 2',1500,70),line(2,'Invoice To:',80,80),line(2,'Account No:',100,120),line(2,'CMKL',300,120),line(2,'Invoice No:',100,180),line(2,'Order Date:',900,180),line(2,'6',1302,168),line(2,'UG-26',1246,209),line(2,'VAT Total',1200,800),line(2,'18.48',1400,840),line(2,'Invoice Total',1600,800),line(2,'1,690.85',1800,840)];
+  const pages=[...first,...continuation],rows=P.parseInvoiceBatch(pages.map(item=>item.text).join('\n'),'Eagle Foods continuation.pdf',pages);
+  assert.equal(rows.length,1);assert.deepEqual([rows[0].invoiceNumber,rows[0].date,rows[0].total,rows[0].vat,rows[0].status,rows[0].sourcePages],['2310','2026-08-06',1690.85,18.48,'ACCEPTED',[1,2]],'page 2 without “of 2” joins by the printed marker; adjacent date fragments remain tied to the Order Date label');
+});
+test('Eagle Foods uses a unique dated summary match when OCR loses the account code and carries forward a date omitted by later statements',()=>{
+  const row={profileId:'eagle-foods',invoiceNumber:'95',originalInvoiceNumber:'95',supplier:'Eagle Foods Ltd',accountCode:'IKL',eagleDatePeriods:[{year:2026,month:7}],date:'',total:'',vat:'',status:'REJECTED',accepted:false,rejected:true};
+  const summaries=[{documentNumber:'141295',date:'2026-07-27',statementDate:'2026-07-27',total:1682.89,vat:1.9,accountCode:'CMKL'}];
+  P.confirmEagleInvoiceRows([row],summaries);
+  assert.deepEqual([row.invoiceNumber,row.originalInvoiceNumber,row.date,row.total,row.vat,row.status],['95','141295','2026-07-27',1682.89,1.9,'ACCEPTED'],'the short reference and July period uniquely identify one summary even when OCR corrupts the account code');
+  const withNewerBlankDate={...row,invoiceNumber:'01',originalInvoiceNumber:'01',date:'',total:'',vat:'',accountCode:'CMKL',eagleDatePeriods:[{year:2026,month:7}],status:'REJECTED',accepted:false,rejected:true};
+  P.confirmEagleInvoiceRows([withNewerBlankDate],[
+    {documentNumber:'141101',date:'2026-07-24',statementDate:'2026-07-24',total:1589.38,vat:32.03,accountCode:'CMKL'},
+    {documentNumber:'141101',date:'',statementDate:'2026-07-31',total:1589.38,vat:32.03,accountCode:'CMKL'}
+  ]);
+  assert.deepEqual([withNewerBlankDate.date,withNewerBlankDate.total,withNewerBlankDate.vat,withNewerBlankDate.status],['2026-07-24',1589.38,32.03,'ACCEPTED'],'a later summary with an unreadable invoice date must not erase the same date confirmed by an earlier matching statement');
+  const ambiguous={...row,invoiceNumber:'95',originalInvoiceNumber:'95',date:'',total:'',vat:'',accountCode:'CMKL',status:'REJECTED',accepted:false,rejected:true};
+  P.confirmEagleInvoiceRows([ambiguous],[...summaries,{...summaries[0],documentNumber:'142095',date:'2026-07-28',total:900,vat:10}]);
+  assert.equal(ambiguous.status,'REJECTED','multiple same-month documents with the same short suffix must remain rejected');
+});
+test('Eagle Foods repairs an OCR-split total only when the matching summary confirms the printed net and VAT',()=>{
+  const line=(page,text,x,y,width=String(text).length*9)=>({page,text,x,y,width,height:20,confidence:1});
+  const makeInvoice=vat=>[
+    line(1,'Eagle Foods Ltd',80,20),line(1,'Invoice To:',80,80),line(1,'Account No:',100,120),line(1,'CMKL',300,120),line(1,'Invoice No:',100,180),line(1,'818',300,180),line(1,'Order Date:',900,180),line(1,'17-AUG-26',1100,180),
+    line(1,'2.354.56',1252,1000),line(1,vat,1517,1000),line(1,'2,',1661,1000),line(1,'1.22',1718,1000),line(1,'New Invoice Total',1739,1240)
+  ];
+  const summary={documentNumber:'142818',date:'2026-08-17',statementDate:'2026-09-30',net:2354.56,vat:36.66,total:2391.22,accountCode:'CMKL'},parse=lines=>P.parseInvoiceBatch(lines.map(item=>item.text).join('\n'),'Eagle Foods split-total.pdf',lines);
+  const [row]=parse(makeInvoice('36.66'));
+  assert.deepEqual([row.total,row.vat,row.eagleInvoiceNet,row.eagleTotalOcrIncomplete,row.status], ['',36.66,2354.56,true,'REJECTED'], 'the malformed thousands separator and adjacent clipped prefix keep an unsupported amount rejected');
+  P.confirmEagleInvoiceRows([row],[summary]);
+  assert.deepEqual([row.total,row.vat,row.status,row.eagleSummaryReplacedSplitTotal],[2391.22,36.66,'ACCEPTED',true], 'the matched statement supplies the printed total only after net and VAT corroborate the same invoice');
+  const [conflict]=parse(makeInvoice('36.65'));
+  P.confirmEagleInvoiceRows([conflict],[summary]);
+  assert.deepEqual([conflict.total,conflict.status],[ '', 'REJECTED' ], 'without a matching printed VAT value, the partial total is not accepted or exported');
+  const continuation=[
+    line(3,'EAGLEFOODS',80,20),line(3,'Invoice To:',80,80),line(3,'Account No:',100,120),line(3,'CMKL',300,120),line(3,'Invoice No:',100,180),line(3,'180',300,180),line(3,'Order Date:',900,180),line(3,'21-AUG-26',1100,180),line(3,'Page 1 of 2',1500,70),
+    line(3,'1,528.92',1264,1000),line(3,'18.30',1528,1000),line(3,'1. 47.22',1674,1000),line(3,'New Invoice Total',1739,1240),
+    line(4,'EAGLEFOODS',80,20),line(4,'Invoice To:',80,80),line(4,'Account No:',100,120),line(4,'CMKL',300,120),line(4,'Invoice No:',100,180),line(4,'Order Date:',900,180),line(4,'21-AUG-26',1100,180),line(4,'pa eV2th No: 823958988',1500,70),
+    line(4,'1,528.92',1264,1000),line(4,'18.30',1528,1000),line(4,'47.22',1710,1000),line(4,'Total Credit',1774,1140)
+  ];
+  const [continued]=parse(continuation);
+  assert.deepEqual([continued.sourcePages,continued.total,continued.status],[ [3,4], '', 'REJECTED' ],'a fuzzy Page 2 marker joins a no-number continuation without accepting its clipped gross amount');
+  P.confirmEagleInvoiceRows([continued],[{documentNumber:'143180',date:'2026-08-21',statementDate:'2026-09-30',net:1528.92,vat:18.30,total:1547.22,accountCode:'CMKL'}]);
+  assert.deepEqual([continued.total,continued.vat,continued.status],[1547.22,18.30,'ACCEPTED'],'the exact statement match confirms the truncated gross after printed net and VAT match');
+});
+test('Eagle Foods only joins pages with matching invoice numbers and reads printed footer VAT',()=>{
+  const line=(page,text,x,y)=>({page,text,x,y,width:Math.max(8,text.length*8),height:20,confidence:1});
+  const page=(number,date,vat)=>[
+    line(number,'EAGLEFOODS',70,40),line(number,'Invoice To:',60,300),line(number,'Account No',55,940),line(number,'CMKL',280,935),
+    line(number,'Invoice No',480,940),...(number===44?[line(number,'146433',670,935)]:[]),
+    line(number,'Order Date',1000,840),line(number,date,1250,828),line(number,'Delivery Date',1000,900),line(number,'05-OCT-26',1250,885),
+    line(number,'1,822.85',1300,2000),line(number,vat,1560,2000),line(number,'1,865.77',1710,2000),line(number,'Total Credit',1770,2140)
+  ];
+  const first=page(43,'04-OCT-26','4222'),second=page(44,'04-OCT-2ö','42.92');
+  const parse=lines=>P.parseInvoiceBatch(lines.map(item=>item.text).join('\n'),'Eagle Foods scan.pdf',lines);
+  const [damaged]=parse(first);assert.equal(damaged.status,'REJECTED');assert.equal(damaged.vat,'','a damaged middle footer figure must not be guessed');
+  const [undated]=parse(second);assert.equal(undated.date,'','the delivery date must not stand in for a missing order date');
+  const rowsWithoutNumber=parse([...first,...second]);assert.equal(rowsWithoutNumber.length,2,'matching totals alone must never join invoice pages');assert.ok(rowsWithoutNumber.every(row=>row.status==='REJECTED'));
+  const differentNumber=parse([...first,line(43,'146434',670,935),...second]);assert.equal(differentNumber.length,2,'different printed invoice numbers must stay separate even when totals match');
+  const recoveredNumber=[...first,line(43,'146433',670,935)];
+  const rows=parse([...recoveredNumber,...second]);assert.equal(rows.length,1);assert.deepEqual([rows[0].invoiceNumber,rows[0].date,rows[0].total,rows[0].vat,rows[0].status,rows[0].sourcePages],['6433','2026-10-04',1865.77,42.92,'ACCEPTED',[43,44]]);
+  const retryCandidate={...rows[0],date:'',accepted:false},firstPass=rowsWithoutNumber[0],matched=P.matchEagleRetryCandidate(firstPass,[retryCandidate]);
+  assert.equal(matched,retryCandidate,'readings from the same PDF page can complement one another across OCR resolutions');
+  const combined=P.mergeInvoiceRetryCandidate(firstPass,matched);assert.deepEqual([combined.originalInvoiceNumber,combined.date,combined.total,combined.vat],['146433','2026-10-04',1865.77,42.92]);
+  assert.equal(P.invoiceRetryAccepted(combined,matched,true),true);
+  assert.equal(P.matchEagleRetryCandidate({...firstPass,originalInvoiceNumber:'146434'},[retryCandidate]),null,'conflicting invoice numbers cannot be merged');
+  assert.equal(P.matchEagleRetryCandidate(firstPass,[retryCandidate,{...retryCandidate,originalInvoiceNumber:'146434'}]),null,'ambiguous high-resolution numbers cannot be merged');
+  const disagreement=P.mergeInvoiceRetryCandidate(firstPass,{...retryCandidate,total:1866.77});assert.equal(P.invoiceRetryAccepted(disagreement,retryCandidate,true),false,'disagreeing printed totals require rejection');
 });
 test('Bestway takes VAT and total due from its Invoice Summary and groups continuation pages once',()=>{
   const line=(page,text,x,y,width=90)=>({page,text,x,y,width,height:20,confidence:1});
@@ -867,6 +994,39 @@ test('OCR bank lines recover Barclays-style month dates and amount columns',()=>
   {page:1,text:'03 Aug',x:97,y:721},{page:1,text:'Card Purchase Shell',x:183,y:721},{page:1,text:'42.50',x:474,y:721},
   {page:1,text:'05 Aug',x:97,y:800},{page:1,text:'Received From Driver',x:183,y:800},{page:1,text:'125.00',x:554,y:800}
 ];const r=P.parseOcrBank(lines,'Statement date 28 Aug 2026','barclays.pdf');assert.equal(r.length,2);assert.deepEqual(r.map(x=>[x.date,x.payment,x.receipt]),[['2026-08-03',42.5,''],['2026-08-05','',125]]);});
+test('Barclays OCR carries a date down to its amount instead of choosing the nearest later date',()=>{
+  const lines=[
+    {page:1,text:'Statement date 31 Dec 2026',x:490,y:8},
+    {page:1,text:'Date',x:50,y:20},{page:1,text:'Description',x:160,y:20},{page:1,text:'Money out',x:400,y:20,width:70},{page:1,text:'Money in',x:600,y:20,width:70},{page:1,text:'Balance',x:800,y:20,width:70},
+    {page:1,text:'29 Dec',x:50,y:100},{page:1,text:'Card payment',x:160,y:100},{page:1,text:'46.00',x:450,y:130},
+    {page:1,text:'30 Dec',x:50,y:145},{page:1,text:'Card payment',x:160,y:145},{page:1,text:'12.00',x:450,y:170}
+  ];
+  const rows=P.parseOcrBank(lines,'Statement date 31 Dec 2026 Barclays','barclays.pdf');
+  assert.deepEqual(rows.map(row=>[row.date,row.payment]),[['2026-12-29',46],['2026-12-30',12]]);
+});
+test('balance reconciliation checks transaction intervals between printed balance checkpoints',()=>{
+  const rows=[
+    {date:'2026-08-03',amount:-46,openingBalance:100,balance:'',page:1},
+    {date:'2026-08-05',amount:10,balance:64,balanceExpected:true,page:1}
+  ];
+  const report=P.inspectBankBalances(rows);
+  assert.equal(report.checkpointCount,1);
+  assert.equal(report.checkedSegments,1);
+  assert.deepEqual(report.mismatches,[]);
+});
+test('an unreadable amount rejects every transaction in its unverified balance interval',()=>{
+  const rows=[
+    {date:'2026-06-06',amount:-10,balance:100,balanceExpected:true,page:1},
+    {date:'2026-06-09',amount:'',balance:'',balanceMovementUnreadable:true,page:2},
+    {date:'2026-06-09',amount:9.16,receipt:9.16,balance:99.16,balanceExpected:true,page:2}
+  ];
+  const report=P.inspectBankBalances(rows);
+  assert.equal(report.mismatches.length,1);
+  assert.deepEqual(report.mismatches[0].rowIndexes,[1,2]);
+  P.markBankBalanceMismatches(rows,report);
+  assert.deepEqual(rows.map(row=>row.status),[undefined,'REJECTED','REJECTED']);
+  assert.match(rows[2].rejectedReason,/interval .* contains an unreadable transaction amount/i);
+});
 test('compatible formats list the supported Monzo, Barclays and Metro Bank statement layouts',()=>{const banks=P.compatibleCompanies.filter(company=>company.category==='Bank statements');assert.deepEqual(banks.map(company=>company.name),['Monzo','Barclays','Metro Bank']);assert.match(banks[0].description,/ISO dates/);assert.match(banks[1].description,/OCR-supported/);assert.match(banks[2].description,/money out, money in and balance columns/);});
 test('OCR normalises ten as IO and carries a day-only date across rows',()=>{const lines=[{page:2,text:'Statement date 28 Aug 2026',x:490,y:43},{page:2,text:'IO Aug',x:98,y:143},{page:2,text:'Card Purchase Apple',x:183,y:143},{page:2,text:'2.99',x:481,y:143},{page:2,text:'24',x:98,y:300},{page:2,text:'Received From Driver',x:183,y:300},{page:2,text:'26.27',x:562,y:300}];const r=P.parseOcrBank(lines,'Statement date 28 Aug 2026','barclays.pdf');assert.deepEqual(r.map(x=>[x.date,x.payment,x.receipt]),[['2026-08-10',2.99,''],['2026-08-24','',26.27]]);});
 test('ISO date bank statements split rows correctly',async()=>{const r=await P.parsePdf(pdf('(2026-10-11) Tj (Shell fuel) Tj (47.80 DR) Tj (2026-10-12) Tj (Taxi fares) Tj (260.00 CR) Tj'),'bank','monzo.pdf');assert.equal(r.transactions.length,2);assert.equal(r.transactions[0].date,'2026-10-11');assert.equal(r.transactions[1].receipt,260);});
@@ -1302,10 +1462,20 @@ test('Peterborough Bazaar scan extracts every unique printed invoice and retries
     assert.equal(new Set(first.rows.map(row=>`${row.profileId}:${row.originalInvoiceNumber}:${row.date}`)).size,first.rows.length);
   }finally{fs.rmSync(shortPath,{force:true});}
 });
-test('Eagle Foods scans extract known invoice totals from both layouts and reject conflicting statement evidence',{skip:process.env.CLEARCOUNT_RUN_EAGLE_OCR!=='1'||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/Eagle Foods/Eagelfoods.pdf'))||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/Eagle Foods/Eagelfoods 1.pdf'))},()=>{
+test('Eagle Foods scans extract known invoice totals from both layouts and let invoice values prevail over stale summaries',{skip:process.env.CLEARCOUNT_RUN_EAGLE_OCR!=='1'||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/Eagle Foods/Eagelfoods.pdf'))||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/Eagle Foods/Eagelfoods 1.pdf'))},()=>{
   const helper=path.resolve(__dirname,'../extractor/ocr-helper.ps1'),fixtures=[
     {file:'Eagelfoods.pdf',expected:[['143871','2026-08-31',1880.40,52.51],['145417','2026-09-21',2041.12,59.58],['145755','2026-09-25',1404.84,21.83]],summaryPages:[5,28]},
     {file:'Eagelfoods 1.pdf',expected:[['144223','2026-09-04',1993.32,35.30],['141787','2026-08-02',37.16,0],['143668','2026-08-28',1697.31,18.92],['143181','2026-08-25',1819.30,0],['144720','2026-09-11',1777.39,43.03],['144885','2026-09-14',1681.19,43.32],['143868','2026-08-30',100.37,0]],summaryPages:[7,8,9,10,11,12,13,14,15,16,18,19,23,50,51,52,53]}
   ];
-  for(const fixture of fixtures){const source=path.resolve(__dirname,`../samples/extractor/Invoices/Eagle Foods/${fixture.file}`),shortPath=path.resolve(__dirname,`../.tmp/eagle-${process.pid}-${fixture.file.replace(/\W+/g,'-')}.pdf`);fs.mkdirSync(path.dirname(shortPath),{recursive:true});fs.copyFileSync(source,shortPath);try{const raw=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',shortPath,'-Scale','2.5'],{encoding:'utf8',windowsHide:true,maxBuffer:50*1024*1024}),pages=raw.split(/\r?\n/).filter(line=>line.startsWith('PAGE:')).map(line=>JSON.parse(line.slice(5))),lines=pages.flatMap(page=>page.lines||[]),rows=P.parseInvoiceBatch(pages.map(page=>page.text||'').join('\n'),source,lines),identified=rows.filter(row=>String(row.originalInvoiceNumber||'').replace(/\D/g,'').length>=4),byNumber=new Map(rows.map(row=>[String(row.originalInvoiceNumber||'').replace(/\D/g,''),row]));assert.equal(identified.length,new Set(identified.map(row=>`${String(row.originalInvoiceNumber).replace(/\D/g,'')}:${row.date||''}`)).size,`${fixture.file} should not duplicate identified invoices`);for(const [number,date,total,vat] of fixture.expected){const row=byNumber.get(number);assert.ok(row,`${fixture.file} should extract invoice ${number}`);assert.deepEqual([row.date,row.total,row.vat,row.status],[date,total,vat,'ACCEPTED'],`${fixture.file} invoice ${number}`);}assert.ok(rows.every(row=>!(row.sourcePages||[]).some(page=>fixture.summaryPages.includes(page))),`${fixture.file} statement pages must not become invoices`);if(fixture.file==='Eagelfoods 1.pdf'){const conflict=rows.find(row=>row.originalInvoiceNumber==='144408');assert.equal(conflict?.status,'REJECTED');assert.ok(conflict?.eagleSummaryConflict);}}finally{fs.rmSync(shortPath,{force:true});}}
+  for(const fixture of fixtures){const source=path.resolve(__dirname,`../samples/extractor/Invoices/Eagle Foods/${fixture.file}`),shortPath=path.resolve(__dirname,`../.tmp/eagle-${process.pid}-${fixture.file.replace(/\W+/g,'-')}.pdf`);fs.mkdirSync(path.dirname(shortPath),{recursive:true});fs.copyFileSync(source,shortPath);try{const raw=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',shortPath,'-Scale','2.5'],{encoding:'utf8',windowsHide:true,maxBuffer:50*1024*1024}),pages=raw.split(/\r?\n/).filter(line=>line.startsWith('PAGE:')).map(line=>JSON.parse(line.slice(5))),lines=pages.flatMap(page=>page.lines||[]),rows=P.parseInvoiceBatch(pages.map(page=>page.text||'').join('\n'),source,lines),identified=rows.filter(row=>String(row.originalInvoiceNumber||'').replace(/\D/g,'').length>=4),byNumber=new Map(rows.map(row=>[String(row.originalInvoiceNumber||'').replace(/\D/g,''),row]));assert.equal(identified.length,new Set(identified.map(row=>`${String(row.originalInvoiceNumber).replace(/\D/g,'')}:${row.date||''}`)).size,`${fixture.file} should not duplicate identified invoices`);for(const [number,date,total,vat] of fixture.expected){const row=byNumber.get(number);assert.ok(row,`${fixture.file} should extract invoice ${number}`);assert.deepEqual([row.date,row.total,row.vat,row.status],[date,total,vat,'ACCEPTED'],`${fixture.file} invoice ${number}`);}assert.ok(rows.every(row=>!(row.sourcePages||[]).some(page=>fixture.summaryPages.includes(page))),`${fixture.file} statement pages must not become invoices`);if(fixture.file==='Eagelfoods 1.pdf'){const invoice=rows.find(row=>row.originalInvoiceNumber==='143181');assert.equal(invoice?.status,'ACCEPTED');assert.equal(invoice?.total,1819.30);assert.equal(invoice?.vat,0);}}finally{fs.rmSync(shortPath,{force:true});}}
+});
+test('Eagle Foods high-resolution retry combines complementary readings only from the same invoice page',{skip:process.env.CLEARCOUNT_RUN_EAGLE_OCR!=='1'||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/Eagle Foods/Eagelfoods.pdf'))},()=>{
+  const helper=path.resolve(__dirname,'../extractor/ocr-helper.ps1'),source=path.resolve(__dirname,'../samples/extractor/Invoices/Eagle Foods/Eagelfoods.pdf');
+  const scan=scale=>{const raw=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',source,'-PageList','43,44','-Scale',String(scale)],{encoding:'utf8',windowsHide:true,maxBuffer:10*1024*1024}),pages=raw.split(/\r?\n/).filter(line=>line.startsWith('PAGE:')).map(line=>JSON.parse(line.slice(5))),lines=pages.flatMap(page=>page.lines||[]);return P.parseInvoiceBatch(pages.map(page=>page.text||'').join('\n'),source,lines);};
+  const first=scan(2.5),retry=scan(5);assert.equal(first.length,2);assert.equal(retry.length,1);
+  const page43=first.find(row=>row.page===43),candidate=P.matchEagleRetryCandidate(page43,retry);assert.ok(candidate);
+  const combined=P.mergeInvoiceRetryCandidate(page43,candidate),complete=Boolean(combined.invoiceNumber&&combined.date&&combined.total!==''&&combined.vat!=='');
+  assert.equal(P.invoiceRetryAccepted(combined,candidate,complete),true);
+  assert.deepEqual([combined.originalInvoiceNumber,combined.date,combined.total,combined.vat],['146433','2026-10-04',1865.77,42.92]);
+  Object.assign(page43,combined,{status:'ACCEPTED'});const deduplicated=P.deduplicateInvoiceRows(first);assert.equal(deduplicated.rows.length,1);
 });

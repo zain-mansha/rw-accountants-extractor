@@ -185,6 +185,13 @@
       else if(item.row?.balanceExpected&&item.date&&item.balanceCents===null)mismatches.push({startIndex:item.index,endIndex:item.index,rowIndexes:[item.index],previousIndex:null,currentIndex:item.index,previousDate:'',date:item.date,expectedCents:0,actualCents:0,differenceCents:0,page:item.row?.page||'',missingBalance:true});
     }
     let previous=null,pending=[],leading=[],checkedSegments=0,checkpointCount=0;
+    const rejectUnreadableInterval=(entries,balanceItem,previousItem=null)=>{
+      const unreadable=entries.filter(entry=>entry.amountCents===null||entry.row?.balanceMovementUnreadable);if(!unreadable.length)return;
+      const first=unreadable[0];let mismatch=mismatches.find(item=>item.unreadableMovement&&item.currentIndex===first.index);
+      if(!mismatch){mismatch={startIndex:first.index,endIndex:first.index,rowIndexes:[first.index],previousIndex:null,currentIndex:first.index,previousDate:'',date:first.date,expectedCents:0,actualCents:0,differenceCents:0,page:first.row?.page||'',unreadableMovement:true};mismatches.push(mismatch);}
+      Object.assign(mismatch,{startIndex:entries[0]?.index??first.index,endIndex:balanceItem.index,rowIndexes:[...new Set(entries.map(entry=>entry.index))],previousIndex:previousItem?.index??null,previousDate:previousItem?.date||'',date:balanceItem.date,page:balanceItem.row?.page||first.row?.page||''});
+      for(const extra of unreadable.slice(1)){const duplicate=mismatches.findIndex(item=>item!==mismatch&&item.unreadableMovement&&item.currentIndex===extra.index);if(duplicate>=0)mismatches.splice(duplicate,1);}
+    };
     for(const item of items){
       if(previous)pending.push(item);else leading.push(item);
       if(item.balanceCents===null)continue;
@@ -194,13 +201,13 @@
         if(pending.length&&!hasUnknownMovement){
           checkedSegments++;const expected=previous.balanceCents+pending.reduce((sum,entry)=>sum+entry.amountCents,0),difference=item.balanceCents-expected;
           if(difference!==0)mismatches.push({startIndex:segmentRows[0],endIndex:item.index,rowIndexes:segmentRows,previousIndex:previous.index,currentIndex:item.index,previousDate:previous.date,date:item.date,expectedCents:expected,actualCents:item.balanceCents,differenceCents:difference,page:item.row?.page||''});
-        }
+        }else if(pending.length&&hasUnknownMovement)rejectUnreadableInterval(pending,item,previous);
       }else{
         const openingItem=leading.find(entry=>bankValueCents(entry.row?.openingBalance)!==null),opening=bankValueCents(openingItem?.row?.openingBalance),leadingRows=leading,hasUnknownMovement=leadingRows.some(entry=>entry.amountCents===null);
         if(opening!==null&&leadingRows.length&&!hasUnknownMovement){
           checkedSegments++;const expected=opening+leadingRows.reduce((sum,entry)=>sum+entry.amountCents,0),difference=item.balanceCents-expected;
           if(difference!==0)mismatches.push({startIndex:leadingRows[0].index,endIndex:item.index,rowIndexes:leadingRows.map(entry=>entry.index),previousIndex:openingItem?.index??null,currentIndex:item.index,previousDate:'',date:item.date,expectedCents:expected,actualCents:item.balanceCents,differenceCents:difference,page:item.row?.page||''});
-        }
+        }else if(leadingRows.length&&hasUnknownMovement)rejectUnreadableInterval(leadingRows,item,openingItem||null);
       }
       previous=item;pending=[];leading=[];
     }
@@ -209,7 +216,7 @@
   function markBankBalanceMismatches(rows,report=inspectBankBalances(rows)){
     const source=Array.isArray(rows)?rows:[];
     for(const mismatch of report.mismatches){
-      const range=mismatch.previousDate?`${mismatch.previousDate} to ${mismatch.date}`:mismatch.date,expected=(mismatch.expectedCents/100).toFixed(2),actual=(mismatch.actualCents/100).toFixed(2),difference=(Math.abs(mismatch.differenceCents)/100).toFixed(2),reason=mismatch.missingBalance?`The bank transaction on ${range||'this date'} has no readable running balance after the high-resolution recheck. This row is REJECTED; verify it against the statement.`:mismatch.unreadableMovement?`The bank transaction dated ${range||'this date'} has no readable amount after the high-resolution recheck. This row is REJECTED; verify it against the bank statement.`:`Bank statement balance does not reconcile for ${range}: the listed transactions give \u00A3${expected}, but the statement shows \u00A3${actual} (a \u00A3${difference} difference). Verify the transaction rows against the bank statement; this date range is REJECTED.`;
+      const range=mismatch.previousDate?`${mismatch.previousDate} to ${mismatch.date}`:mismatch.date,expected=(mismatch.expectedCents/100).toFixed(2),actual=(mismatch.actualCents/100).toFixed(2),difference=(Math.abs(mismatch.differenceCents)/100).toFixed(2),unreadableReason=mismatch.previousDate||mismatch.rowIndexes.length>1?`The running-balance interval ${range||'on this date'} contains an unreadable transaction amount after the high-resolution recheck. All rows in the interval are REJECTED; verify them against the statement.`:`The bank transaction dated ${range||'this date'} has no readable amount after the high-resolution recheck. This row is REJECTED; verify it against the bank statement.`,reason=mismatch.missingBalance?`The bank transaction on ${range||'this date'} has no readable running balance after the high-resolution recheck. This row is REJECTED; verify it against the statement.`:mismatch.unreadableMovement?unreadableReason:`Bank statement balance does not reconcile for ${range}: the listed transactions give \u00A3${expected}, but the statement shows \u00A3${actual} (a \u00A3${difference} difference). Verify the transaction rows against the bank statement; this date range is REJECTED.`;
       for(const index of mismatch.rowIndexes){const row=source[index];if(!row)continue;row.status='REJECTED';row.rejected=true;row.accepted=false;row.review=true;row.include=false;row.confidence='REJECTED';row.balanceMismatch=true;row.rejectedReason=reason;}
     }
     return source;
@@ -337,10 +344,11 @@
       const dates=items.filter(line=>line.y>header.y+Math.max(8,(header.headerHeight||0)*0.5)&&line.x<dateBoundary).map(line=>({line,parsed:parseDatePrefix(line.text)})).filter(item=>item.parsed).sort((a,b)=>a.line.y-b.line.y);
       const movements=items.filter(line=>line.y>header.y+Math.max(8,(header.headerHeight||0)*0.5)&&line.x>=descriptionBoundary&&line.x<upper).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==null).map(item=>({...item,kind:item.line.x<split?'payment':'receipt'})).sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
       const rowHeight=median(movements.slice(1).map((item,index)=>item.line.y-movements[index].line.y).filter(gap=>gap>0))||median(dates.slice(1).map((item,index)=>item.line.y-dates[index].line.y).filter(gap=>gap>0))||0,usedDateLines=new Set();
-      const dateForMovement=y=>dates.map((item,index)=>{
-        const before=index?item.line.y-dates[index-1].line.y:0,after=index+1<dates.length?dates[index+1].line.y-item.line.y:0,localGap=before&&after?Math.min(before,after):before||after||rowHeight,radius=(localGap?localGap/2:0)+Math.max(Number(item.line.height)||0,Number(header.headerHeight)||0,Number(movements.find(entry=>entry.line.y===y)?.line.height)||0)*1.25;
-        return {item,distance:Math.abs(item.line.y-y),radius};
-      }).filter(candidate=>candidate.distance<=candidate.radius).sort((a,b)=>a.distance-b.distance)[0]?.item||null;
+      const dateForMovement=y=>{
+        const tolerance=Math.max(12,(Number(header.headerHeight)||0)*0.5);let latest=null;
+        for(const item of dates){if(item.line.y<=y+tolerance)latest=item;else break;}
+        return latest;
+      };
       for(let i=0;i<movements.length;i++){
         const movement=movements[i],dateRecord=dateForMovement(movement.line.y);
         if(!dateRecord)continue;
@@ -356,13 +364,15 @@
         const details=[inlineDateDetail,primary?.text,...extraLines.map(line=>line.text)].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
         const balanceLine=items.filter(line=>line.x>=upper&&line.x<header.balanceX+Math.max(35,(header.balanceWidth||0)*1.5)&&Math.abs(line.y-movement.line.y)<=Math.max(18,(header.headerHeight||0)*0.8)).sort((a,b)=>Math.abs(a.y-movement.line.y)-Math.abs(b.y-movement.line.y))[0],balanceValue=balanceLine?readMoney(balanceLine.text):null;
         const value=Math.abs(movement.value),payment=movement.kind==='payment'?value:'',receipt=movement.kind==='receipt'?value:'';
-        output.push({date:iso,details:details||'Bank transaction',receipt,payment,balance:balanceValue??'',balanceExpected:true,amount:movement.kind==='receipt'?value:-value,source,page,ocrY:Number(movement.line.y)||0,balanceY:Number(balanceLine?.y)||Number(movement.line.y)||0,confidence:'Barclays labelled OCR columns',review:true});
+        output.push({date:iso,details:details||'Bank transaction',receipt,payment,balance:balanceValue??'',balanceExpected:Boolean(balanceLine),amount:movement.kind==='receipt'?value:-value,source,page,ocrY:Number(movement.line.y)||0,balanceY:balanceLine?(Number(balanceLine.y)||null):null,confidence:'Barclays labelled OCR columns',review:true});
       }
       for(const dateRecord of dates){
         if(usedDateLines.has(dateRecord.line))continue;
         const balanceLine=items.filter(line=>line.x>=upper&&line.x<header.balanceX+Math.max(35,(header.balanceWidth||0)*1.5)&&Math.abs(line.y-dateRecord.line.y)<=Math.max(Number(dateRecord.line.height)||0,Number(header.headerHeight)||0)*0.8).sort((a,b)=>Math.abs(a.y-dateRecord.line.y)-Math.abs(b.y-dateRecord.line.y))[0],balanceValue=balanceLine?readMoney(balanceLine.text):null;
         const {day,month}=dateRecord.parsed;let year=context?.endYear||Number(String(text).match(/\b(20\d{2})\b/)?.[1])||new Date().getFullYear();if(context?.startMonth&&context?.endMonth)year=(context.startMonth>context.endMonth&&month>=context.startMonth)?(context.startYear||year):context.endYear||year;else if(context?.endYear){const statementMatch=String(text).match(/statement\s+date\s+(\d{1,2})\s+([A-Za-z]{3,9})\s+(20\d{2})/i),statementMonth=statementMatch?months[statementMatch[2].slice(0,3).toLowerCase()]:0;if(statementMonth&&statementMonth<=2&&month>=10)year=context.endYear-1;}
-        const iso=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`,detail=items.filter(line=>line.x>=dateBoundary&&line.x<descriptionBoundary&&Math.abs(line.y-dateRecord.line.y)<=Math.max(Number(dateRecord.line.height)||0,Number(header.headerHeight)||0)).map(line=>line.text).filter(value=>value!==dateRecord.line.text).join(' ').trim();output.push({date:iso,details:detail||'Transaction amount not read',receipt:'',payment:'',amount:'',balance:balanceValue??'',balanceExpected:true,source,page,ocrY:Number(dateRecord.line.y)||0,balanceY:Number(balanceLine?.y)||Number(dateRecord.line.y)||0,confidence:'REJECTED',review:true,balanceMovementUnreadable:true});
+        const iso=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`,inlineDetail=String(dateRecord.parsed.suffix||'').trim(),detail=[inlineDetail,...items.filter(line=>line.x>=dateBoundary&&line.x<descriptionBoundary&&Math.abs(line.y-dateRecord.line.y)<=Math.max(Number(dateRecord.line.height)||0,Number(header.headerHeight)||0)).map(line=>line.text).filter(value=>value!==dateRecord.line.text)].filter(Boolean).join(' ').trim(),normalizedDetail=detail.replace(/\s+/g,' ').trim();
+        if(/^(?:(?:start|opening|end|closing)\s+balance|account\s+opened)$/i.test(normalizedDetail))continue;
+        output.push({date:iso,details:detail||'Transaction amount not read',receipt:'',payment:'',amount:'',balance:balanceValue??'',balanceExpected:Boolean(balanceLine),source,page,ocrY:Number(dateRecord.line.y)||0,balanceY:balanceLine?(Number(balanceLine.y)||null):null,confidence:'REJECTED',review:true,balanceMovementUnreadable:true});
       }
     }
     return output;
