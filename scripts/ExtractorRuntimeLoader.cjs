@@ -105,6 +105,13 @@ function readLauncherConfig() {
   throw new Error('The local Extractor launcher settings are damaged, and no saved network location or complete local application copy was found. Run Start Extractor from Network.cmd once to repair this PC.');
 }
 
+function readApplicationBuildId(directory) {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(directory, 'build-info.json'), 'utf8'));
+    return String(info.buildId || '');
+  } catch { return ''; }
+}
+
 function prepareLocalApplication(config) {
   const networkRoot = String(config.networkRoot || process.env.FARE_EXTRACTOR_NETWORK_ROOT || '').trim();
   const sharedApplication = String(config.sharedApplication || (networkRoot ? path.join(networkRoot, 'resources', 'app') : '')).trim();
@@ -155,12 +162,18 @@ app.whenReady().then(async () => {
     const config = readLauncherConfig();
     const sharedApplication = String(process.env.FARE_EXTRACTOR_SHARED_APP || config.sharedApplication || (config.networkRoot ? path.join(config.networkRoot, 'resources', 'app') : ''));
     let localApplication = String(process.env.FARE_EXTRACTOR_LOCAL_APP || '');
-    if (!localApplication || !fs.existsSync(path.join(localApplication, 'main.cjs'))) {
+    const checkedBuildId = String(process.env.FARE_EXTRACTOR_UPDATE_CHECKED_BUILD_ID || '').trim();
+    const alreadyCheckedThisBuild = Boolean(
+      localApplication && fs.existsSync(path.join(localApplication, 'main.cjs')) && checkedBuildId &&
+      checkedBuildId === readApplicationBuildId(localApplication) &&
+      checkedBuildId === readApplicationBuildId(sharedApplication)
+    );
+    if (!alreadyCheckedThisBuild) {
       try {
-        const prepared = await prepareLocalApplication({ ...config, sharedApplication });
+        const prepared = await prepareLocalApplication({ ...config, sharedApplication, lastLocalApplication: localApplication || config.lastLocalApplication });
         localApplication = prepared.localDirectory;
       } catch (error) {
-        const fallback = String(config.lastLocalApplication || '');
+        const fallback = String(localApplication || config.lastLocalApplication || '');
         if (!fallback || !fs.existsSync(path.join(fallback, 'main.cjs'))) throw error;
         dialog.showMessageBoxSync({ type: 'warning', title: 'Using the last local version', message: 'Extractor could not check the shared folder, so it will open the last complete local version.', detail: error.message });
         localApplication = fallback;

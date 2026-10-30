@@ -705,11 +705,13 @@ if (-not $NoLaunch) {
   $previousLocalApp = $env:FARE_EXTRACTOR_LOCAL_APP
   $previousProfileRoot = $env:FARE_EXTRACTOR_PROFILE_ROOT
   $previousNetworkRoot = $env:FARE_EXTRACTOR_NETWORK_ROOT
+  $previousUpdateCheckBuildId = $env:FARE_EXTRACTOR_UPDATE_CHECKED_BUILD_ID
   $previousRunAsNode = $env:ELECTRON_RUN_AS_NODE
   $env:FARE_EXTRACTOR_SHARED_APP = [IO.Path]::GetFullPath($applicationDirectory)
   $env:FARE_EXTRACTOR_LOCAL_APP = [IO.Path]::GetFullPath($localApplicationDirectory)
   $env:FARE_EXTRACTOR_PROFILE_ROOT = [IO.Path]::GetFullPath($ProfileRoot)
   $env:FARE_EXTRACTOR_NETWORK_ROOT = [IO.Path]::GetFullPath($source)
+  $env:FARE_EXTRACTOR_UPDATE_CHECKED_BUILD_ID = [string](Get-InstalledExtractorBuildId)
   Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
   try {
     $extractorProcess = Start-Process -FilePath $runtimeExecutable -WorkingDirectory $runtimeTarget -PassThru
@@ -727,6 +729,8 @@ if (-not $NoLaunch) {
     else { $env:FARE_EXTRACTOR_PROFILE_ROOT = $previousProfileRoot }
     if ($null -eq $previousNetworkRoot) { Remove-Item Env:FARE_EXTRACTOR_NETWORK_ROOT -ErrorAction SilentlyContinue }
     else { $env:FARE_EXTRACTOR_NETWORK_ROOT = $previousNetworkRoot }
+    if ($null -eq $previousUpdateCheckBuildId) { Remove-Item Env:FARE_EXTRACTOR_UPDATE_CHECKED_BUILD_ID -ErrorAction SilentlyContinue }
+    else { $env:FARE_EXTRACTOR_UPDATE_CHECKED_BUILD_ID = $previousUpdateCheckBuildId }
     if ($null -eq $previousRunAsNode) { Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
     else { $env:ELECTRON_RUN_AS_NODE = $previousRunAsNode }
   }
