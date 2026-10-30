@@ -46,11 +46,19 @@ $requiredAppFiles = @(
   'main.cjs', 'network-bootstrap.cjs', 'package.json', 'index.html', 'app.js', 'preload.cjs', 'parser.js', 'styles.css',
   'vendor\xlsx.full.min.js', 'ocr-helper.ps1', 'copy-helper.ps1', 'ocr-requirement.json', 'build-info.json'
 )
+$requiredSharedRuntimeFiles = @('ExtractorRuntimeLoader.cjs','ExtractorLauncherConfig.cjs','ExtractorRuntimePackage.json')
 
 function Test-ExtractorAppReady([string]$Directory) {
   if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { return $false }
   foreach ($relative in $requiredAppFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $Directory $relative) -PathType Leaf)) { return $false }
+  }
+  return $true
+}
+
+function Test-SharedExtractorRuntimeReady {
+  foreach ($name in $requiredSharedRuntimeFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $source $name) -PathType Leaf)) { return $false }
   }
   return $true
 }
@@ -434,14 +442,19 @@ try {
   } else {
     $commitSha = Get-LatestExtractorCommit
   }
-  if ($commitSha -and (Get-InstalledExtractorCommit) -ne $commitSha) {
+  # A partially copied network folder can still contain an app marked with the
+  # current commit. In that case the normal update check would skip repair and
+  # fail later when the local Electron runtime needs its loader files. Treat a
+  # missing launcher/runtime file as an update so the GitHub archive restores
+  # the complete package even when the app commit itself is unchanged.
+  if ($commitSha -and ((Get-InstalledExtractorCommit) -ne $commitSha -or -not (Test-SharedExtractorRuntimeReady))) {
     $updateLockPath = Join-Path $source '.extractor-update.lock'
     $updateLock = $null
     $updateDeadline = [DateTime]::UtcNow.AddMinutes(60)
     while (-not $updateLock) {
       try { $updateLock = [IO.File]::Open($updateLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
       catch [IO.IOException] {
-        if ((Get-InstalledExtractorCommit) -eq $commitSha) { break }
+        if ((Get-InstalledExtractorCommit) -eq $commitSha -and (Test-SharedExtractorRuntimeReady)) { break }
         if ([DateTime]::UtcNow -ge $updateDeadline) { throw 'Another Extractor update did not finish within 60 minutes. Try launching again.' }
         Write-Progress -Activity 'Checking Extractor updates' -Status 'Waiting for another user to finish the shared update...' -PercentComplete 20
         Start-Sleep -Milliseconds 500
@@ -451,7 +464,7 @@ try {
       if ($updateLock) {
         $commitSha = Get-LatestExtractorCommit
       }
-      if ((Get-InstalledExtractorCommit) -ne $commitSha) {
+      if ((Get-InstalledExtractorCommit) -ne $commitSha -or -not (Test-SharedExtractorRuntimeReady)) {
         Write-Progress -Activity 'Checking Extractor updates' -Status 'Downloading and preparing the update on the shared network folder...' -PercentComplete 35
         $applicationDirectory = New-SharedExtractorBuild $commitSha
       }
