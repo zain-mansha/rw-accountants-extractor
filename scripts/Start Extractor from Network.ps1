@@ -520,7 +520,7 @@ foreach ($requiredLoaderFile in @($runtimeLoaderSource,$runtimeConfigHelperSourc
   }
 }
 
-$runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot_blob.bin','v8_context_snapshot.bin')
+$runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot_blob.bin','v8_context_snapshot.bin','locales\en-US.pak')
   $runtimeReady = $true
   foreach ($relative in $runtimeRequiredFiles) { if (-not (Test-Path -LiteralPath (Join-Path $runtimeTarget $relative) -PathType Leaf)) { $runtimeReady = $false; break } }
   if (-not $runtimeReady) {
@@ -543,14 +543,30 @@ $runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot
         $runtimeStage = Join-Path $RuntimeRoot "$runtimeVersion.staging-$([guid]::NewGuid().ToString('N'))"
         $runtimeStageFull = [IO.Path]::GetFullPath($runtimeStage)
         if (-not $runtimeStageFull.StartsWith($runtimePrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'The temporary Electron runtime path is outside its selected folder.' }
-        $excludedDirectories = @((Join-Path $source 'resources\app'),(Join-Path $source 'data'),(Join-Path $source '.extractor-app-sessions'),(Join-Path $source '.extractor-apps'),(Join-Path $source '.extractor-update'))
         $excludedRuntimeFiles = @('debug.log','network-build.txt','.extractor-current.txt','.extractor-head-cache.json','.extractor-update.lock','.extractor-update.pending','Start Extractor from Network.cmd','Start Extractor from Network.ps1','ExtractorRuntimeLoader.cjs','ExtractorLauncherConfig.cjs','ExtractorRuntimePackage.json')
+        $runtimeRootFiles = @(Get-ChildItem -LiteralPath $source -File -Force | Where-Object { $_.Name -notin $excludedRuntimeFiles } | ForEach-Object { $_.Name })
+        $runtimeCopyLog = Join-Path $RuntimeRoot "$runtimeVersion.robocopy.log"
+        Remove-Item -LiteralPath $runtimeCopyLog -Force -ErrorAction SilentlyContinue
         try {
           New-Item -ItemType Directory -Path $runtimeStage | Out-Null
           Write-Progress -Activity 'Checking Extractor updates' -Status 'Preparing the Windows Electron runtime on this PC (first launch only)...' -PercentComplete 80
-          & "$env:SystemRoot\System32\robocopy.exe" $source $runtimeStage /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP /XF $excludedRuntimeFiles /XD $excludedDirectories | Out-Null
+          if (-not $runtimeRootFiles.Count) { throw 'The shared package has no Electron runtime files to copy.' }
+          & "$env:SystemRoot\System32\robocopy.exe" $source $runtimeStage @runtimeRootFiles /COPY:DAT /R:2 /W:1 /NP "/LOG:$runtimeCopyLog"
           $copyResult = $LASTEXITCODE
-          if ($copyResult -ge 8) { throw "Windows could not prepare the Electron runtime (Robocopy code $copyResult). Check network access and free disk space." }
+          if ($copyResult -ge 8) {
+            $copyDetails = (Get-Content -LiteralPath $runtimeCopyLog -Tail 16 -ErrorAction SilentlyContinue) -join ' '
+            throw "Windows could not copy the Electron runtime files (Robocopy code $copyResult). Log: $runtimeCopyLog. Details: $copyDetails"
+          }
+          $sharedLocales = Join-Path $source 'locales'
+          if (-not (Test-Path -LiteralPath $sharedLocales -PathType Container)) { throw 'The shared Electron package is missing its locales folder. Copy the complete network package, including locales, and try again.' }
+          $localesTarget = Join-Path $runtimeStage 'locales'
+          New-Item -ItemType Directory -Path $localesTarget | Out-Null
+          & "$env:SystemRoot\System32\robocopy.exe" $sharedLocales $localesTarget /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NP "/LOG+:$runtimeCopyLog"
+          $copyResult = $LASTEXITCODE
+          if ($copyResult -ge 8) {
+            $copyDetails = (Get-Content -LiteralPath $runtimeCopyLog -Tail 16 -ErrorAction SilentlyContinue) -join ' '
+            throw "Windows could not copy Electron locale files (Robocopy code $copyResult). Log: $runtimeCopyLog. Details: $copyDetails"
+          }
           foreach ($relative in $runtimeRequiredFiles) { if (-not (Test-Path -LiteralPath (Join-Path $runtimeStage $relative) -PathType Leaf)) { throw "The Electron runtime is missing $relative." } }
           Move-Item -LiteralPath $runtimeStage -Destination $runtimeTarget
         } catch {
