@@ -404,9 +404,8 @@
     // leave the existing generic parser available as a fallback.
     if(!headers.length)return null;
     const parseDatePrefix=value=>{
-      const normalized=String(value||'').trim().replace(/[Oo]/g,'0').replace(/[Il|]/g,'1');
-      const match=normalized.match(/^([0-9]{1,2})\s+([A-Za-z]{3,9})\s+([0-9]{2}|20[0-9]{2})\b/i);if(!match)return '';
-      const day=Number(match[1]),month=months[match[2].slice(0,3).toLowerCase()],year=Number(match[3])<100?2000+Number(match[3]):Number(match[3]);
+      const match=String(value||'').trim().match(/^([0-9OIl|]{1,2})\s+([A-Za-z0-9|]{3,9})\s+([0-9OIl|]{2}|20[0-9OIl|]{2})\b/i);if(!match)return '';
+      const day=Number(match[1].replace(/[Oo]/g,'0').replace(/[Il|]/g,'1')),monthText=match[2].replace(/0/g,'o').replace(/[1|]/g,'l').replace(/I/g,'l'),month=months[monthText.slice(0,3).toLowerCase()],yearDigits=match[3].replace(/[Oo]/g,'0').replace(/[Il|]/g,'1'),year=Number(yearDigits)<100?2000+Number(yearDigits):Number(yearDigits);
       if(!month||day<1||day>31)return '';
       return parseDate(`${day}/${month}/${year}`);
     };
@@ -453,7 +452,7 @@
     const barclaysRows=parseBarclaysOcrBank(ocrLines,text,source);if(barclaysRows!==null){const opening=bankOpeningBalance(`${text}\n${ocrLines.map(line=>line?.text||'').join('\n')}`);if(barclaysRows.length&&opening!==null)barclaysRows[0].openingBalance=opening;return barclaysRows;}
     const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
     const yearMatch=String(text).match(/statement\s+date\s+\d{1,2}\s+([A-Za-z]{3,9})\s+(20\d{2})/i),year=yearMatch?Number(yearMatch[2]):new Date().getFullYear(),statementMonth=yearMatch?months[yearMatch[1].slice(0,3).toLowerCase()]:0;
-    const cleanDate=value=>{let s=String(value||'').trim().replace(/^(?:I[O0]|l[O0]|1O)\b/i,'10').replace(/[|Il]/g,'1'),m=s.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\b/i),day=Number((m?m[1]:s.match(/^(\d{1,2})\b/)?.[1])||0),month=m?months[m[2].slice(0,3).toLowerCase()]:statementMonth;if(!month||day<1||day>31)return '';return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;};
+    const cleanDate=value=>{const s=String(value||'').trim(),m=s.match(/^([0-9OIl|]{1,2})\s+([A-Za-z0-9|]{3,9})\b/i),dayText=m?m[1]:s.match(/^([0-9OIl|]{1,2})\b/)?.[1],monthText=m?m[2].replace(/0/g,'o').replace(/[1|]/g,'l').replace(/I/g,'l'):'',day=Number(String(dayText||'').replace(/[Oo]/g,'0').replace(/[Il|]/g,'1')),month=monthText?months[monthText.slice(0,3).toLowerCase()]:statementMonth;if(!month||day<1||day>31)return '';return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;};
     const byPage=new Map();for(const line of ocrLines){const page=Number(line.page)||1;if(!byPage.has(page))byPage.set(page,[]);byPage.get(page).push({...line,x:Number(line.x)||0,y:Number(line.y)||0,text:String(line.text||'').trim()});}
     const output=[];
     for(const pageLines of byPage.values()){
