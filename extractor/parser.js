@@ -1821,11 +1821,11 @@
     {id:'unidentified-forecourt',name:'Unidentified forecourt',category:'Fuel receipts',detect:()=>false}
   ];
   function compatibleCompanies(){return [
-    {id:'monzo-bank',name:'Monzo',category:'Bank statements',status:'Under review',description:'Digital PDF statements with ISO dates and CR/DR transactions'},
-    {id:'barclays-bank',name:'Barclays',category:'Bank statements',status:'Under review',description:'OCR-supported statements with day and month transaction dates'},
+    {id:'monzo-bank',name:'Monzo',category:'Bank statements',status:'Under development',description:'Digital PDF statements with ISO dates and CR/DR transactions'},
+    {id:'barclays-bank',name:'Barclays',category:'Bank statements',status:'Under development',description:'OCR-supported statements with day and month transaction dates'},
     {id:'metro-bank',name:'Metro Bank',category:'Bank statements',status:'Review',description:'Column-based statements and online transaction reports with separate money out, money in and balance columns'},
-    {id:'hsbc-bank',name:'HSBC',category:'Bank statements',status:'Under review',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
-    ...receiptProfiles.map(({id,name,category})=>({id,name,category,status:'Under review'})),
+    {id:'hsbc-bank',name:'HSBC',category:'Bank statements',status:'Under development',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
+    ...receiptProfiles.map(({id,name,category})=>({id,name,category,status:'Under development'})),
     ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status})=>({id,name,category:'Invoices',...(status?{status}:{})}))
   ];}
   function receiptLevenshtein(a,b){const row=Array.from({length:b.length+1},(_,i)=>i);for(let i=1;i<=a.length;i++){let previous=row[0];row[0]=i;for(let j=1;j<=b.length;j++){const current=row[j];row[j]=Math.min(row[j]+1,row[j-1]+1,previous+(a[i-1]===b[j-1]?0:1));previous=current;}}return row[b.length];}
