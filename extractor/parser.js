@@ -2273,7 +2273,7 @@
   const invoiceProfiles=[
     {id:'freshways',name:'Freshways',kind:'supplier',detect:isFreshwaysText,parse:(flat,source,lines)=>parseFreshwaysInvoice(flat,source,lines)},
     {id:'bestway',name:'Bestway Wholesale',kind:'supplier',detect:isBestwayText,parse:(flat,source,lines)=>parseBestwayInvoice(flat,source,lines)},
-    {id:'eagle-foods',name:'Eagle Foods Ltd',kind:'supplier',detect:isEagleFoodsText,parse:(flat,source,lines)=>parseEagleFoodsInvoice(flat,source,lines)},
+    {id:'eagle-foods',name:'Eagle Foods Ltd',kind:'supplier',status:'Under development',detect:isEagleFoodsText,parse:(flat,source,lines)=>parseEagleFoodsInvoice(flat,source,lines)},
     {id:'shahid-halal-poultry',name:'Shahid Halal Poultry',kind:'supplier',detect:isShahidHalalText,parse:(flat,source,lines)=>parseShahidHalalInvoice(flat,source,lines)},
     {id:'marion-trading',name:'Marion Trading',kind:'supplier',detect:isMarionTradingText,parse:(flat,source,lines)=>parseMarionInvoice(flat,source,lines)},
     {id:'monolith',name:'Monolith',kind:'supplier',detect:isMonolithText,parse:(flat,source,lines)=>parseMonolithInvoice(flat,source,lines)},
