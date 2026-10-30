@@ -401,9 +401,10 @@ try {
     $options=New-Object Windows.Data.Pdf.PdfPageRenderOptions
     if($bankRegion){
       $regionTop=[math]::Max(0.0,[double]$bankRegion.top)
-      $regionBottom=[math]::Min([double]$page.Size.Height*2.0,[double]$bankRegion.bottom)
-      # SourceRect uses the PDF renderer's 1.25× page-unit scale while OCR
-      # line coordinates are mapped back with 2/Scale below.
+      # The OCR bitmap decoder returns 1.25x the requested render dimensions;
+      # with the 2/Scale line mapping below, OCR y values are 2.5x PDF points.
+      # Keep the crop bounds in that same unit, then convert back for SourceRect.
+      $regionBottom=[math]::Min([double]$page.Size.Height*2.5,[double]$bankRegion.bottom)
       $sourceTop=$regionTop/2.5;$sourceHeight=[math]::Max(1.0,($regionBottom-$regionTop)/2.5)
       $options.SourceRect=[Windows.Foundation.Rect]::new(0.0,$sourceTop,[double]$page.Size.Width,$sourceHeight)
       $options.DestinationWidth=[uint32]([math]::Round($page.Size.Width*$Scale))

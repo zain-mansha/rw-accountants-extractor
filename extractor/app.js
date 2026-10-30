@@ -359,10 +359,11 @@
       let previous=Number.isInteger(mismatch.previousIndex)?rows[mismatch.previousIndex]:null;
       if(!previous&&current){const currentDate=String(current.date||''),currentPage=Number(current.page),currentY=Number(current.balanceY??current.ocrY),candidate=rows.map((row,index)=>({row,index,date:String(row?.date||''),page:Number(row?.page),y:Number(row?.balanceY??row?.ocrY)})).filter(item=>String(item.row?.balance??'').trim()&&Number.isFinite(item.y)&&item.page>0&&(item.date<currentDate||item.date===currentDate&&(item.page<currentPage||item.page===currentPage&&item.y<currentY))).sort((a,b)=>b.date.localeCompare(a.date)||b.page-a.page||b.y-a.y||b.index-a.index)[0];previous=candidate?.row||null;}
       const previousPage=Number(previous?.page),currentPage=Number(current?.page),previousY=Number(previous?.balanceY??previous?.ocrY),currentY=Number(current?.balanceY??current?.ocrY);
-      if(!previousPage||!currentPage||!Number.isFinite(previousY)||!Number.isFinite(currentY)||previousPage>currentPage)continue;
+      if(!previousPage||!currentPage||!Number.isFinite(previousY)||!Number.isFinite(currentY))continue;
       if(previousPage===currentPage){const top=Math.max(0,Math.min(previousY,currentY)-36),bottom=Math.max(previousY,currentY)+36;addRegion(previousPage,top,Math.max(bottom,top+18));continue;}
-      for(let page=previousPage;page<=currentPage;page++){
-        const top=page===previousPage?Math.max(0,previousY-36):0,bottom=page===currentPage?currentY+36:Number.MAX_SAFE_INTEGER;
+      const firstPage=Math.min(previousPage,currentPage),lastPage=Math.max(previousPage,currentPage),reversePageOrder=previousPage>currentPage;
+      for(let page=firstPage;page<=lastPage;page++){
+        const firstY=reversePageOrder?currentY:previousY,lastY=reversePageOrder?previousY:currentY,top=page===firstPage?Math.max(0,firstY-36):0,bottom=page===lastPage?lastY+36:Number.MAX_SAFE_INTEGER;
         addRegion(page,top,Math.max(bottom,top+18));
       }
     }

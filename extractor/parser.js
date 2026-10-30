@@ -8,11 +8,33 @@
   function hexText(s){const raw=s.slice(1,-1).replace(/\s/g,'');let out='';for(let i=0;i+1<raw.length;i+=2){const n=parseInt(raw.slice(i,i+2),16);if(n>=32&&n<127)out+=String.fromCharCode(n);else if(n===10||n===13)out+=' ';}return out;}
   function tokenText(token){if(token[0]==='(')return unescapePdf(token.slice(1,-1));if(token[0]==='<')return hexText(token);return '';}
   function textFromOperators(raw){
-    const out=[];let m;
-    const token=/\((?:\\.|[^\\)])*\)|<[0-9a-fA-F\s]+>/g;
-    while((m=token.exec(raw))){const tail=raw.slice(m.index+m[0].length,m.index+m[0].length+40);if(/^\s*(?:Tj|['"])/.test(tail)){const value=tokenText(m[0]).replace(/\s+/g,' ').trim();if(value)out.push(value);}else if(/^\s*TJ/.test(tail)){const value=tokenText(m[0]).replace(/\s+/g,' ').trim();if(value)out.push(value);}}
-    const arrays=/\[((?:\((?:\\.|[^\\)])*\)|<[0-9a-fA-F\s]+>|[-+\d.]+|\s)*)\]\s*TJ/g;
-    while((m=arrays.exec(raw))){const values=[];const inner=m[1];let t;while((t=token.exec(inner)))values.push(tokenText(t[0]));const value=values.join('').replace(/\s+/g,' ').trim();if(value)out.push(value);}
+    const source=String(raw||''),out=[],length=source.length;
+    const readString=start=>{
+      const opener=source[start];if(opener==='('){let depth=1,index=start+1;while(index<length){const char=source[index];if(char==='\\'){index+=source[index+1]==='\r'&&source[index+2]==='\n'?3:2;continue;}if(char==='(')depth++;else if(char===')'&&--depth===0)return {raw:source.slice(start,index+1),end:index+1};index++;}return null;}
+      if(opener!=='<'||source[start+1]==='<')return null;const end=source.indexOf('>',start+1);return end<0?null:{raw:source.slice(start,end+1),end:end+1};
+    };
+    const skipSpace=index=>{while(index<length&&/\s/.test(source[index]))index++;return index;};
+    const operatorAt=(index,word)=>source.slice(index,index+word.length)===word&&!/[A-Za-z]/.test(source[index+word.length]||'');
+    for(let index=0;index<length;){
+      if(source[index]==='['){
+        const values=[];let cursor=index+1,closed=false;
+        while(cursor<length){
+          const char=source[cursor];if(char===']'){closed=true;cursor++;break;}
+          if(char==='('||char==='<'&&source[cursor+1]!=='<'){const token=readString(cursor);if(!token)break;values.push(token.raw);cursor=token.end;continue;}
+          cursor++;
+        }
+        if(!closed){break;}
+        const operator=skipSpace(cursor);if(operatorAt(operator,'TJ')){const value=values.map(tokenText).join('').replace(/\s+/g,' ').trim();if(value)out.push(value);index=operator+2;continue;}
+        index=cursor;continue;
+      }
+      if(source[index]==='('||source[index]==='<'&&source[index+1]!=='<'){
+        const token=readString(index);if(!token){break;}
+        const operator=skipSpace(token.end),isSingle=source[operator]==="'"||source[operator]==='"';
+        if(operatorAt(operator,'Tj')||isSingle){const value=tokenText(token.raw).replace(/\s+/g,' ').trim();if(value)out.push(value);index=operator+(isSingle?1:2);continue;}
+        index=token.end;continue;
+      }
+      index++;
+    }
     return out.join(' ').replace(/\s+/g,' ').trim();
   }
   function positionedTextFromOperators(raw){
@@ -73,6 +95,46 @@
     return source.split(marker).map(item=>item.trim()).filter(item=>metroTransactionTypes.some(type=>item.startsWith(type)));
   }
   function metroMoneyValues(value){return [...String(value||'').matchAll(/\(?-?\d[\d,]*\.\d{2}\)?/g)].map(match=>amount(match[0])).filter(value=>value!==null).map(value=>Math.abs(value));}
+  function parseMetroReportDate(value){
+    const match=String(value||'').trim().match(/^([0-9OIl|]{1,2})\s+([A-Za-z]{3,9})\s*(\d{2}|20\d{2})\b/i);if(!match)return '';
+    const day=Number(match[1].replace(/[Oo]/g,'0').replace(/[Il|]/g,'1')),month={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12}[match[2].slice(0,3).toLowerCase()],year=match[3].length===2?2000+Number(match[3]):Number(match[3]);
+    if(!month||day<1||day>31)return '';const iso=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;return parseDate(`${String(day).padStart(2,'0')}/${String(month).padStart(2,'0')}/${year}`)?iso:'';
+  }
+  function parseMetroOnlineTransactionReport(ocrLines,text='',source=''){
+    if(!Array.isArray(ocrLines)||!ocrLines.length)return null;
+    const allText=`${source} ${text} ${ocrLines.map(line=>line?.text||'').join(' ')}`;
+    if(!/online\s+banking\s+transaction\s+report/i.test(allText)||!/\bM?ETRO\s*BANK\b/i.test(allText))return null;
+    const pages=new Map();for(const raw of ocrLines){const page=Number(raw?.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push({...raw,page,x:Number(raw?.x)||0,y:Number(raw?.y)||0,width:Number(raw?.width)||0,height:Number(raw?.height)||0,text:String(raw?.text||'').trim()});}
+    const headerName=value=>String(value||'').toLowerCase().replace(/[^a-z]+/g,' ').trim(),median=values=>{const sorted=values.filter(value=>Number.isFinite(value)&&value>0).sort((a,b)=>a-b);return sorted.length?sorted[Math.floor(sorted.length/2)]:18;};
+    const readMoney=value=>{
+      const raw=String(value||'').trim().replace(/[OoQq]/g,'0').replace(/[Il|]/g,'1'),match=raw.match(/[(-]?\s*\d[\d\s,]*[.,]\s*\d{2}\s*[)]?/);if(!match)return null;
+      const token=match[0].replace(/\s+/g,''),negative=/^\(|^-/.test(token),separator=Math.max(token.lastIndexOf('.'),token.lastIndexOf(','));if(separator<0)return null;
+      const whole=token.slice(0,separator).replace(/\D/g,''),pennies=token.slice(separator+1).replace(/\D/g,'').slice(0,2);if(pennies.length!==2)return null;
+      const parsed=Number(`${whole||'0'}.${pennies}`);return Number.isFinite(parsed)?(negative?-1:1)*parsed:null;
+    };
+    const output=[];
+    for(const [page,items] of [...pages.entries()].sort((a,b)=>a[0]-b[0])){
+      const labels={date:[],valueDate:[],description:[],out:[],incoming:[],balance:[]};
+      for(const line of items){const label=headerName(line.text);if(label==='date')labels.date.push(line);else if(label==='value date')labels.valueDate.push(line);else if(label==='description')labels.description.push(line);else if(label==='money out')labels.out.push(line);else if(label==='money in')labels.incoming.push(line);else if(label==='balance')labels.balance.push(line);}
+      let header=null;
+      for(const date of labels.date){const tolerance=Math.max(24,(date.height||18)*1.5),nearest=name=>labels[name].filter(line=>Math.abs(line.y-date.y)<=tolerance).sort((a,b)=>Math.abs(a.y-date.y)-Math.abs(b.y-date.y))[0]||null,valueDate=nearest('valueDate'),description=nearest('description'),out=nearest('out'),incoming=nearest('incoming'),balance=nearest('balance');if(!valueDate||!description||!out||!incoming||!balance)continue;
+        const ordered=[date,valueDate,description,out,incoming,balance].map(line=>line.x+line.width/2);if(ordered.some((x,index)=>index&&x<=ordered[index-1]))continue;header={date,valueDate,description,out,incoming,balance,y:median([date.y,valueDate.y,description.y,out.y,incoming.y,balance.y]),height:median([date.height,valueDate.height,description.height,out.height,incoming.height,balance.height])};break;
+      }
+      if(!header)continue;
+      const dateBoundary=(header.date.x+header.date.width+header.valueDate.x)/2,descriptionLeft=(header.valueDate.x+header.valueDate.width+header.description.x)/2,descriptionRight=(header.description.x+header.description.width+header.out.x)/2,outInBoundary=(header.out.x+header.out.width+header.incoming.x)/2,inBalanceBoundary=(header.incoming.x+header.incoming.width+header.balance.x)/2;
+      const dateLines=items.filter(line=>line.x<dateBoundary&&line.y>header.y+Math.max(18,header.height*.65)).map(line=>{const partial=String(line.text||'').trim().match(/^([0-9OIl|]{1,2})\s+(20\d{2}|\d{2})$/i);return {line,date:parseMetroReportDate(line.text),partial:partial?{day:Number(partial[1].replace(/[Oo]/g,'0').replace(/[Il|]/g,'1')),year:partial[2].length===2?2000+Number(partial[2]):Number(partial[2])}:null};}).filter(item=>item.date||item.partial).sort((a,b)=>a.line.y-b.line.y);
+      for(let index=0;index<dateLines.length;index++)if(!dateLines[index].date&&dateLines[index].partial){const previous=[...dateLines.slice(0,index)].reverse().find(item=>item.date),next=dateLines.slice(index+1).find(item=>item.date),partial=dateLines[index].partial;if(previous&&next&&previous.date.slice(0,7)===next.date.slice(0,7)&&Number(previous.date.slice(0,4))===partial.year&&Number(next.date.slice(0,4))===partial.year){const month=Number(previous.date.slice(5,7)),candidate=`${partial.year}-${String(month).padStart(2,'0')}-${String(partial.day).padStart(2,'0')}`;if(parseDate(`${String(partial.day).padStart(2,'0')}/${String(month).padStart(2,'0')}/${partial.year}`))dateLines[index].date=candidate;}}
+      const rowTolerance=Math.max(16,header.height*.9);
+      for(let index=0;index<dateLines.length;index++){
+        const dateRecord=dateLines[index],dateLine=dateRecord.line,nextY=dateLines[index+1]?.line.y??Infinity,nearby=items.filter(line=>Math.abs(line.y-dateLine.y)<=rowTolerance&&readMoney(line.text)!==null),columnValue=(left,right)=>nearby.filter(line=>line.x>=left&&line.x<right).sort((a,b)=>Math.abs(a.y-dateLine.y)-Math.abs(b.y-dateLine.y))[0]||null,outLine=columnValue(descriptionRight,outInBoundary),inLine=columnValue(outInBoundary,inBalanceBoundary),balanceLine=columnValue(inBalanceBoundary,Infinity),outValue=outLine?readMoney(outLine.text):null,inValue=inLine?readMoney(inLine.text):null,balance=balanceLine?readMoney(balanceLine.text):null;
+        const hasOneMovement=(outValue!==null)!==(inValue!==null),movement=hasOneMovement?(inValue!==null?Math.abs(inValue):-Math.abs(outValue)):null,detail=items.filter(line=>line.x>=descriptionLeft&&line.x<descriptionRight&&line.y>=dateLine.y-rowTolerance&&line.y<nextY-rowTolerance/2).sort((a,b)=>a.y-b.y||a.x-b.x).map(line=>line.text).join(' ').replace(/\s+/g,' ').trim(),unreadableMovement=movement===null,dateUnconfirmed=!dateRecord.date,rejected=unreadableMovement||balance===null||dateUnconfirmed;
+        output.push({date:dateRecord.date,details:detail||'Bank transaction',receipt:movement!==null&&movement>0?movement:'',payment:movement!==null&&movement<0?Math.abs(movement):'',amount:movement??'',balance:balance??'',balanceExpected:!dateUnconfirmed,source,page,profileId:'metro-online-transaction-report',ocrY:dateLine.y,balanceY:balanceLine?.y??null,confidence:rejected?'REJECTED':'Metro online transaction report',review:rejected,balanceMovementUnreadable:unreadableMovement,...(rejected?{status:'REJECTED',accepted:false,rejected:true,rejectedReason:dateUnconfirmed?'Transaction date could not be confirmed from the statement. Verify this row on the linked PDF page.':unreadableMovement?'Transaction amount could not be read from the statement. Verify this row on the linked PDF page.':'Running balance could not be read from the statement. Verify this row on the linked PDF page.'}:{})});
+      }
+    }
+    if(!output.length)return [];
+    const first=output.find(row=>row.date)?.date||'',last=[...output].reverse().find(row=>row.date)?.date||'',descending=first>last;
+    return output.sort((a,b)=>a.date.localeCompare(b.date)||(descending?(Number(b.page)-Number(a.page)||Number(b.ocrY)-Number(a.ocrY)):(Number(a.page)-Number(b.page)||Number(a.ocrY)-Number(b.ocrY))));
+  }
   function metroPositionedRows(items,source,pageNumber){
     if(!Array.isArray(items)||!items.length)return [];
     const isType=value=>metroTransactionTypes.some(type=>String(value||'').startsWith(type));
@@ -473,6 +535,7 @@
   }
   function parseOcrBank(ocrLines,text='',source=''){
     if(!Array.isArray(ocrLines)||!ocrLines.length)return [];
+    const metroReportRows=parseMetroOnlineTransactionReport(ocrLines,text,source);if(metroReportRows!==null)return metroReportRows;
     const hsbcRows=parseHsbcOcrBank(ocrLines,text,source);if(hsbcRows!==null){if(hsbcRows.length)return hsbcRows;}
     const barclaysRows=parseBarclaysOcrBank(ocrLines,text,source);if(barclaysRows!==null){const opening=bankOpeningBalance(`${text}\n${ocrLines.map(line=>line?.text||'').join('\n')}`);if(barclaysRows.length&&opening!==null)barclaysRows[0].openingBalance=opening;return barclaysRows;}
     const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
@@ -1760,7 +1823,7 @@
   function compatibleCompanies(){return [
     {id:'monzo-bank',name:'Monzo',category:'Bank statements',description:'Digital PDF statements with ISO dates and CR/DR transactions'},
     {id:'barclays-bank',name:'Barclays',category:'Bank statements',description:'OCR-supported statements with day and month transaction dates'},
-    {id:'metro-bank',name:'Metro Bank',category:'Bank statements',description:'Column-based statements with separate money out, money in and balance columns'},
+    {id:'metro-bank',name:'Metro Bank',category:'Bank statements',description:'Column-based statements and online transaction reports with separate money out, money in and balance columns'},
     {id:'hsbc-bank',name:'HSBC',category:'Bank statements',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
     ...receiptProfiles.map(({id,name,category})=>({id,name,category})),
     ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status})=>({id,name,category:'Invoices',...(status?{status}:{})}))
