@@ -151,7 +151,8 @@ test('network launcher updates the shared app from the public GitHub repository 
   assert.match(source,/\$shortcut\.TargetPath = \$runtimeExecutable/);
   assert.match(source,/\$shortcut\.IconLocation = "\$runtimeExecutable,0"/);
   assert.match(source,/Programs\\ExtractorRuntime/);
-  assert.match(source,/robocopy\.exe[^\r\n]*\$source \$runtimeStage/);
+  assert.match(source,/Copy-Item -LiteralPath \$runtimeFile\.FullName -Destination \$runtimeStage/);
+  assert.match(source,/Copy-Item -LiteralPath \$sharedLocales -Destination \$runtimeStage -Recurse/);
   assert.match(source,/Join-Path \$source 'resources\\app'\),\(Join-Path \$source 'data'\)/);
   assert.match(source,/Programs\\Extractor'\)/);
 });
