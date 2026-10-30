@@ -11,8 +11,9 @@ test('Extractor build version and fingerprint are wired to the visible top-bar l
   const version=JSON.parse(fs.readFileSync(path.join(root,'extractor','package.json'),'utf8')).version;
   assert.match(version,/^\d+\.\d+\.\d+$/);
   assert.match(html,/<span id="build-info" class="build-info"[^>]*>Checking version/);
-  assert.match(app,/label\.textContent=version\?`v\$\{version\}/);
-  assert.match(app,/commit\.slice\(0,12\)/);
+  assert.match(app,/label\.textContent=buildId\?`v\$\{buildId\}`:version\?`v\$\{version\}`/);
+  assert.doesNotMatch(app,/commit\.slice\(0,12\)/);
+  assert.match(app,/Full build ID: \$\{buildId\}/);
   assert.match(main,/ipcMain\.handle\('app-build-info'/);
 });
 test('PDF page links use absolute, Excel-safe file URLs',()=>{
