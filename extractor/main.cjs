@@ -111,10 +111,23 @@ function relaunchWorkspace(workspaceId=''){
 }
 ipcMain.handle('workspace-list',()=>readWorkspaceProfilesSync(profileRoot).map(({id,username,createdAt})=>({id,username,createdAt})));
 ipcMain.handle('app-build-info',()=>{
-  const appDirectory=process.env.FARE_EXTRACTOR_LOCAL_APP||process.env.FARE_EXTRACTOR_SHARED_APP||__dirname;
+  const directories=[process.env.FARE_EXTRACTOR_LOCAL_APP,process.env.FARE_EXTRACTOR_SHARED_APP,app.getAppPath(),__dirname].filter(Boolean).map(directory=>path.resolve(directory));
   let version=app.getVersion(),buildId='',commit='';
-  try{version=String(JSON.parse(fsSync.readFileSync(path.join(appDirectory,'package.json'),'utf8')).version||version);}catch{}
-  try{const buildInfo=JSON.parse(fsSync.readFileSync(path.join(appDirectory,'build-info.json'),'utf8'));buildId=String(buildInfo.buildId||'');commit=String(buildInfo.commit||'');}catch{}
+  for(const directory of [...new Set(directories)]){
+    try{const packageInfo=JSON.parse(fsSync.readFileSync(path.join(directory,'package.json'),'utf8'));if(packageInfo.version){version=String(packageInfo.version);break;}}catch{}
+  }
+  for(const directory of [...new Set(directories)]){
+    try{const buildInfo=JSON.parse(fsSync.readFileSync(path.join(directory,'build-info.json'),'utf8'));if(!buildId)buildId=String(buildInfo.buildId||'');if(!commit)commit=String(buildInfo.commit||'');if(buildId&&commit)break;}catch{}
+  }
+  if(!buildId){
+    const checkedBuildId=String(process.env.FARE_EXTRACTOR_UPDATE_CHECKED_BUILD_ID||'').trim();
+    if(/^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$/.test(checkedBuildId))buildId=checkedBuildId;
+  }
+  if(!buildId){
+    const versionPrefix=`${version}-`;
+    const localDirectory=directories.find(directory=>path.basename(directory).startsWith(versionPrefix));
+    if(localDirectory)buildId=path.basename(localDirectory);
+  }
   return {version,buildId,commit};
 });
 ipcMain.handle('workspace-current',()=>activeWorkspace?{id:activeWorkspace.id,username:activeWorkspace.username}:null);

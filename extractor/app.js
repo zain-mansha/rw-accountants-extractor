@@ -462,7 +462,7 @@
     else if(mode==='companies')$('#result').hidden=true;
     else{renderResult();$('#result').hidden=!rows.length;}
   }).catch(error=>console.warn(`Could not restore the workspace after its update: ${error.message}`));
-  if(native?.getBuildInfo)native.getBuildInfo().then(info=>{const label=$('#build-info');if(!label)return;const version=String(info?.version||'').trim(),buildId=String(info?.buildId||'').trim(),commit=String(info?.commit||'').trim();label.textContent=buildId?`v${buildId}`:version?`v${version}`:'Version unavailable';label.title=[buildId?`Full build ID: ${buildId}`:'',commit?`Commit: ${commit}`:''].filter(Boolean).join('\n')||label.textContent;}).catch(()=>{const label=$('#build-info');if(label)label.textContent='Version unavailable';});
+  if(native?.getBuildInfo)native.getBuildInfo().then(info=>{const label=$('#build-info');if(!label)return;const version=String(info?.version||'').trim(),buildId=String(info?.buildId||'').trim(),commit=String(info?.commit||'').trim(),fullBuildId=buildId||(commit?`${version||'build'}-${commit.slice(0,12)}`:'');label.textContent=fullBuildId?`v${fullBuildId}`:version?`v${version}`:'Version unavailable';label.title=[fullBuildId?`Full build ID: ${fullBuildId}`:'',commit?`Commit: ${commit}`:''].filter(Boolean).join('\n')||label.textContent;}).catch(()=>{const label=$('#build-info');if(label)label.textContent='Version unavailable';});
 })();
 
 
