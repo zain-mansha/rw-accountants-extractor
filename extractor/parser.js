@@ -385,7 +385,7 @@
     const pages=new Map();
     for(const raw of ocrLines){const page=Number(raw?.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push({...raw,page,x:Number(raw?.x)||0,y:Number(raw?.y)||0,width:Number(raw?.width)||0,height:Number(raw?.height)||0,text:String(raw?.text||'').trim()});}
     const median=values=>{const sorted=values.filter(value=>Number.isFinite(value)&&value>0).sort((a,b)=>a-b);return sorted.length?sorted[Math.floor(sorted.length/2)]:0;};
-    const label=line=>String(line?.text||'').toLowerCase().replace(/[^a-z ]/g,' ').replace(/\s+/g,' ').trim();
+    const label=line=>String(line?.text||'').toLowerCase().replace(/[^a-z ]/g,' ').replace(/\bdute\b/g,'date').replace(/\bdote\b/g,'date').replace(/\bderails\b/g,'details').replace(/\s+/g,' ').trim();
     const headers=[];
     for(const [page,items] of pages){
       const dates=items.filter(line=>/^date$/.test(label(line)));
@@ -422,22 +422,47 @@
       const c=header.centers,dateDetail=(c.date+c['payment type and details'])/2,detailOut=(c['payment type and details']+c['paid out'])/2,outIncome=(c['paid out']+c['paid in'])/2,incomeBalance=(c['paid in']+c.balance)/2;
       const afterHeader=header.headerY+Math.max(8,header.headerHeight*.45),items=header.items;
       const dateLines=items.filter(line=>line.y>afterHeader&&line.x<dateDetail).map(line=>({line,date:parseDatePrefix(line.text)})).filter(item=>item.date).sort((a,b)=>a.line.y-b.line.y);
-      const moneyLines=items.filter(line=>line.y>afterHeader&&line.x>=detailOut&&line.x<incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==null&&item.value!==0).map(item=>({...item,kind:item.line.x<outIncome?'payment':'receipt'})).sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
+      const moneyCandidates=items.filter(line=>line.y>afterHeader&&line.x>=detailOut&&line.x<incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==0&&(item.value!==null||/^[\s(+-]*(?:[£$€]\s*)?\d[\d,]*(?:[.,]\d{0,2})?[)\s]*$/.test(item.line.text))).map(item=>({...item,kind:item.line.x<outIncome?'payment':'receipt',readable:item.value!==null})).sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
       const balances=items.filter(line=>line.y>afterHeader&&line.x>=incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==null).sort((a,b)=>a.line.y-b.line.y);
+      const typeMarkers=items.filter(line=>line.y>afterHeader&&line.x>=(c.date+c['payment type and details'])/2&&line.x<c['payment type and details']+Math.max(24,header.headerHeight)&&/^(?:CR|BP|SO)$/i.test(line.text.trim())).sort((a,b)=>a.y-b.y);
+      const isBalanceForward=value=>{const normalized=String(value||'').toLowerCase().replace(/[^a-z]/g,'').replace(/baiance/g,'balance');return /balance(?:brought|carried)/.test(normalized);};
+      // Estimate each page's transaction rhythm from OCR row spacing, so a missing amount does not shift neighboring details.
+      const movementHeights=moneyCandidates.map(item=>Number(item.line.height)||0),lineHeight=median([...movementHeights,...typeMarkers.map(line=>Number(line.height)||0),...dateLines.map(item=>Number(item.line.height)||0)])||header.headerHeight||16;
+      const movementGaps=moneyCandidates.slice(1).map((item,index)=>Number(item.line.y)-Number(moneyCandidates[index].line.y)).filter(gap=>gap>lineHeight*2.4&&gap<lineHeight*7);
+      const markerGaps=typeMarkers.slice(1).map((line,index)=>Number(line.y)-Number(typeMarkers[index].y)).filter(gap=>gap>lineHeight*2.4&&gap<lineHeight*7);
+      const pitch=median([...movementGaps,...markerGaps])||lineHeight*4;
+      const markerOffset=median(moneyCandidates.map(item=>{const prior=[...typeMarkers].reverse().find(line=>line.y<=item.line.y);return prior?Number(item.line.y)-Number(prior.y):0;}).filter(gap=>gap>lineHeight*.6&&gap<=pitch*1.35))||lineHeight*2;
+      const slots=moneyCandidates.map(item=>({...item,inferred:false}));
+      const pushInferredSlot=(y,kind='')=>{if(slots.some(slot=>Math.abs(Number(slot.line.y)-y)<=lineHeight*.65))return;slots.push({line:{page:header.page,x:kind==='receipt'?c['paid in']:kind==='payment'?c['paid out']:c['paid in'],y,width:0,height:lineHeight,text:''},value:null,kind,readable:false,inferred:true});};
+      for(let index=1;index<moneyCandidates.length;index++){
+        const previous=moneyCandidates[index-1],current=moneyCandidates[index],gap=Number(current.line.y)-Number(previous.line.y),steps=Math.round(gap/pitch);
+        if(steps<2||Math.abs(gap-steps*pitch)>Math.max(lineHeight*1.2,pitch*.18))continue;
+        for(let step=1;step<steps;step++){
+          const y=Number(previous.line.y)+pitch*step;
+          const rowStart=y-markerOffset,marker=[...typeMarkers].reverse().find(line=>Number(line.y)<=rowStart+lineHeight*.65&&Number(line.y)>=rowStart-pitch*.8),kind=marker?/^CR$/i.test(marker.text.trim())?'receipt':'payment':'';
+          pushInferredSlot(y,kind);
+        }
+      }
+      // Amounts normally sit one printed line below the transaction's type or
+      // date. When OCR loses the entire amount cell there may be no amount line
+      // from which to spot a gap, so use those row labels as relative anchors.
+      const rowCues=[...typeMarkers.map(line=>({line,kind:/^CR$/i.test(line.text.trim())?'receipt':'payment'})),...dateLines.filter(item=>!typeMarkers.some(marker=>Math.abs(Number(marker.y)-Number(item.line.y))<=markerOffset+lineHeight*.6)).filter(item=>!items.some(line=>isBalanceForward(line.text)&&Math.abs(Number(line.y)-Number(item.line.y))<=lineHeight*.9)).filter(item=>items.some(line=>line.x>=dateDetail&&line.x<detailOut&&line.y>=Number(item.line.y)-lineHeight*.6&&line.y<=Number(item.line.y)+markerOffset+lineHeight*.5&&!isBalanceForward(line.text))).map(item=>({line:item.line,kind:''}))].sort((a,b)=>a.line.y-b.line.y);
+      for(const cue of rowCues){const expectedY=Number(cue.line.y)+markerOffset,hasAmount=moneyCandidates.some(item=>Number(item.line.y)>=Number(cue.line.y)-lineHeight*.5&&Number(item.line.y)<=expectedY+lineHeight*.8);if(!hasAmount)pushInferredSlot(expectedY,cue.kind);}
+      slots.sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
       const movements=[];
-      for(const movement of moneyLines){
-        const explicitDate=[...dateLines].reverse().find(item=>item.line.y<=movement.line.y+Math.max(8,(movement.line.height||0)*.5)),date=explicitDate?.date||previousPageDate;
+      for(let movementIndex=0;movementIndex<slots.length;movementIndex++){
+        const movement=slots[movementIndex],movementY=Number(movement.line.y),nearbyCue=rowCues.filter(cue=>Number(cue.line.y)<=movementY+lineHeight*.35&&Number(cue.line.y)>=movementY-pitch*.8).sort((a,b)=>Number(b.line.y)-Number(a.line.y))[0],rowStart=nearbyCue?Number(nearbyCue.line.y):movementY-markerOffset,previousSlot=slots[movementIndex-1],detailStart=Math.max(rowStart-lineHeight*.25,previousSlot?Number(previousSlot.line.y)+lineHeight*.12:-Infinity),explicitDate=[...dateLines].reverse().find(item=>Number(item.line.y)<=rowStart+lineHeight*.55),date=explicitDate?.date||previousPageDate;
         if(!date)continue;
-        const prior=movements.at(-1),firstRowStart=explicitDate?explicitDate.line.y-Math.max(8,(explicitDate.line.height||header.headerHeight||16)*.45):afterHeader;
-        const startY=prior?prior.line.y+1:firstRowStart;
-        const detailLines=items.filter(line=>line.x>=dateDetail&&line.x<detailOut&&line.y>=startY&&line.y<=movement.line.y+Math.max(4,(movement.line.height||0)*.2)&&!/^balance\s+(?:brought|carried)\s+forward\b/i.test(line.text)).sort((a,b)=>a.y-b.y||a.x-b.x);
+        const detailLines=items.filter(line=>line.x>=dateDetail&&line.x<detailOut&&line.y>=detailStart&&line.y<=movementY+lineHeight*.4&&!isBalanceForward(line.text)).sort((a,b)=>a.y-b.y||a.x-b.x);
         const details=detailLines.map(line=>line.text).join(' ').replace(/\s+/g,' ').trim();
-        const maxBalanceDistance=Math.max(10,(movement.line.height||header.headerHeight||16)*.6),balance=balances.filter(item=>Math.abs(item.line.y-movement.line.y)<=maxBalanceDistance).sort((a,b)=>Math.abs(a.line.y-movement.line.y)-Math.abs(b.line.y-movement.line.y))[0]||null;
-        const value=Math.abs(movement.value),signed=movement.kind==='receipt'?value:-value;
-        movements.push({line:movement.line,date,details:details||'Bank transaction',receipt:movement.kind==='receipt'?value:'',payment:movement.kind==='payment'?value:'',amount:signed,balance:balance?.value??'',balanceExpected:Boolean(balance),source,page:header.page,ocrY:movement.line.y,balanceY:balance?.line.y??null,confidence:'HSBC labelled OCR columns',review:true});
+        const balance=balances.filter(item=>Math.abs(Number(item.line.y)-Number(movement.line.y))<=Math.max(lineHeight*.7,Number(movement.line.height||0)*.6)).sort((a,b)=>Math.abs(Number(a.line.y)-Number(movement.line.y))-Math.abs(Number(b.line.y)-Number(movement.line.y)))[0]||null;
+        let kind=movement.kind;
+        if(!kind){const rowMarkers=typeMarkers.filter(line=>Number(line.y)<=rowStart+lineHeight*.65&&Number(line.y)>=rowStart-pitch*.8);const marker=rowMarkers.at(-1);if(marker)kind=/^CR$/i.test(marker.text.trim())?'receipt':'payment';}
+        const value=movement.readable?Math.abs(movement.value):'',signed=value===''?'':kind==='receipt'?value:kind==='payment'?-value:'';
+        movements.push({date,details:details||'Bank transaction amount not read',receipt:value!==''&&kind==='receipt'?value:'',payment:value!==''&&kind==='payment'?value:'',amount:signed,balance:balance?.value??'',balanceExpected:Boolean(balance),source,page:header.page,ocrY:Number(movement.line.y)||0,balanceY:balance?.line.y??null,confidence:movement.readable?'HSBC labelled OCR columns':'REJECTED',review:true,...(!movement.readable?{balanceMovementUnreadable:true}: {})});
       }
       if(movements.length){
-        const firstMovementY=moneyLines[0]?.line.y??Infinity,pageOpening=balances.filter(item=>item.line.y<firstMovementY).at(-1)?.value;
+        const firstMovementY=slots[0]?.line.y??Infinity,pageOpening=balances.filter(item=>item.line.y<firstMovementY).at(-1)?.value;
         movements[0].pageOpeningBalance=pageOpening??'';
         if(!rows.length&&pageOpening!==undefined)movements[0].openingBalance=pageOpening;
         rows.push(...movements);

@@ -1093,6 +1093,24 @@ test('HSBC OCR follows labelled columns and carries a date across a page break',
   assert.equal(rows[0].openingBalance,1000);assert.equal(rows[2].pageOpeningBalance,1050);assert.ok(rows.every(row=>! /BALANCE BROUGHT FORWARD/i.test(row.details)));
   const report=P.inspectBankBalances(rows);assert.equal(report.mismatches.length,0);assert.equal(report.checkedSegments,4);
 });
+test('HSBC keeps a transaction with an unreadable amount separate from the next movement',()=>{
+  const lines=[
+    {page:1,text:'HSBC',x:20,y:10},
+    {page:1,text:'Date',x:100,y:100,width:40,height:20},{page:1,text:'Payment type and details',x:200,y:100,width:180,height:20},{page:1,text:'Paid out',x:600,y:100,width:60,height:20},{page:1,text:'Paid in',x:750,y:100,width:50,height:20},{page:1,text:'Balance',x:900,y:100,width:55,height:20},
+    {page:1,text:'28 Dec 25',x:100,y:150},{page:1,text:'BALANCE BROUGHT FORWARD',x:220,y:150},{page:1,text:'1,000.00',x:910,y:150},
+    {page:1,text:'29 Dec 25',x:100,y:200},{page:1,text:'CR',x:210,y:200},{page:1,text:'Paymentsense receipt',x:250,y:200},
+    {page:1,text:'BP',x:210,y:300},{page:1,text:'Supplier payment',x:250,y:300},{page:1,text:'50.00',x:620,y:320},{page:1,text:'950.00',x:910,y:320}
+  ];
+  const rows=P.parseOcrBank(lines,'HSBC Kinetic Current Account Statement','sample.pdf');
+  assert.equal(rows.length,2);
+  assert.match(rows[0].details,/Paymentsense receipt/);
+  assert.equal(rows[0].balanceMovementUnreadable,true);
+  assert.equal(rows[0].amount,'');
+  assert.equal(rows[1].details,'BP Supplier payment');
+  assert.equal(rows[1].amount,-50);
+  const report=P.inspectBankBalances(rows);P.markBankBalanceMismatches(rows,report);
+  assert.ok(rows.every(row=>row.status==='REJECTED'));
+});
 test('OCR normalises ten as IO and carries a day-only date across rows',()=>{const lines=[{page:2,text:'Statement date 28 Aug 2026',x:490,y:43},{page:2,text:'IO Aug',x:98,y:143},{page:2,text:'Card Purchase Apple',x:183,y:143},{page:2,text:'2.99',x:481,y:143},{page:2,text:'24',x:98,y:300},{page:2,text:'Received From Driver',x:183,y:300},{page:2,text:'26.27',x:562,y:300}];const r=P.parseOcrBank(lines,'Statement date 28 Aug 2026','barclays.pdf');assert.deepEqual(r.map(x=>[x.date,x.payment,x.receipt]),[['2026-08-10',2.99,''],['2026-08-24','',26.27]]);});
 test('ISO date bank statements split rows correctly',async()=>{const r=await P.parsePdf(pdf('(2026-10-11) Tj (Shell fuel) Tj (47.80 DR) Tj (2026-10-12) Tj (Taxi fares) Tj (260.00 CR) Tj'),'bank','monzo.pdf');assert.equal(r.transactions.length,2);assert.equal(r.transactions[0].date,'2026-10-11');assert.equal(r.transactions[1].receipt,260);});
 test('Metro Bank column headers parse with clean or legacy pound characters',()=>{for(const prefix of ['', '\u00C2']){const currency=`(${prefix}\u00A3)`,items=[{text:'10 Aug 2026',x:50,y:700},{text:'Direct Debit Test',x:150,y:700},{text:`Money out ${currency}`,x:400,y:10},{text:`Money in ${currency}`,x:600,y:10},{text:`Balance ${currency}`,x:800,y:10},{text:'12.34',x:500,y:700},{text:'50.00',x:900,y:700}];const [row]=P.parseBank('','synthetic.pdf',[items]);assert.deepEqual([row.date,row.details,row.payment,row.balance],['2026-08-10','Direct Debit Test',12.34,50]);}});
