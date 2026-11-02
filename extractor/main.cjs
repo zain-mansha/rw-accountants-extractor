@@ -20,7 +20,13 @@ const {maintenanceMode,buildInfo:maintenanceBuildInfo}=readMaintenanceMetadata(_
 if(shouldBlockLaunch({packaged:app.isPackaged,maintenanceMode,buildInfo:maintenanceBuildInfo})){
   const title=String(maintenanceMode.title||'Extractor is under maintenance');
   const message=String(maintenanceMode.message||'Extractor is temporarily unavailable. Please try again later.');
-  app.whenReady().then(()=>{dialog.showErrorBox(title,message);app.exit(0);});
+  app.whenReady().then(()=>{
+    const maintenanceWindow=new BrowserWindow({width:480,height:235,resizable:false,minimizable:false,maximizable:false,autoHideMenuBar:true,title,backgroundColor:'#f4f8f6',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
+    const safeMessage=message.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f8f6;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:370px}.brand{font-size:11px;font-weight:800;letter-spacing:.15em;color:#08796c}.eyebrow{margin-top:18px;color:#0b8174;font-size:10px;font-weight:800;letter-spacing:.12em}.title{font-size:23px;font-weight:730;margin:8px 0}.copy{color:#60736d;line-height:1.55;min-height:44px}.track{height:8px;margin-top:20px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:34%;border-radius:8px;background:#0d8276;animation:move 1.3s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(195%)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="eyebrow">TEMPORARILY UNAVAILABLE</div><div class="title">Under maintenance</div><div class="copy">'+safeMessage+'</div><div class="track"><div class="bar"></div></div></main>';
+    maintenanceWindow.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+    maintenanceWindow.once('closed',()=>app.quit());
+  });
   app.on('window-all-closed',()=>app.quit());
   return;
 }
