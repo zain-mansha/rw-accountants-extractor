@@ -6,6 +6,7 @@ const fsSync=require('node:fs');
 const {execFile,spawn}=require('node:child_process');
 const crypto=require('node:crypto');
 const {readWorkspaceProfilesSync,workspaceDirectory,createWorkspace}=require('./workspaces.cjs');
+const {shouldBlockLaunch}=require('./maintenance-gate.cjs');
 let publishNetworkBootstrap=()=>({updated:false});
 try{publishNetworkBootstrap=require('./network-bootstrap.cjs').publishNetworkBootstrap;}
 catch(error){if(error?.code!=='MODULE_NOT_FOUND'||!String(error?.message||'').startsWith("Cannot find module './network-bootstrap.cjs'"))throw error;}
@@ -15,6 +16,16 @@ catch(error){if(error?.code!=='MODULE_NOT_FOUND'||!String(error?.message||'').st
 // copy with isolated workspace data.
 const networkPackageDirectory=path.dirname(process.execPath);
 const networkBuildFile=path.join(networkPackageDirectory,'network-build.txt');
+let maintenanceMode={};let maintenanceBuildInfo={};
+try{maintenanceMode=JSON.parse(fsSync.readFileSync(path.join(__dirname,'maintenance-mode.json'),'utf8'));}catch{}
+try{maintenanceBuildInfo=JSON.parse(fsSync.readFileSync(path.join(__dirname,'build-info.json'),'utf8'));}catch{}
+if(shouldBlockLaunch({packaged:app.isPackaged,maintenanceMode,buildInfo:maintenanceBuildInfo})){
+  const title=String(maintenanceMode.title||'Extractor is under maintenance');
+  const message=String(maintenanceMode.message||'Extractor is temporarily unavailable. Please try again later.');
+  app.whenReady().then(()=>{dialog.showErrorBox(title,message);app.exit(0);});
+  app.on('window-all-closed',()=>app.quit());
+  return;
+}
 const bootstrapRefresh=publishNetworkBootstrap({
   packaged:app.isPackaged,
   sharedApplication:process.env.FARE_EXTRACTOR_SHARED_APP,
