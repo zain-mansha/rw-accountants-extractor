@@ -3,6 +3,7 @@ param(
   [string]$ProfileRoot = (Join-Path $env:LOCALAPPDATA 'Extractor\Profiles'),
   [string]$NetworkSource = '',
   [string]$LocalBuildId = '',
+  [string]$ExpectedUpdateCommit = '',
   [switch]$PrepareLocalAppOnly,
   [switch]$NoLaunch
 )
@@ -40,6 +41,9 @@ try {
   $initialBuildSha = [string]$initialBuildInfo.commit
   if ($initialBuildSha -notmatch '^[a-f0-9]{40}$') { $initialBuildSha = '' }
 } catch { $initialBuildSha = '' }
+if ($ExpectedUpdateCommit -match '^[a-f0-9]{40}$' -and $initialBuildSha -ne $ExpectedUpdateCommit) {
+  throw "Extractor stopped a repeated Git update: the shared app reports commit '$initialBuildSha' after restart, but the update expected '$ExpectedUpdateCommit'. Review the startup log before trying again."
+}
 $sessionDirectory = Join-Path $source '.extractor-app-sessions'
 $updatePendingPath = Join-Path $source '.extractor-update.pending'
 $requiredAppFiles = @(
@@ -574,7 +578,7 @@ if ($updateWillReset -and -not $NoLaunch -and -not $PrepareLocalAppOnly) {
   if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
     $restartPowerShell = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
   }
-  $restartArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -RuntimeRoot "' + $RuntimeRoot + '" -ProfileRoot "' + $ProfileRoot + '"'
+  $restartArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -RuntimeRoot "' + $RuntimeRoot + '" -ProfileRoot "' + $ProfileRoot + '" -ExpectedUpdateCommit "' + $commitSha + '"'
   $restartProcess = Start-Process -FilePath $restartPowerShell -ArgumentList $restartArguments -WorkingDirectory $source -NoNewWindow -PassThru
   $restartProcess.WaitForExit()
   if ($restartProcess.ExitCode -ne 0) {
