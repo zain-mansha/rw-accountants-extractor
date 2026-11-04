@@ -585,9 +585,16 @@ if ($updateWillReset -and -not $NoLaunch -and -not $PrepareLocalAppOnly) {
     $restartPowerShell = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
   }
   $restartScript = Join-Path $source 'Start Extractor from Network.ps1'
-  $restartArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $restartScript + '" -NetworkSource "' + $source + '" -RuntimeRoot "' + $RuntimeRoot + '" -ProfileRoot "' + $ProfileRoot + '" -ExpectedUpdateCommit "' + $commitSha + '"'
-  $restartProcess = Start-Process -FilePath $restartPowerShell -ArgumentList $restartArguments -WorkingDirectory ([IO.Path]::GetTempPath()) -NoNewWindow -PassThru
-  $restartProcess.WaitForExit()
+  $restartArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $restartScript + '" -RuntimeRoot "' + $RuntimeRoot + '" -ProfileRoot "' + $ProfileRoot + '" -ExpectedUpdateCommit "' + $commitSha + '"'
+  $previousRestartNetworkRoot = $env:FARE_EXTRACTOR_NETWORK_ROOT
+  $env:FARE_EXTRACTOR_NETWORK_ROOT = $source
+  try {
+    $restartProcess = Start-Process -FilePath $restartPowerShell -ArgumentList $restartArguments -WorkingDirectory ([IO.Path]::GetTempPath()) -NoNewWindow -PassThru
+    $restartProcess.WaitForExit()
+  } finally {
+    if ($null -eq $previousRestartNetworkRoot) { Remove-Item Env:FARE_EXTRACTOR_NETWORK_ROOT -ErrorAction SilentlyContinue }
+    else { $env:FARE_EXTRACTOR_NETWORK_ROOT = $previousRestartNetworkRoot }
+  }
   if ($restartProcess.ExitCode -ne 0) {
     throw "Extractor could not finish applying the Git update (exit code $($restartProcess.ExitCode)). Review the startup log and try again."
   }
