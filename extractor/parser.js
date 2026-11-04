@@ -1884,9 +1884,9 @@
     {id:'unidentified-forecourt',name:'Unidentified forecourt',category:'Receipts',detect:()=>false}
   ];
   function compatibleCompanies(){return [
-    {id:'sumup-bank',name:'SumUp',category:'Bank statements',status:'Under development',description:'OCR-supported SumUp account statements with content-detected Date, Reference, Type, Amount and Description columns'},
+    {id:'sumup-bank',name:'SumUp',category:'Bank statements',status:'Review',description:'OCR-supported SumUp account statements with content-detected Date, Reference, Type, Amount and Description columns'},
     {id:'monzo-bank',name:'Monzo',category:'Bank statements',status:'Under development',description:'Digital PDF statements with ISO dates and CR/DR transactions'},
-    {id:'barclays-bank',name:'Barclays',category:'Bank statements',status:'Under development',description:'OCR-supported statements with day and month transaction dates'},
+    {id:'barclays-bank',name:'Barclays',category:'Bank statements',status:'Review',description:'OCR-supported statements with day and month transaction dates'},
     {id:'metro-bank',name:'Metro Bank',category:'Bank statements',status:'Review',description:'Column-based statements and online transaction reports with separate money out, money in and balance columns'},
     {id:'hsbc-bank',name:'HSBC',category:'Bank statements',status:'Under development',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
     ...receiptProfiles.map(({id,name,category})=>({id,name,category,status:'Under development'})),
