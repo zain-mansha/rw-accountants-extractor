@@ -1,4 +1,5 @@
 import {cp,mkdir,rename,stat,readFile,writeFile,readdir,rm} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -15,6 +16,22 @@ if(localOnly&&!network)throw new Error('Use --local-only together with --network
 const requestedTarget=targetIndex>=0?process.argv[targetIndex+1]:'';
 const target=requestedTarget?path.resolve(root,requestedTarget):path.join(releaseRoot,network?'Extractor-Network':'Extractor');
 if(target!==releaseRoot&&!target.startsWith(releaseRoot+path.sep))throw new Error('Extractor package target must be inside the release folder.');
+
+function getCleanGitCommit(){
+  const candidates=process.platform==='win32'
+    ? [process.env.GIT_EXECUTABLE,'C:\\Program Files\\Git\\cmd\\git.exe','C:\\Program Files (x86)\\Git\\cmd\\git.exe','git.exe'].filter(Boolean)
+    : ['git'];
+  for(const executable of candidates){
+    const commit=spawnSync(executable,['rev-parse','--verify','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true});
+    if(commit.status!==0)continue;
+    const sha=commit.stdout.trim();
+    if(!/^[a-f0-9]{40}$/.test(sha))continue;
+    const status=spawnSync(executable,['status','--porcelain','--untracked-files=all'],{cwd:root,encoding:'utf8',windowsHide:true});
+    if(status.status===0&&!status.stdout.trim())return sha;
+  }
+  return '';
+}
+
 await stat(path.join(runtime,'electron.exe'));
 await mkdir(target,{recursive:true});
 if(sourceOnly){
@@ -77,9 +94,10 @@ if(network){
   }
   await hashTree(target);
   const buildId=`${JSON.parse(await readFile(path.join(application,'package.json'),'utf8')).version}-${digest.digest('hex').slice(0,12)}`;
-  await writeFile(path.join(application,'build-info.json'),`${JSON.stringify({buildId},null,2)}\n`,'utf8');
+  const commit=getCleanGitCommit();
+  await writeFile(path.join(application,'build-info.json'),`${JSON.stringify({buildId,...(commit?{commit}:{})},null,2)}\n`,'utf8');
   await writeFile(path.join(target,'network-build.txt'),`${buildId}\n`,'utf8');
-  console.log(`Network build: ${buildId}`);
+  console.log(`Network build: ${buildId}${commit?` (Git ${commit})`:''}`);
 }
 
 console.log(`Packaged Extractor with Electron ${(await readFile(path.join(runtime,'version'),'utf8')).trim()}`);
