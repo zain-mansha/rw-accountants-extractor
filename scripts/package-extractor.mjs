@@ -8,11 +8,10 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const runtime=path.join(root,'.tools','electron');
 const releaseRoot=path.join(root,'release');
 const network=process.argv.includes('--network');
-const localOnly=process.argv.includes('--local-only');
 const sourceOnly=process.argv.includes('--source-only');
 const targetIndex=process.argv.indexOf('--target');
 if(network&&targetIndex>=0)throw new Error('Use either --network or --target, not both.');
-if(localOnly&&!network)throw new Error('Use --local-only together with --network.');
+if(process.argv.includes('--local-only'))throw new Error('The --local-only option is no longer supported. Network packages always check GitHub for updates when launched.');
 const requestedTarget=targetIndex>=0?process.argv[targetIndex+1]:'';
 const target=requestedTarget?path.resolve(root,requestedTarget):path.join(releaseRoot,network?'Extractor-Network':'Extractor');
 if(target!==releaseRoot&&!target.startsWith(releaseRoot+path.sep))throw new Error('Extractor package target must be inside the release folder.');
@@ -60,19 +59,7 @@ if(network){
   const commandTarget=path.join(target,path.basename(commandSource));
   const installerTarget=path.join(target,path.basename(installerSource));
   await cp(commandSource,commandTarget);
-  const localDevelopmentMarker=path.join(target,'local-development.flag');
-  if(localOnly){
-    const command=await readFile(commandTarget,'utf8');
-    const localCommand=command
-      .replace(/^@echo off\r?\nsetlocal\r?\n/i,'@echo off\r\nsetlocal\r\nset "FARE_EXTRACTOR_DISABLE_GITHUB_UPDATES=1"\r\n')
-      .replace(/^title .*$/m,'title "R&W Accountants Extractor - Local version"')
-      .replace(/^echo Checking for Extractor updates before launch\.$/m,'echo Starting this laptop\'s local Extractor version. GitHub updates are disabled.');
-    if(localCommand===command||!localCommand.includes('FARE_EXTRACTOR_DISABLE_GITHUB_UPDATES=1'))throw new Error('The local CMD launcher could not be configured to skip GitHub updates.');
-    await writeFile(commandTarget,localCommand,'utf8');
-    await writeFile(localDevelopmentMarker,'Local laptop package. GitHub updates are disabled.\n','utf8');
-  }else{
-    await rm(localDevelopmentMarker,{force:true});
-  }
+  await rm(path.join(target,'local-development.flag'),{force:true});
   await cp(installerSource,installerTarget);
   await cp(runtimeLoaderSource,path.join(target,path.basename(runtimeLoaderSource)));
   await cp(runtimeConfigHelperSource,path.join(target,path.basename(runtimeConfigHelperSource)));

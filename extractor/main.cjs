@@ -41,8 +41,7 @@ if(bootstrapRefresh.error)console.warn(`Could not refresh the network click-to-l
 if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
   app.whenReady().then(()=>{
     const splash=new BrowserWindow({width:460,height:205,resizable:false,show:true,autoHideMenuBar:true,title:'Extractor',backgroundColor:'#f4f7f4',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
-    const localOnly=fsSync.existsSync(path.join(networkPackageDirectory,'local-development.flag'));
-    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f7f4;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:340px}.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#08796c}.title{font-size:20px;font-weight:700;margin:12px 0 7px}.copy{color:#60736d;line-height:1.5;min-height:42px}.track{height:7px;margin-top:22px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:35%;border-radius:8px;background:#0d8276;animation:move 1.4s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(180px)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title" id="title">'+(localOnly?'Starting local Extractor':'Checking for Extractor updates')+'</div><div class="copy" id="copy">'+(localOnly?'Using this laptop’s local application files. GitHub updates are disabled.':'Checking GitHub and preparing the current application files.')+'</div><div class="track"><div class="bar"></div></div></main>';
+    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f7f4;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:340px}.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#08796c}.title{font-size:20px;font-weight:700;margin:12px 0 7px}.copy{color:#60736d;line-height:1.5;min-height:42px}.track{height:7px;margin-top:22px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:35%;border-radius:8px;background:#0d8276;animation:move 1.4s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(180px)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title" id="title">Checking for Extractor updates</div><div class="copy" id="copy">Checking GitHub and preparing the current application files.</div><div class="track"><div class="bar"></div></div></main>';
     splash.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(html));
 
     const launcher=path.join(networkPackageDirectory,'Start Extractor from Network.cmd');
@@ -84,7 +83,7 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
       cwd:networkPackageDirectory,
       windowsHide:true,
       stdio:['ignore','pipe','pipe'],
-      env:{...process.env,FARE_EXTRACTOR_NO_PAUSE:'1',...(localOnly?{FARE_EXTRACTOR_DISABLE_GITHUB_UPDATES:'1'}:{})}
+      env:{...process.env,FARE_EXTRACTOR_NO_PAUSE:'1'}
     });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data',chunk=>{output=(output+chunk).slice(-4000);if(output.includes('EXTRACTOR_UPDATE_WAIT_NOTICE:')){waitNoticeReceived=true;showWaitNotice();}if(output.includes('EXTRACTOR_UPDATE_RESET_NOTICE:')){updateNoticeReceived=true;showUpdateNotice();}});
@@ -299,3 +298,4 @@ mainWindow=new BrowserWindow({width:1440,height:920,minWidth:1040,minHeight:700,
   mainWindow.webContents.on('will-navigate',(event,url)=>{if(url!=='fareextractor://app/index.html')event.preventDefault();});mainWindow.webContents.on('will-attach-webview',event=>event.preventDefault());mainWindow.on('closed',()=>{mainWindow=null;});mainWindow.once('ready-to-show',()=>{if(process.env.FARE_EXTRACTOR_TEST!=='1')mainWindow.show();});await mainWindow.loadURL('fareextractor://app/index.html');
 }).catch(error=>{if(process.env.FARE_EXTRACTOR_TEST==='1')console.error(error);else dialog.showErrorBox('Unable to start Extractor',error.message);app.quit();});
 app.on('window-all-closed',()=>app.quit());
+

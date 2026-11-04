@@ -151,7 +151,7 @@ function Ensure-ExtractorDesktopShortcut([string]$LocalApplicationDirectory) {
 
   New-Item -ItemType Directory -Path $desktop -Force | Out-Null
   $shortcutPath = Join-Path $desktop 'R&W Accountants Extractor.lnk'
-  $description = if ($disableGithubUpdates) { 'Launch the local R&W Accountants Extractor; GitHub updates are disabled' } else { 'Launch the R&W Accountants Extractor and check for updates' }
+  $description = 'Launch the R&W Accountants Extractor and check for updates'
   $shell = $null
   $shortcutCreated = $false
   try {
@@ -491,27 +491,14 @@ function New-SharedExtractorBuild([string]$CommitSha) {
   }
 }
 
-$disableGithubUpdates = $env:FARE_EXTRACTOR_DISABLE_GITHUB_UPDATES -eq '1'
-$progressStatus = if ($disableGithubUpdates) { 'Using this laptop’s local application files; GitHub updates are disabled.' } else { 'Checking the shared network application against GitHub...' }
+$progressStatus = 'Checking the shared network application against GitHub...'
 Write-Progress -Activity 'Checking Extractor updates' -Status $progressStatus -PercentComplete 10
 $applicationDirectory = Get-CurrentExtractorApp
 $commitSha = ''
-$sharedBuildId = Get-InstalledExtractorBuildId
-$localBuildId = if ($LocalBuildId -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') { $LocalBuildId } else { '' }
-$sharedChangedSinceLocal = $localBuildId -and $sharedBuildId -and $localBuildId -ne $sharedBuildId
-if ($disableGithubUpdates) {
-  if (-not $applicationDirectory) { throw 'The local Extractor application folder is incomplete. GitHub updates are disabled for this laptop.' }
-  $commitSha = Get-InstalledExtractorCommit
-  Write-Progress -Activity 'Checking Extractor updates' -Status 'Keeping the local application version; GitHub will not be contacted.' -PercentComplete 70
-} else {
 try {
   if (-not $applicationDirectory) { throw 'The shared application folder is incomplete.' }
-  if ($sharedChangedSinceLocal) {
-    $commitSha = Get-InstalledExtractorCommit
-    Write-Progress -Activity 'Checking Extractor updates' -Status 'The shared build changed since this PC last launched. Syncing it locally; GitHub will be checked next launch.' -PercentComplete 35
-  } else {
-    $commitSha = Get-LatestExtractorCommit
-  }
+  $commitSha = Get-LatestExtractorCommit
+  Write-Progress -Activity 'Checking Extractor updates' -Status 'Checking GitHub for the latest application before preparing this PC’s local copy...' -PercentComplete 25
   # A partially copied network folder can still contain an app marked with the
   # current commit. In that case the normal update check would skip repair and
   # fail later when the local Electron runtime needs its loader files. Treat a
@@ -566,7 +553,6 @@ try {
 } catch {
   if (-not $applicationDirectory) { throw "Extractor could not check GitHub or find a usable application on the network. $($_.Exception.Message)" }
   Write-Warning "GitHub could not be reached, so Extractor will use the last complete version on the network. $($_.Exception.Message)"
-}
 }
 if (-not $applicationDirectory -or -not (Test-ExtractorAppReady $applicationDirectory)) {
   throw 'No complete Extractor application is available on the shared network folder.'
@@ -771,7 +757,7 @@ if (-not $NoLaunch) {
   [void](Ensure-ExtractorEnglishOcr $applicationDirectory)
   New-Item -ItemType Directory -Path $ProfileRoot -Force | Out-Null
   $env:FARE_EXTRACTOR_PROFILE_ROOT = [IO.Path]::GetFullPath($ProfileRoot)
-  $launchStatus = if ($disableGithubUpdates) { 'Starting this laptop’s local application...' } else { 'Starting the latest shared application...' }
+  $launchStatus = 'Starting the latest shared application...'
   Write-Progress -Activity 'Starting Extractor' -Status $launchStatus -PercentComplete 100 -Completed
   $previousSharedApp = $env:FARE_EXTRACTOR_SHARED_APP
   $previousLocalApp = $env:FARE_EXTRACTOR_LOCAL_APP
