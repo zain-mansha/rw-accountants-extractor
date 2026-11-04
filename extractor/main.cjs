@@ -80,7 +80,9 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
     // local runtime. Suppress the batch file's interactive pause so bootstrap
     // failures can be shown in this window instead of waiting invisibly.
     const child=spawn(process.env.ComSpec||'cmd.exe',['/d','/c','call',launcher],{
-      cwd:networkPackageDirectory,
+      // Keep CMD's working directory local. It cannot start in the UNC share;
+      // the batch launcher maps that share with pushd before calling PowerShell.
+      cwd:app.getPath('temp'),
       windowsHide:true,
       stdio:['ignore','pipe','pipe'],
       env:{...process.env,FARE_EXTRACTOR_NO_PAUSE:'1'}

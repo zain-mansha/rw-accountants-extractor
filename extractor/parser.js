@@ -533,8 +533,63 @@
     }
     return rows;
   }
+  function parseSumUpOcrBank(ocrLines,text='',source=''){
+    if(!Array.isArray(ocrLines)||!ocrLines.length)return null;
+    const allText=`${source} ${text} ${ocrLines.map(line=>line?.text||'').join(' ')}`;
+    if(!/sum\s*up\s+account\s+statement/i.test(allText)&&!/\bsum[\s-]*up\b/i.test(source))return null;
+    const pages=new Map();
+    for(const raw of ocrLines){const page=Number(raw?.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push({...raw,page,x:Number(raw?.x)||0,y:Number(raw?.y)||0,width:Number(raw?.width)||0,height:Number(raw?.height)||0,text:String(raw?.text||'').trim()});}
+    const label=value=>String(value||'').toLowerCase().replace(/[^a-z]/g,'');
+    const cleanDate=value=>{const raw=String(value||'').replace(/\s+/g,'').replace(/[Oo]/g,'0').replace(/[Il|]/g,'1');if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(raw))return {date:parseDate(raw),dayOnly:null};if(/^\d{1,2}$/.test(raw)){const day=Number(raw);return {date:'',dayOnly:day>=1&&day<=31?day:null};}return {date:'',dayOnly:null};};
+    const readMoney=value=>{
+      const raw=String(value||'').trim(),match=raw.match(/[0-9OoIl|][0-9OoIl|,.'\s]*[.,]\s*[0-9OoIl|]{2}/);if(!match)return null;
+      const token=match[0].replace(/[Oo]/g,'0').replace(/[Il|]/g,'1').replace(/\s/g,''),separator=Math.max(token.lastIndexOf('.'),token.lastIndexOf(','));if(separator<1)return null;
+      const whole=token.slice(0,separator).replace(/[,.']/g,''),pennies=token.slice(separator+1);if(!/^\d+$/.test(whole)||!/^\d{2}$/.test(pennies))return null;
+      const amountValue=Number(`${whole}.${pennies}`);if(!Number.isFinite(amountValue))return null;
+      const leading=raw.match(/^\s*([(+\-])/),sign=leading?.[1]==='-'||leading?.[1]==='('? -1:leading?.[1]==='+'?1:0;
+      return {value:amountValue,sign,raw:match[0]};
+    };
+    const rawRows=[];
+    for(const [page,items] of [...pages.entries()].sort((a,b)=>a[0]-b[0])){
+      const byLabel={date:[],reference:[],type:[],amount:[],description:[]};
+      for(const line of items){const key=label(line.text);if(key==='date'||key==='reference'||key==='type'||key==='amount'||key==='description')byLabel[key].push(line);}
+      let header=null;
+      for(const date of byLabel.date){const tolerance=Math.max(18,(date.height||16)*1.5),nearest=name=>byLabel[name].filter(line=>Math.abs(line.y-date.y)<=tolerance).sort((a,b)=>Math.abs(a.y-date.y)-Math.abs(b.y-date.y))[0]||null,reference=nearest('reference'),type=nearest('type'),amountHeader=nearest('amount'),description=nearest('description');if(!reference||!type||!amountHeader||!description)continue;
+        const columns=[date,reference,type,amountHeader,description],centers=columns.map(line=>line.x+line.width/2);if(centers.some((center,index)=>index&&center<=centers[index-1]))continue;
+        header={columns,centers,bounds:centers.slice(1).map((center,index)=>(center+centers[index])/2),y:columns.reduce((sum,line)=>sum+line.y,0)/columns.length,height:Math.max(...columns.map(line=>line.height||0))};break;
+      }
+      if(!header)continue;
+      const afterHeader=header.y+Math.max(8,header.height*.5),columnLines=index=>items.filter(line=>{const center=line.x+line.width/2;return line.y>afterHeader&&center>=(index?header.bounds[index-1]:-Infinity)&&center<(index<header.bounds.length?header.bounds[index]:Infinity);});
+      const dateLines=columnLines(0).map(line=>({line,...cleanDate(line.text)})).filter(item=>item.date||item.dayOnly),amountLines=columnLines(3).map(line=>({line,money:readMoney(line.text)})),typeLines=columnLines(2).filter(line=>line.text&&label(line.text)!=='type').sort((a,b)=>a.y-b.y);
+      const rowTolerance=Math.max(20,header.height*1.1),knownType=value=>/^(?:incoming transfer|outgoing transfer|card payment|direct debit|standing order|cash withdrawal|refund|card refund|chargeback)$/i.test(String(value||'').replace(/\s+/g,' ').trim());
+      const markers=[];
+      for(const line of typeLines){const nearbyDate=dateLines.some(item=>Math.abs(item.line.y-line.y)<=rowTolerance),nearbyAmount=amountLines.some(item=>Math.abs(item.line.y-line.y)<=rowTolerance);if(!knownType(line.text)&&!nearbyDate&&!nearbyAmount)continue;if(markers.some(marker=>Math.abs(marker.y-line.y)<=Math.max(5,(marker.height+line.height)/2)))continue;markers.push(line);}
+      markers.sort((a,b)=>a.y-b.y);
+      for(let index=0;index<markers.length;index++){
+        const marker=markers[index],nextY=markers[index+1]?.y??Infinity,nearest=(list,predicate=()=>true)=>list.filter(item=>predicate(item)&&Math.abs(item.line.y-marker.y)<=rowTolerance).sort((a,b)=>Math.abs(a.line.y-marker.y)-Math.abs(b.line.y-marker.y))[0]||null;
+        const dateItem=nearest(dateLines),amountCandidates=amountLines.filter(item=>Math.abs(item.line.y-marker.y)<=rowTolerance),focusedAmount=amountCandidates.find(item=>item.line.sumupFocused&&item.money)||null,fullPageAmount=amountCandidates.find(item=>!item.line.sumupFocused&&item.money)||null,amountItem=focusedAmount||fullPageAmount||amountCandidates.sort((a,b)=>Math.abs(a.line.y-marker.y)-Math.abs(b.line.y-marker.y))[0]||null,referenceLine=nearest(columnLines(1).map(line=>({line})))?.line||null;
+        const descriptionLines=columnLines(4).filter(line=>line.y>=marker.y-rowTolerance*.25&&line.y<nextY-rowTolerance*.2&&!/^\s*\d+\s+of\s+\d+\s*$/i.test(line.text)).sort((a,b)=>a.y-b.y||a.x-b.x);
+        const description=descriptionLines.map(line=>line.text).join(' ').replace(/\s+/g,' ').trim(),type=marker.text.replace(/\s+/g,' ').trim(),reference=referenceLine?.text||'';
+        const expectedSign=/^(?:incoming transfer|refund|card refund|chargeback)$/i.test(type)?1:/^(?:outgoing transfer|card payment|direct debit|standing order|cash withdrawal)$/i.test(type)?-1:0,observedSign=amountItem?.money?.sign||0,sign=expectedSign||observedSign,money=amountItem?.money||null,value=money&&sign?Math.abs(money.value)*sign:'',signedReading=item=>item?.money&&sign?Math.abs(item.money.value)*sign:null,normalReading=signedReading(fullPageAmount),focusedReading=signedReading(focusedAmount),amountConflict=normalReading!==null&&focusedReading!==null&&Math.round(normalReading*100)!==Math.round(focusedReading*100);
+        const record={date:dateItem?.date||'',dateDay:dateItem?.dayOnly??null,details:[type,description].filter(Boolean).join(': ')+(reference?` (Ref: ${reference})`:''),reference,type,description,amount:value,receipt:value!==''&&value>0?value:'',payment:value!==''&&value<0?Math.abs(value):'',balance:'',balanceExpected:false,source,page,ocrY:Number(marker.y)||0,profileId:'sumup-bank',amountConfirmed:Boolean(money&&sign),confidence:amountItem?.line?.sumupFocused?'SumUp focused amount OCR':'SumUp content-anchored columns',review:false,...(amountConflict?{sumupAmountConflict:true,sumupAmountReadings:{fullPage:normalReading,focused:focusedReading}}:{})};
+        rawRows.push(record);
+      }
+    }
+    // A day-only OCR result is recoverable only when both adjacent transaction
+    // dates show the same month and year; otherwise keep the transaction rejected.
+    for(let index=0;index<rawRows.length;index++){
+      const row=rawRows[index];if(row.date||!row.dateDay)continue;
+      const previous=[...rawRows.slice(0,index)].reverse().find(item=>item.date),next=rawRows.slice(index+1).find(item=>item.date);
+      if(!previous||!next||previous.date.slice(0,7)!==next.date.slice(0,7))continue;
+      const [year,month]=previous.date.split('-'),candidate=`${year}-${month}-${String(row.dateDay).padStart(2,'0')}`,validated=parseDate(`${String(row.dateDay).padStart(2,'0')}/${month}/${year}`);
+      if(validated===candidate){row.date=candidate;row.confidence='SumUp date confirmed by adjacent statement rows';}
+    }
+    for(const row of rawRows){const reason=!row.date?'Transaction date could not be confirmed from the SumUp statement. Verify this row on the linked PDF page.':!row.amountConfirmed?'Transaction amount or direction could not be confirmed from the SumUp statement. Verify this row on the linked PDF page.':row.sumupAmountConflict?'SumUp OCR readings disagree on the printed amount. The row needs a higher-resolution check.':!row.description?'Transaction description could not be read from the SumUp statement. Verify this row on the linked PDF page.':'';if(reason){row.status='REJECTED';row.accepted=false;row.rejected=true;row.review=true;row.confidence='REJECTED';row.rejectedReason=reason;}else{row.status='ACCEPTED';row.accepted=true;row.rejected=false;row.review=false;row.rejectedReason='';}delete row.dateDay;delete row.amountConfirmed;delete row.description;}
+    return rawRows;
+  }
   function parseOcrBank(ocrLines,text='',source=''){
     if(!Array.isArray(ocrLines)||!ocrLines.length)return [];
+    const sumUpRows=parseSumUpOcrBank(ocrLines,text,source);if(sumUpRows!==null)return sumUpRows;
     const metroReportRows=parseMetroOnlineTransactionReport(ocrLines,text,source);if(metroReportRows!==null)return metroReportRows;
     const hsbcRows=parseHsbcOcrBank(ocrLines,text,source);if(hsbcRows!==null){if(hsbcRows.length)return hsbcRows;}
     const barclaysRows=parseBarclaysOcrBank(ocrLines,text,source);if(barclaysRows!==null){const opening=bankOpeningBalance(`${text}\n${ocrLines.map(line=>line?.text||'').join('\n')}`);if(barclaysRows.length&&opening!==null)barclaysRows[0].openingBalance=opening;return barclaysRows;}
@@ -1829,6 +1884,7 @@
     {id:'unidentified-forecourt',name:'Unidentified forecourt',category:'Receipts',detect:()=>false}
   ];
   function compatibleCompanies(){return [
+    {id:'sumup-bank',name:'SumUp',category:'Bank statements',status:'Under development',description:'OCR-supported SumUp account statements with content-detected Date, Reference, Type, Amount and Description columns'},
     {id:'monzo-bank',name:'Monzo',category:'Bank statements',status:'Under development',description:'Digital PDF statements with ISO dates and CR/DR transactions'},
     {id:'barclays-bank',name:'Barclays',category:'Bank statements',status:'Under development',description:'OCR-supported statements with day and month transaction dates'},
     {id:'metro-bank',name:'Metro Bank',category:'Bank statements',status:'Review',description:'Column-based statements and online transaction reports with separate money out, money in and balance columns'},
@@ -2787,6 +2843,15 @@
     if(firstPass!==null)return {total:firstPass,verified:false,status:'ACCEPTED'};
     return {total:'',verified:false,status:'REJECTED'};
   }
+  function resolveSumUpAmount(row,higherResolutionAmount){
+    if(!row||row.profileId!=='sumup-bank'||!row.sumupAmountConflict)return row;
+    const readings=row.sumupAmountReadings||{},values=[readings.fullPage,readings.focused,higherResolutionAmount].map(value=>value===''||value===null||value===undefined?null:Number(value)).filter(value=>value!==null&&Number.isFinite(value)).map(value=>Math.round(value*100));
+    const counts=new Map();for(const value of values)counts.set(value,(counts.get(value)||0)+1);
+    const consensus=[...counts.entries()].filter(([,count])=>count>=2).sort((a,b)=>b[1]-a[1])[0],resolved={...row};
+    if(consensus){const amount=consensus[0]/100;resolved.amount=amount;resolved.receipt=amount>0?amount:'';resolved.payment=amount<0?Math.abs(amount):'';const complete=Boolean(resolved.date&&resolved.details&&Number.isFinite(amount));resolved.status=complete?'ACCEPTED':'REJECTED';resolved.accepted=complete;resolved.rejected=!complete;resolved.review=!complete;resolved.confidence=complete?'SumUp amount confirmed by two OCR readings':'REJECTED';resolved.rejectedReason=complete?'':!resolved.date?'Transaction date could not be confirmed from the SumUp statement. Verify this row on the linked PDF page.':'Transaction details could not be confirmed from the SumUp statement. Verify this row on the linked PDF page.';}
+    else{resolved.amount='';resolved.receipt='';resolved.payment='';resolved.status='REJECTED';resolved.accepted=false;resolved.rejected=true;resolved.review=true;resolved.confidence='REJECTED';resolved.rejectedReason='The SumUp amount remained uncertain after the 5x OCR check. Verify the printed amount on the linked PDF page.';}
+    delete resolved.sumupAmountConflict;delete resolved.sumupAmountReadings;return resolved;
+  }
   function invoiceStatusFor(documentType,complete,liveProcessing=false){if(liveProcessing)return 'PROCESSING';return complete?'ACCEPTED':'REJECTED';}
   function invoiceRateBases(total,vat,documentType='INVOICE'){
     const numeric=value=>value!==''&&value!==null&&value!==undefined&&Number.isFinite(Number(value))?Math.round(Number(value)*100):null;
@@ -2859,7 +2924,7 @@
     else{delete merged.ocrAmountConflicts;delete merged.ocrConflictReason;}
     return merged;
   }
-  return {extractText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
+  return {extractText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
 });
 
 

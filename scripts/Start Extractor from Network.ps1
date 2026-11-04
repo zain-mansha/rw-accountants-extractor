@@ -42,7 +42,7 @@ try {
   if ($initialBuildSha -notmatch '^[a-f0-9]{40}$') { $initialBuildSha = '' }
 } catch { $initialBuildSha = '' }
 if ($ExpectedUpdateCommit -match '^[a-f0-9]{40}$' -and $initialBuildSha -ne $ExpectedUpdateCommit) {
-  throw "Extractor stopped a repeated Git update: the shared app reports commit '$initialBuildSha' after restart, but the update expected '$ExpectedUpdateCommit'. Review the startup log before trying again."
+  Write-Warning "The shared application is now at commit '$initialBuildSha' rather than the just-requested '$ExpectedUpdateCommit'. This can happen when another PC finishes a newer shared update first; checking GitHub for the current build."
 }
 $sessionDirectory = Join-Path $source '.extractor-app-sessions'
 $updatePendingPath = Join-Path $source '.extractor-update.pending'
@@ -404,14 +404,19 @@ function Write-ExtractorAtomicTextFile([string]$DestinationPath, [string]$Conten
 function New-SharedExtractorBuild([string]$CommitSha) {
   $updatesDirectory = Join-Path $source '.extractor-update'
   New-Item -ItemType Directory -Path $updatesDirectory -Force | Out-Null
-  $archivePath = Join-Path $updatesDirectory "source-$CommitSha.zip"
-  $extractDirectory = Join-Path $updatesDirectory "extract-$CommitSha"
-  $stageRoot = Join-Path $updatesDirectory "stage-$CommitSha-$([guid]::NewGuid().ToString('N'))"
+  $updateId = [guid]::NewGuid().ToString('N')
+  $localUpdateRoot = Join-Path $localAppData 'Extractor\UpdateCache'
+  New-Item -ItemType Directory -Path $localUpdateRoot -Force | Out-Null
+  $localWork = Join-Path $localUpdateRoot "$CommitSha-$updateId"
+  $archivePath = Join-Path $localWork 'source.zip'
+  $extractDirectory = Join-Path $localWork 'extract'
+  $stageRoot = Join-Path $updatesDirectory "stage-$CommitSha-$updateId"
   $backupApp = Join-Path $updatesDirectory "previous-app-$([guid]::NewGuid().ToString('N'))"
   $pendingCreated = $false
   $appMovedToBackup = $false
   $newAppInstalled = $false
   try {
+    New-Item -ItemType Directory -Path $localWork -Force | Out-Null
     if (Test-Path -LiteralPath $updatePendingPath -PathType Leaf) { Remove-Item -LiteralPath $updatePendingPath -Force }
     [IO.File]::WriteAllText($updatePendingPath, "$CommitSha`n", [Text.Encoding]::ASCII)
     $pendingCreated = $true
@@ -463,6 +468,8 @@ function New-SharedExtractorBuild([string]$CommitSha) {
       Move-Item -LiteralPath $applicationStage -Destination $liveApp
       $newAppInstalled = $true
       if (-not (Test-ExtractorAppReady $liveApp)) { throw 'The replacement shared application failed its completeness check.' }
+      $installedBuildInfo = Get-Content -LiteralPath (Join-Path $liveApp 'build-info.json') -Raw | ConvertFrom-Json
+      if ([string]$installedBuildInfo.commit -ne $CommitSha) { throw "The shared application reports commit '$($installedBuildInfo.commit)' after update, but commit '$CommitSha' was requested." }
 
       foreach ($launcherName in @('Start Extractor from Network.ps1','Start Extractor from Network.cmd','ExtractorRuntimeLoader.cjs','ExtractorLauncherConfig.cjs','ExtractorRuntimePackage.json')) {
         $updatedLauncher = Join-Path $scriptsSource $launcherName
@@ -485,7 +492,7 @@ function New-SharedExtractorBuild([string]$CommitSha) {
     return $liveApp
   } finally {
     if ($pendingCreated -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) { Remove-Item -LiteralPath $updatePendingPath -Force -ErrorAction SilentlyContinue }
-    foreach ($temporaryPath in @($archivePath,$extractDirectory,$stageRoot)) {
+    foreach ($temporaryPath in @($localWork,$stageRoot)) {
       if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Recurse -Force -ErrorAction SilentlyContinue }
     }
   }
@@ -494,10 +501,15 @@ function New-SharedExtractorBuild([string]$CommitSha) {
 $progressStatus = 'Checking the shared network application against GitHub...'
 Write-Progress -Activity 'Checking Extractor updates' -Status $progressStatus -PercentComplete 10
 $applicationDirectory = Get-CurrentExtractorApp
+if (-not $applicationDirectory) { throw 'The shared application folder is incomplete.' }
 $commitSha = ''
 try {
-  if (-not $applicationDirectory) { throw 'The shared application folder is incomplete.' }
   $commitSha = Get-LatestExtractorCommit
+} catch {
+  Write-Warning "GitHub could not be reached, so Extractor will use the last complete version on the network. $($_.Exception.Message)"
+  $commitSha = ''
+}
+if ($commitSha) {
   Write-Progress -Activity 'Checking Extractor updates' -Status 'Checking GitHub for the latest application before preparing this PC’s local copy...' -PercentComplete 25
   # A partially copied network folder can still contain an app marked with the
   # current commit. In that case the normal update check would skip repair and
@@ -550,9 +562,6 @@ try {
   }
   $applicationDirectory = Get-CurrentExtractorApp
   Write-Progress -Activity 'Checking Extractor updates' -Status 'Shared application files are current.' -PercentComplete 70
-} catch {
-  if (-not $applicationDirectory) { throw "Extractor could not check GitHub or find a usable application on the network. $($_.Exception.Message)" }
-  Write-Warning "GitHub could not be reached, so Extractor will use the last complete version on the network. $($_.Exception.Message)"
 }
 if (-not $applicationDirectory -or -not (Test-ExtractorAppReady $applicationDirectory)) {
   throw 'No complete Extractor application is available on the shared network folder.'

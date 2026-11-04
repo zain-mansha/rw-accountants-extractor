@@ -672,6 +672,59 @@ try {
         }
       }
     }
+    # SumUp statements have no balance column to validate OCR amounts
+    # against. Re-read each amount from its own table cell at 10x, locating
+    # that cell from the printed column headings and transaction type row.
+    # This stays relative to each page's layout and avoids fixed page positions.
+    $pageText=($pageLines.ToArray()|ForEach-Object{[string]$_.text}) -join ' '
+    $sumUpLabels=@{date=@();reference=@();type=@();amount=@();description=@()}
+    foreach($line in $pageLines.ToArray()){
+      $key=([regex]::Replace([string]$line.text,'[^A-Za-z]','')).ToLowerInvariant()
+      if($sumUpLabels.ContainsKey($key)){$sumUpLabels[$key]+=@($line)}
+    }
+    $hasSumUpTable=$sumUpLabels.date.Count -and $sumUpLabels.reference.Count -and $sumUpLabels.type.Count -and $sumUpLabels.amount.Count -and $sumUpLabels.description.Count
+    if(($pageText -match '(?i)sum\s*up\s+account\s+statement') -or $hasSumUpTable){
+      $sumUpHeader=$null
+      foreach($dateHeader in $sumUpLabels.date){
+        $tolerance=[math]::Max(18.0,[double]$dateHeader.height*1.5)
+        $nearestHeader={param($name,$referenceY,$maxGap) $sumUpLabels[$name]|Where-Object{[math]::Abs([double]$_.y-$referenceY)-le $maxGap}|Sort-Object{[math]::Abs([double]$_.y-$referenceY)}|Select-Object -First 1}.GetNewClosure()
+        $referenceHeader=&$nearestHeader 'reference' ([double]$dateHeader.y) $tolerance
+        $typeHeader=&$nearestHeader 'type' ([double]$dateHeader.y) $tolerance
+        $amountHeader=&$nearestHeader 'amount' ([double]$dateHeader.y) $tolerance
+        $descriptionHeader=&$nearestHeader 'description' ([double]$dateHeader.y) $tolerance
+        if($referenceHeader -and $typeHeader -and $amountHeader -and $descriptionHeader){
+          $dateCenter=[double]$dateHeader.x+([double]$dateHeader.width/2);$referenceCenter=[double]$referenceHeader.x+([double]$referenceHeader.width/2);$typeCenter=[double]$typeHeader.x+([double]$typeHeader.width/2);$amountCenter=[double]$amountHeader.x+([double]$amountHeader.width/2);$descriptionCenter=[double]$descriptionHeader.x+([double]$descriptionHeader.width/2);$centers=@($dateCenter,$referenceCenter,$typeCenter,$amountCenter,$descriptionCenter)
+          $ordered=$true;for($column=1;$column -lt $centers.Count;$column++){if($centers[$column]-le $centers[$column-1]){$ordered=$false;break}}
+          if($ordered){$sumUpHeader=[pscustomobject]@{reference=$referenceHeader;type=$typeHeader;amount=$amountHeader;description=$descriptionHeader;y=[double]$dateHeader.y;height=[double]$dateHeader.height;amountLeft=($centers[2]+$centers[3])/2;amountRight=($centers[3]+$centers[4])/2};break}
+        }
+      }
+      if($sumUpHeader){
+        $afterHeader=$sumUpHeader.y+[math]::Max(8.0,$sumUpHeader.height*.5)
+        # Use the header centers to derive the type column boundaries; this
+        # stays stable when the table moves or is scaled on a different scan.
+        $referenceCenter=[double]$sumUpHeader.reference.x+[double]$sumUpHeader.reference.width/2
+        $typeCenter=[double]$sumUpHeader.type.x+[double]$sumUpHeader.type.width/2
+        $amountCenter=[double]$sumUpHeader.amount.x+[double]$sumUpHeader.amount.width/2
+        $typeLeft=($referenceCenter+$typeCenter)/2
+        $typeRight=($typeCenter+$amountCenter)/2
+        $knownTypes='^(?:incoming transfer|outgoing transfer|card payment|direct debit|standing order|cash withdrawal|refund|card refund|chargeback)$'
+        $sumUpMarkers=@($pageLines.ToArray()|Where-Object{$center=[double]$_.x+[double]$_.width/2;$center -ge $typeLeft -and $center -lt $typeRight -and [double]$_.y -gt $afterHeader -and ([regex]::Replace([string]$_.text,'\s+',' ').Trim() -match $knownTypes)}|Sort-Object{[double]$_.y})
+        for($rowIndex=0;$rowIndex -lt $sumUpMarkers.Count;$rowIndex++){
+          $marker=$sumUpMarkers[$rowIndex];$rowTop=[math]::Max($afterHeader,[double]$marker.y-5.0);$rowHeight=[math]::Max(28.0,[double]$marker.height+12.0)
+          if($rowIndex+1 -lt $sumUpMarkers.Count){$gap=[double]$sumUpMarkers[$rowIndex+1].y-[double]$marker.y;if($gap -gt 0){$rowHeight=[math]::Min($rowHeight,[math]::Max(22.0,$gap-8.0))}}
+          $cellWidth=$sumUpHeader.amountRight-$sumUpHeader.amountLeft
+          if($cellWidth -le 0){continue}
+          try{
+            $focusedAmount=Read-EnhancedReceiptRegion $bitmap $Scale ([double]$sumUpHeader.amountLeft) $rowTop $cellWidth $rowHeight $engine $page
+            if($focusedAmount.Text){$parts.Add($focusedAmount.Text)}
+            foreach($focusedLine in $focusedAmount.Lines){
+                $focusedLine.page=$index+1;$focusedLine|Add-Member -NotePropertyName sumupFocused -NotePropertyValue $true -Force;$focusedLine|Add-Member -NotePropertyName sumupFocusRowY -NotePropertyValue ([double]$marker.y) -Force
+              $pageLines.Add($focusedLine);$ocrLines.Add($focusedLine)
+            }
+            }catch{}
+        }
+      }
+    }
     [Console]::WriteLine('PAGE:'+(@{page=$index+1;pageCount=$pdf.PageCount;ocrLanguage=$ocrLanguage;text=$result.Text;lines=$pageLines.ToArray()}|ConvertTo-Json -Compress -Depth 5))
     $bitmap.Dispose();$result=$null;$decoder=$null;$stream.Dispose();$page.Dispose();$processedPageCount++
     if($processedPageCount%3 -eq 0){[GC]::Collect();[GC]::WaitForPendingFinalizers()}

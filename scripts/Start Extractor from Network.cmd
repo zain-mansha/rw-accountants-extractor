@@ -7,7 +7,6 @@ if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
 set "LOG=%LOGDIR%\Start Extractor from Network.log"
 >"%LOG%" echo Extractor network launcher started at %DATE% %TIME%.
 echo Checking for Extractor updates before launch.
-set "FARE_EXTRACTOR_NETWORK_ROOT=%~dp0"
 pushd "%~dp0" >nul 2>&1
 if errorlevel 1 (
   echo Extractor could not open its shared folder. Check that the network location is available and you have read access.
@@ -17,6 +16,9 @@ if errorlevel 1 (
   if not "%FARE_EXTRACTOR_NO_PAUSE%"=="1" pause
   exit /b 1
 )
+rem Use the drive that PUSHd mapped for the share. Passing the original UNC
+rem path makes child PowerShell processes and update staging fragile on some PCs.
+set "FARE_EXTRACTOR_NETWORK_ROOT=%CD%\"
 if "%FARE_EXTRACTOR_NO_PAUSE%"=="1" (
   powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%CD%\Start Extractor from Network.ps1" %* 2>>"%LOG%"
 ) else (
