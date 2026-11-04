@@ -84,7 +84,7 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
       cwd:networkPackageDirectory,
       windowsHide:true,
       stdio:['ignore','pipe','pipe'],
-      env:{...process.env,FARE_EXTRACTOR_BOOTSTRAP:'1',...(localOnly?{FARE_EXTRACTOR_DISABLE_GITHUB_UPDATES:'1'}:{})}
+      env:{...process.env,FARE_EXTRACTOR_NO_PAUSE:'1',...(localOnly?{FARE_EXTRACTOR_DISABLE_GITHUB_UPDATES:'1'}:{})}
     });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data',chunk=>{output=(output+chunk).slice(-4000);if(output.includes('EXTRACTOR_UPDATE_WAIT_NOTICE:')){waitNoticeReceived=true;showWaitNotice();}if(output.includes('EXTRACTOR_UPDATE_RESET_NOTICE:')){updateNoticeReceived=true;showUpdateNotice();}});

@@ -45,10 +45,11 @@ test('double-clicking the packaged EXE runs the same network CMD launcher withou
   const command=fs.readFileSync(commandScript,'utf8');
   assert.match(main,/Start Extractor from Network\.cmd/);
   assert.match(main,/spawn\(process\.env\.ComSpec\|\|'cmd\.exe',\['\/d','\/c','call',launcher\]/);
-  assert.match(main,/FARE_EXTRACTOR_BOOTSTRAP:'1'/);
+  assert.match(main,/FARE_EXTRACTOR_NO_PAUSE:'1'/);
   assert.match(main,/publishNetworkBootstrap\(\{/);
   assert.match(main,/require\('\.\/network-bootstrap\.cjs'\)/);
-  assert.match(command,/if not "%FARE_EXTRACTOR_BOOTSTRAP%"=="1" pause/i);
+  assert.match(command,/if not "%FARE_EXTRACTOR_NO_PAUSE%"=="1" pause/i);
+  assert.match(command,/Start Extractor from Network\.log/i);
   assert.doesNotMatch(main,/spawn\('powershell\.exe',\['-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',launcher\]/);
 });
 
