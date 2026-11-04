@@ -129,6 +129,65 @@ function New-LocalExtractorAppCopy([string]$ApplicationDirectory) {
   }
 }
 
+function Ensure-ExtractorDesktopShortcut([string]$LocalApplicationDirectory) {
+  if (-not (Test-ExtractorAppReady $LocalApplicationDirectory)) {
+    throw 'The local Extractor application copy is missing or incomplete, so its desktop shortcut cannot be created.'
+  }
+  if (-not (Test-Path -LiteralPath $runtimeExecutable -PathType Leaf)) {
+    throw 'The local Extractor runtime is missing, so its desktop shortcut cannot be created.'
+  }
+
+  $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
+  if ([string]::IsNullOrWhiteSpace($desktop)) {
+    $desktop = Join-Path $env:USERPROFILE 'Desktop'
+  }
+  if ([string]::IsNullOrWhiteSpace($desktop)) {
+    throw 'Windows did not provide a desktop folder for the Extractor shortcut.'
+  }
+
+  New-Item -ItemType Directory -Path $desktop -Force | Out-Null
+  $shortcutPath = Join-Path $desktop 'R&W Accountants Extractor.lnk'
+  $description = if ($disableGithubUpdates) { 'Launch the local R&W Accountants Extractor; GitHub updates are disabled' } else { 'Launch the R&W Accountants Extractor and check for updates' }
+  $shell = $null
+  $shortcutCreated = $false
+  try {
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcutIsCurrent = $false
+    if (Test-Path -LiteralPath $shortcutPath -PathType Leaf) {
+      try {
+        $existing = $shell.CreateShortcut($shortcutPath)
+        $existingTarget = [IO.Path]::GetFullPath([string]$existing.TargetPath)
+        $expectedTarget = [IO.Path]::GetFullPath($runtimeExecutable)
+        $existingWorkingDirectory = [IO.Path]::GetFullPath([string]$existing.WorkingDirectory)
+        $expectedWorkingDirectory = [IO.Path]::GetFullPath($runtimeTarget)
+        $shortcutIsCurrent = $existingTarget.Equals($expectedTarget,[StringComparison]::OrdinalIgnoreCase) -and
+          $existingWorkingDirectory.Equals($expectedWorkingDirectory,[StringComparison]::OrdinalIgnoreCase) -and
+          (Test-Path -LiteralPath $existingTarget -PathType Leaf)
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($existing)
+      } catch { $shortcutIsCurrent = $false }
+    }
+
+    if (-not $shortcutIsCurrent) {
+      $shortcut = $shell.CreateShortcut($shortcutPath)
+      $shortcut.TargetPath = $runtimeExecutable
+      $shortcut.WorkingDirectory = $runtimeTarget
+      $shortcut.IconLocation = "$runtimeExecutable,0"
+      $shortcut.Description = $description
+      $shortcut.Save()
+      [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut)
+      $shortcutCreated = $true
+    }
+  } finally {
+    if ($shell) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
+  }
+
+  if (-not (Test-Path -LiteralPath $shortcutPath -PathType Leaf)) {
+    throw "Windows could not create the Extractor desktop shortcut at $shortcutPath."
+  }
+  if ($shortcutCreated) { Write-Output "Created or repaired desktop shortcut: $shortcutPath" }
+  else { Write-Output "Desktop shortcut is current: $shortcutPath" }
+}
+
 function Get-ExtractorCommitFromFeed([string]$FeedContent) {
   $shaMatch = [regex]::Match($FeedContent, 'tag:github\.com,2008:Grit::Commit/(?<sha>[a-f0-9]{40})')
   if (-not $shaMatch.Success) { throw 'GitHub returned a commit feed without a readable commit identifier.' }
@@ -683,6 +742,10 @@ if (-not $NoLaunch -or $PrepareLocalAppOnly) {
   Write-ExtractorAtomicTextFile $launcherConfigPath $launcherConfig
 }
 
+if (-not $NoLaunch -and $localApplicationDirectory) {
+  Ensure-ExtractorDesktopShortcut $localApplicationDirectory
+}
+
 if ($PrepareLocalAppOnly) {
   [void](Ensure-ExtractorEnglishOcr $applicationDirectory)
   Write-Progress -Activity 'Checking Extractor updates' -Status 'The local application copy is ready.' -PercentComplete 100 -Completed
@@ -695,24 +758,6 @@ if (-not $NoLaunch) {
   [void](Ensure-ExtractorEnglishOcr $applicationDirectory)
   New-Item -ItemType Directory -Path $ProfileRoot -Force | Out-Null
   $env:FARE_EXTRACTOR_PROFILE_ROOT = [IO.Path]::GetFullPath($ProfileRoot)
-  try {
-    $desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
-    if (-not [string]::IsNullOrWhiteSpace($desktop)) {
-      New-Item -ItemType Directory -Path $desktop -Force | Out-Null
-      $shortcutPath = Join-Path $desktop 'R&W Accountants Extractor.lnk'
-      $shell = New-Object -ComObject WScript.Shell
-      $shortcut = $shell.CreateShortcut($shortcutPath)
-      $shortcut.TargetPath = $runtimeExecutable
-      $shortcut.WorkingDirectory = $runtimeTarget
-      $shortcut.IconLocation = "$runtimeExecutable,0"
-      $shortcut.Description = if ($disableGithubUpdates) { 'Launch the local R&W Accountants Extractor; GitHub updates are disabled' } else { 'Launch the R&W Accountants Extractor and check for updates' }
-      $shortcut.Save()
-      [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
-      Write-Output "Desktop shortcut: $shortcutPath"
-    }
-  } catch {
-    Write-Warning "Could not create the desktop shortcut: $($_.Exception.Message)"
-  }
   $launchStatus = if ($disableGithubUpdates) { 'Starting this laptop’s local application...' } else { 'Starting the latest shared application...' }
   Write-Progress -Activity 'Starting Extractor' -Status $launchStatus -PercentComplete 100 -Completed
   $previousSharedApp = $env:FARE_EXTRACTOR_SHARED_APP
