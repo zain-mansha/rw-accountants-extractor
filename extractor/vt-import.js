@@ -16,8 +16,13 @@
     reason:['rejectionreason','reason','reviewnote'],
     source:['sourcepdf','source','filename'],
     page:['pdfpage','page'],
-    fuelAmount:['expensesfuel','fuel','fuelamount','expensefuel'],
+    fuelAmount:['expensesfuel','fuel','fuelamount','expensefuel','fueltransaction'],
     drawingsAmount:['capitalaccountdrawings','drawings','drawingsamount'],
+    otherAmount:['othertransaction','otheramount','shoptransaction'],
+    handling:['handling','receiptfor','businesstype'],
+    vatSplit:['vatsplit','splitvat'],
+    standardRate:['standardrate','standardrated'],
+    zeroRate:['zerorate','zerorated'],
     category:['category'],
     correctsInvoice:['correctsinvoice','correctedinvoice'],
     correctionReference:['correctionreference','correctionref'],
@@ -55,7 +60,7 @@
       const values=(matrix[row]||[]).map(normalizeHeader);
       const hasInvoice=aliases.invoiceNumber.some(alias=>values.includes(alias));
       const hasAmount=aliases.total.some(alias=>values.includes(alias));
-      const hasReceiptAmounts=aliases.fuelAmount.some(alias=>values.includes(alias))||aliases.drawingsAmount.some(alias=>values.includes(alias));
+      const hasReceiptAmounts=aliases.fuelAmount.some(alias=>values.includes(alias))||aliases.drawingsAmount.some(alias=>values.includes(alias))||aliases.otherAmount.some(alias=>values.includes(alias));
       const legacyReceipt=!hasInvoice&&values.includes('company')&&values.includes('category')&&values.includes('status');
       if(hasAmount&&(hasInvoice||hasReceiptAmounts||legacyReceipt))return row;
     }
@@ -63,20 +68,21 @@
   }
   function recordsFromMatrix(matrix){
     const headerRow=findHeaderRow(matrix||[]);
-    if(headerRow<0)throw new Error('No supported table found. Choose an Extractor workbook with Invoice number and Total columns, or a fuel receipt report with Total and Company.');
+    if(headerRow<0)throw new Error('No supported table found. Choose an Extractor invoice workbook with Invoice number and Total columns, or a receipts report with Total and Company.');
     const headers=(matrix[headerRow]||[]).map(normalizeHeader),columns={};
     for(const [field,names] of Object.entries(aliases))columns[field]=headers.findIndex(header=>names.includes(header));
-    const sourceHeaders=(matrix[headerRow]||[]).map(normalizeHeader),hasReceiptAmounts=columns.fuelAmount>=0||columns.drawingsAmount>=0,legacyReceipt=columns.invoiceNumber<0&&sourceHeaders.includes('company')&&sourceHeaders.includes('category')&&sourceHeaders.includes('status'),receiptTable=columns.invoiceNumber<0&&(hasReceiptAmounts||legacyReceipt);
-    if(columns.total<0||(!receiptTable&&columns.invoiceNumber<0))throw new Error('Choose an Extractor invoice workbook with Invoice number and Total columns, or a fuel receipt workbook with Total and Company.');
+    const sourceHeaders=(matrix[headerRow]||[]).map(normalizeHeader),hasReceiptAmounts=columns.fuelAmount>=0||columns.drawingsAmount>=0||columns.otherAmount>=0,legacyReceipt=columns.invoiceNumber<0&&sourceHeaders.includes('company')&&sourceHeaders.includes('category')&&sourceHeaders.includes('status'),receiptTable=columns.invoiceNumber<0&&(hasReceiptAmounts||legacyReceipt);
+    if(columns.total<0||(!receiptTable&&columns.invoiceNumber<0))throw new Error('Choose an Extractor invoice workbook with Invoice number and Total columns, or a receipts workbook with Total and Company.');
     const records=[];
     for(const cells of matrix.slice(headerRow+1)){
       const cell=field=>columns[field]>=0?cells?.[columns[field]]:'';
       const values=Object.fromEntries(Object.keys(aliases).map(field=>[field,cell(field)]));
       if(Object.values(values).every(value=>value===null||value===undefined||String(value).trim()===''))continue;
-      const total=money(values.total),documentType=String(values.documentType||(receiptTable?'FUEL RECEIPT':'INVOICE')).trim().toUpperCase(),reason=String(values.reason||'').trim(),isFuelReceipt=documentType.includes('FUEL RECEIPT')||receiptTable,fuelAmount=columns.fuelAmount>=0?money(values.fuelAmount):isFuelReceipt?total:null;
+      const total=money(values.total),documentType=String(values.documentType||(receiptTable?'RECEIPT':'INVOICE')).trim().toUpperCase(),reason=String(values.reason||'').trim(),isFuelReceipt=documentType.includes('RECEIPT')||receiptTable,fuelAmount=columns.fuelAmount>=0?money(values.fuelAmount):isFuelReceipt?total:null,otherAmount=money(values.otherAmount),handling=String(values.handling||'').trim().toLowerCase(),vatSplit=/^(?:yes|true|1)$/i.test(String(values.vatSplit||'').trim());
       const row={
         invoiceNumber:String(values.invoiceNumber??'').trim(),date:date(values.date),supplier:String(values.supplier??'').trim(),
-        vat:columns.vat>=0?money(values.vat):isFuelReceipt?0:null,total,fuelAmount,drawingsAmount:money(values.drawingsAmount),isFuelReceipt,
+        vat:columns.vat>=0?money(values.vat):isFuelReceipt?0:null,total,fuelAmount,otherAmount,drawingsAmount:columns.drawingsAmount>=0?money(values.drawingsAmount):handling==='taxi-driver'?otherAmount:null,handling,vatSplit,
+        standardRate:money(values.standardRate),zeroRate:money(values.zeroRate),isFuelReceipt,
         status:status(values.status,documentType),documentType,
         source:String(values.source??'').trim(),page:String(values.page??'').trim(),reason,
         correctsInvoice:String(values.correctsInvoice??'').trim(),correctionReference:String(values.correctionReference??'').trim(),

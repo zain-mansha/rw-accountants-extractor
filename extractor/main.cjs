@@ -6,6 +6,7 @@ const fsSync=require('node:fs');
 const {execFile,spawn}=require('node:child_process');
 const crypto=require('node:crypto');
 const {readWorkspaceProfilesSync,workspaceDirectory,createWorkspace}=require('./workspaces.cjs');
+const {shouldBlockLaunch,readMaintenanceMetadata}=require('./maintenance-gate.cjs');
 let publishNetworkBootstrap=()=>({updated:false});
 try{publishNetworkBootstrap=require('./network-bootstrap.cjs').publishNetworkBootstrap;}
 catch(error){if(error?.code!=='MODULE_NOT_FOUND'||!String(error?.message||'').startsWith("Cannot find module './network-bootstrap.cjs'"))throw error;}
@@ -15,6 +16,20 @@ catch(error){if(error?.code!=='MODULE_NOT_FOUND'||!String(error?.message||'').st
 // copy with isolated workspace data.
 const networkPackageDirectory=path.dirname(process.execPath);
 const networkBuildFile=path.join(networkPackageDirectory,'network-build.txt');
+const {maintenanceMode,buildInfo:maintenanceBuildInfo}=readMaintenanceMetadata(__dirname);
+if(shouldBlockLaunch({packaged:app.isPackaged,maintenanceMode,buildInfo:maintenanceBuildInfo})){
+  const title=String(maintenanceMode.title||'Extractor is under maintenance');
+  const message=String(maintenanceMode.message||'Extractor is temporarily unavailable. Please try again later.');
+  app.whenReady().then(()=>{
+    const maintenanceWindow=new BrowserWindow({width:480,height:235,resizable:false,minimizable:false,maximizable:false,autoHideMenuBar:true,title,backgroundColor:'#f4f8f6',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
+    const safeMessage=message.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f8f6;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:370px}.brand{font-size:11px;font-weight:800;letter-spacing:.15em;color:#08796c}.eyebrow{margin-top:18px;color:#0b8174;font-size:10px;font-weight:800;letter-spacing:.12em}.title{font-size:23px;font-weight:730;margin:8px 0}.copy{color:#60736d;line-height:1.55;min-height:44px}.track{height:8px;margin-top:20px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:34%;border-radius:8px;background:#0d8276;animation:move 1.3s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(195%)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="eyebrow">TEMPORARILY UNAVAILABLE</div><div class="title">Under maintenance</div><div class="copy">'+safeMessage+'</div><div class="track"><div class="bar"></div></div></main>';
+    maintenanceWindow.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(html));
+    maintenanceWindow.once('closed',()=>app.quit());
+  });
+  app.on('window-all-closed',()=>app.quit());
+  return;
+}
 const bootstrapRefresh=publishNetworkBootstrap({
   packaged:app.isPackaged,
   sharedApplication:process.env.FARE_EXTRACTOR_SHARED_APP,
@@ -26,7 +41,8 @@ if(bootstrapRefresh.error)console.warn(`Could not refresh the network click-to-l
 if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
   app.whenReady().then(()=>{
     const splash=new BrowserWindow({width:460,height:205,resizable:false,show:true,autoHideMenuBar:true,title:'Extractor',backgroundColor:'#f4f7f4',webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true}});
-    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f7f4;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:340px}.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#08796c}.title{font-size:20px;font-weight:700;margin:12px 0 7px}.copy{color:#60736d;line-height:1.5;min-height:42px}.track{height:7px;margin-top:22px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:35%;border-radius:8px;background:#0d8276;animation:move 1.4s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(180px)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title" id="title">Checking shared updates</div><div class="copy" id="copy">Checking GitHub and preparing the latest shared application files.</div><div class="track"><div class="bar"></div></div></main>';
+    const localOnly=fsSync.existsSync(path.join(networkPackageDirectory,'local-development.flag'));
+    const html='<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f7f4;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:340px}.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#08796c}.title{font-size:20px;font-weight:700;margin:12px 0 7px}.copy{color:#60736d;line-height:1.5;min-height:42px}.track{height:7px;margin-top:22px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:35%;border-radius:8px;background:#0d8276;animation:move 1.4s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(180px)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title" id="title">'+(localOnly?'Starting local Extractor':'Checking for Extractor updates')+'</div><div class="copy" id="copy">'+(localOnly?'Using this laptop’s local application files. GitHub updates are disabled.':'Checking GitHub and preparing the current application files.')+'</div><div class="track"><div class="bar"></div></div></main>';
     splash.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(html));
 
     const launcher=path.join(networkPackageDirectory,'Start Extractor from Network.cmd');
@@ -68,7 +84,7 @@ if(app.isPackaged&&fsSync.existsSync(networkBuildFile)){
       cwd:networkPackageDirectory,
       windowsHide:true,
       stdio:['ignore','pipe','pipe'],
-      env:{...process.env,FARE_EXTRACTOR_BOOTSTRAP:'1'}
+      env:{...process.env,FARE_EXTRACTOR_BOOTSTRAP:'1',...(localOnly?{FARE_EXTRACTOR_DISABLE_GITHUB_UPDATES:'1'}:{})}
     });
     child.stdout.setEncoding('utf8');
     child.stdout.on('data',chunk=>{output=(output+chunk).slice(-4000);if(output.includes('EXTRACTOR_UPDATE_WAIT_NOTICE:')){waitNoticeReceived=true;showWaitNotice();}if(output.includes('EXTRACTOR_UPDATE_RESET_NOTICE:')){updateNoticeReceived=true;showUpdateNotice();}});

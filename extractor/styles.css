@@ -77,6 +77,13 @@ footer{padding-top:4px}
 .receipt-table input[type=date]{min-width:125px}.receipt-table input[type=number]{width:100px}.receipt-table .invoice-number-input{font-weight:700!important}.receipt-table .invoice-amount-input{font-size:10px!important;font-variant-numeric:tabular-nums}
 .receipt-table tr.rejected-receipt td{background:#fffaf3}
 .vt-fuel-review-table{min-width:1420px}.vt-fuel-review-table th:nth-child(6),.vt-fuel-review-table th:nth-child(7){min-width:105px}
+.receipt-options{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0;padding:12px 14px;border:1px solid var(--line);border-radius:9px;background:#f8fbf9;color:var(--ink);font-size:12px}
+.receipt-options select{border:1px solid var(--line);border-radius:6px;padding:7px 9px;background:#fff;color:var(--ink);font:inherit}
+.receipt-vat-toggle{display:flex;align-items:center;gap:7px;margin-left:12px}
+.receipt-vat-toggle input{accent-color:var(--green)}
+.receipt-table{min-width:1290px}
+.receipt-table th:nth-child(1){min-width:130px}.receipt-table th:nth-child(2),.receipt-table th:nth-child(3),.receipt-table th:nth-child(4),.receipt-table th:nth-child(5){min-width:115px}
+@media(max-width:760px){.receipt-options{align-items:flex-start}.receipt-vat-toggle{margin-left:0;width:100%}}
 
 /* ClearCount-style workspace shell */
 :root{font-family:"Segoe UI",Inter,system-ui,sans-serif;color:#172b2b;background:#f3f6f5;--ink:#172b2b;--muted:#627575;--line:#dce6e3;--green:#087f72;--green-dark:#06695f;--card:#fff}

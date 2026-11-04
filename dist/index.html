@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#214f41">
+  <meta name="description" content="Practice accounting for client records. Import statements, manage bank and cash, settle invoices, and prepare year-end accounts.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>ClearCount | Practice accounting</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="vendor/xlsx.full.min.js"></script>
+  <script defer src="core.js"></script>
+  <script defer src="entry-ui.js"></script>
+  <script defer src="accounts-ui.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div id="app"><div class="loading"><span class="brand-mark">cc</span><h1>ClearCount</h1><p>Opening your accounting workspace…</p></div></div>
+  <dialog id="modal" aria-labelledby="modal-title"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

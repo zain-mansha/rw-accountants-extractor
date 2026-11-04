@@ -612,10 +612,42 @@ test('fuel receipt profiles use printed totals, reject implausible OCR and list 
   const bad=[...bp.filter(line=>line.text!=='£30.00'),{page:1,text:'932.96',x:462,y:508}];
   const rejected=P.parseReceiptBatch('', 'renamed-file.pdf',bad)[0];
   assert.equal(rejected.status,'REJECTED');
-  assert.ok(P.compatibleCompanies.some(company=>company.name==='BP'&&company.category==='Fuel receipts'));
+  assert.ok(P.compatibleCompanies.some(company=>company.name==='BP'&&company.category==='Receipts'));
   assert.ok(P.compatibleCompanies.some(company=>company.name==='Marion Trading'&&company.category==='Invoices'));
   assert.ok(!P.compatibleCompanies.some(company=>company.name==='Mitretec Auto Parts'));
   assert.ok(!P.receiptProfiles.some(profile=>profile.id==='mitretec-auto-parts'));
+});
+test('receipt profiles recover Sainsburys summary VAT by its columns and treat fuel-only receipts as fuel',()=>{
+  const makePage=(page,receiptSummary,total,vat,date)=>[
+    {page,text:"Sainsbury's",x:148,y:190},{page,text:'Pump #13',x:440,y:678},{page,text:`£${total.toFixed(2)}`,x:502,y:709},
+    {page,text:receiptSummary,x:134,y:994},{page,text:'FUEL ONLY',x:470,y:995},
+    {page,text:'VAT',x:378,y:1025},{page,text:'TOTAL',x:532,y:1025},{page,text:'20',x:103,y:1057},
+    {page,text:vat.toFixed(2),x:379,y:1057},{page,text:total.toFixed(2),x:531,y:1057},
+    {page,text:`${date} 08:44`,x:382,y:615},{page,text:'Vat',x:194,y:1089},{page,text:'660 4548 36',x:378,y:1089}
+  ];
+  const first=P.parseReceiptBatch('', 'renamed.pdf',makePage(1,'VRIL RECE SUMMARY',60,10,'11/03/2026'),{businessType:'company'})[0];
+  const second=P.parseReceiptBatch('', 'renamed.pdf',makePage(2,'VAT RECEIPT SUMMARY - FUEL ONLY',40,6.67,'02/09/2026'),{businessType:'company'})[0];
+  assert.deepEqual([first.supplier,first.total,first.fuelAmount,first.otherAmount,first.vat,first.vatUnverified,first.status], ["Sainsbury's",60,60,0,10,false,'ACCEPTED']);
+  assert.deepEqual([second.total,second.fuelAmount,second.otherAmount,second.vat,second.vatUnverified,second.status], [40,40,0,6.67,false,'ACCEPTED']);
+});
+test('receipt processing keeps the progress bar pinned at the bottom of the app window',()=>{
+  const app=fs.readFileSync(path.join(__dirname,'..','extractor','app.js'),'utf8');
+  const styles=fs.readFileSync(path.join(__dirname,'..','extractor','styles.css'),'utf8');
+  assert.match(app,/classList\.toggle\('progress-panel-fixed',mode==='bank'&&isProcessingBank\|\|isExtracting\)/);
+  assert.match(styles,/\.progress-panel\.progress-panel-fixed\{position:fixed;[^}]*bottom:14px/);
+});
+test('Newtoll name OCR variants identify the forecourt, and unconfirmed mixed fuel splits are rejected',()=>{
+  const lines=[
+    {page:1,text:'Newton Services',x:110,y:30},{page:1,text:'A47 Eastbound',x:140,y:70},{page:1,text:'KARAN FUEL',x:60,y:1760},
+    {page:1,text:'DIESEL',x:187,y:360},{page:1,text:'21.07L at 1.899/L',x:216,y:398},{page:1,text:'£44.09',x:459,y:553},
+    {page:1,text:'REDBULL ORIGINAL',x:60,y:438},{page:1,text:'£1.59',x:558,y:475},{page:1,text:'KINDER BUENO',x:60,y:476},
+    {page:1,text:'Total',x:60,y:552},{page:1,text:'13/09/2026 22:51',x:306,y:1259}
+  ];
+  const [row]=P.parseReceiptBatch('', 'random.pdf',lines,{businessType:'company'});
+  assert.equal(row.supplier,'Newtoll Services (BP)');
+  assert.equal(row.category,'Receipts');
+  if(row.status==='ACCEPTED')assert.equal(Math.round((Number(row.fuelAmount)+Number(row.otherAmount))*100),Math.round(Number(row.total)*100));
+  else assert.match(row.rejectedReason,/separated confidently/);
 });
 test('MFG receipt totals stay printed while split fuel and shop goods use the separate printed subtotals',()=>{
   const page24=[
@@ -847,21 +879,21 @@ test('VT import reads an Extractor invoice worksheet and flags placeholder VAT u
   records[2].status='ACCEPTED';const withCredit=VT.makeVtUisRows(records),credit=withCredit.find(row=>row[0]==='PCR');
   assert.deepEqual(credit.slice(0,8),['PCR','','2026-11-12','Fuel Ltd','Credit note 1003',12,2,10]);
 });
-test('VT import reads fuel receipt reports and creates separate fuel and drawings analysis rows',()=>{
+test('VT import reads receipt reports and keeps company transaction rows uncategorized',()=>{
   const records=VTImport.recordsFromMatrix([
     ['Date','Total','Expenses: Fuel','Capital Account: Drawings','Company','Category','Status','Source PDF','PDF / page'],
     ['11/11/2026',31.26,30.01,1.25,'MFG','Fuel receipts','ACCEPTED','receipts.pdf','Open PDF - page 24']
   ]);
-  assert.deepEqual([records[0].date,records[0].supplier,records[0].vat,records[0].total,records[0].fuelAmount,records[0].drawingsAmount,records[0].isFuelReceipt,records[0].documentType,records[0].page],['2026-11-11','MFG',0,31.26,30.01,1.25,true,'FUEL RECEIPT','Open PDF - page 24']);
+  assert.deepEqual([records[0].date,records[0].supplier,records[0].vat,records[0].total,records[0].fuelAmount,records[0].drawingsAmount,records[0].isFuelReceipt,records[0].documentType,records[0].page],['2026-11-11','MFG',0,31.26,30.01,1.25,true,'RECEIPT','Open PDF - page 24']);
   const rows=VT.makeVtUisRows(records);
   assert.deepEqual(rows.slice(1),[
-    ['PIN','','2026-11-11','MFG','Fuel receipt page 24',31.26,0,30.01,'Expenses: Fuel','Fuel receipt page 24 | Fuel'],
-    ['','','','','','','',1.25,'Capital Account: Drawings','Fuel receipt page 24 | Drawings']
+    ['PIN','','2026-11-11','MFG','Receipt page 24',31.26,0,30.01,'','Receipt page 24 | Fuel transaction'],
+    ['','','','','','','',1.25,'','Receipt page 24 | Other transaction']
   ]);
 });
 test('VT receipt import puts an unsplit total to fuel and rejects mismatched analysis values',()=>{
   const [single]=VTImport.recordsFromMatrix([['Date','Total','Company','Category','Status'],['2026-11-11',47.8,'Shell','Fuel receipts','ACCEPTED']]);
-  assert.deepEqual([single.documentType,single.fuelAmount,single.drawingsAmount,single.vat],['FUEL RECEIPT',47.8,null,0]);
+  assert.deepEqual([single.documentType,single.fuelAmount,single.drawingsAmount,single.vat],['RECEIPT',47.8,null,0]);
   assert.equal(VT.makeVtUisRows([single]).length,2);
   const mismatch={...single,total:48,fuelAmount:46,drawingsAmount:1.25};
   assert.equal(VT.usable(mismatch),false);assert.match(VT.makeVtExcludedRows([mismatch])[1][7],/do not add up/);assert.equal(VT.makeVtUisRows([mismatch]).length,1);

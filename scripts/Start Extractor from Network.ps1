@@ -428,12 +428,19 @@ function New-SharedExtractorBuild([string]$CommitSha) {
   }
 }
 
-Write-Progress -Activity 'Checking Extractor updates' -Status 'Checking the shared network application against GitHub...' -PercentComplete 10
+$disableGithubUpdates = $env:FARE_EXTRACTOR_DISABLE_GITHUB_UPDATES -eq '1'
+$progressStatus = if ($disableGithubUpdates) { 'Using this laptop’s local application files; GitHub updates are disabled.' } else { 'Checking the shared network application against GitHub...' }
+Write-Progress -Activity 'Checking Extractor updates' -Status $progressStatus -PercentComplete 10
 $applicationDirectory = Get-CurrentExtractorApp
 $commitSha = ''
 $sharedBuildId = Get-InstalledExtractorBuildId
 $localBuildId = if ($LocalBuildId -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') { $LocalBuildId } else { '' }
 $sharedChangedSinceLocal = $localBuildId -and $sharedBuildId -and $localBuildId -ne $sharedBuildId
+if ($disableGithubUpdates) {
+  if (-not $applicationDirectory) { throw 'The local Extractor application folder is incomplete. GitHub updates are disabled for this laptop.' }
+  $commitSha = Get-InstalledExtractorCommit
+  Write-Progress -Activity 'Checking Extractor updates' -Status 'Keeping the local application version; GitHub will not be contacted.' -PercentComplete 70
+} else {
 try {
   if (-not $applicationDirectory) { throw 'The shared application folder is incomplete.' }
   if ($sharedChangedSinceLocal) {
@@ -496,6 +503,7 @@ try {
 } catch {
   if (-not $applicationDirectory) { throw "Extractor could not check GitHub or find a usable application on the network. $($_.Exception.Message)" }
   Write-Warning "GitHub could not be reached, so Extractor will use the last complete version on the network. $($_.Exception.Message)"
+}
 }
 if (-not $applicationDirectory -or -not (Test-ExtractorAppReady $applicationDirectory)) {
   throw 'No complete Extractor application is available on the shared network folder.'
@@ -697,7 +705,7 @@ if (-not $NoLaunch) {
       $shortcut.TargetPath = $runtimeExecutable
       $shortcut.WorkingDirectory = $runtimeTarget
       $shortcut.IconLocation = "$runtimeExecutable,0"
-      $shortcut.Description = 'Launch the local R&W Accountants Extractor; it checks for shared-network updates first'
+      $shortcut.Description = if ($disableGithubUpdates) { 'Launch the local R&W Accountants Extractor; GitHub updates are disabled' } else { 'Launch the R&W Accountants Extractor and check for updates' }
       $shortcut.Save()
       [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
       Write-Output "Desktop shortcut: $shortcutPath"
@@ -705,7 +713,8 @@ if (-not $NoLaunch) {
   } catch {
     Write-Warning "Could not create the desktop shortcut: $($_.Exception.Message)"
   }
-  Write-Progress -Activity 'Checking Extractor updates' -Status 'Starting the latest shared application...' -PercentComplete 100 -Completed
+  $launchStatus = if ($disableGithubUpdates) { 'Starting this laptop’s local application...' } else { 'Starting the latest shared application...' }
+  Write-Progress -Activity 'Starting Extractor' -Status $launchStatus -PercentComplete 100 -Completed
   $previousSharedApp = $env:FARE_EXTRACTOR_SHARED_APP
   $previousLocalApp = $env:FARE_EXTRACTOR_LOCAL_APP
   $previousProfileRoot = $env:FARE_EXTRACTOR_PROFILE_ROOT

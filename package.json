@@ -1,10 +1,14 @@
 {
-  "name": "rw-accountants-extractor",
-  "version": "1.1.7",
+  "name": "clearcount",
+  "version": "1.3.0",
+  "description": "ClearCount local practice accounting workspace for Windows",
   "private": true,
-  "description": "R&W Accountants local invoice, receipt, and bank statement extractor",
+  "main": "desktop/main.cjs",
   "scripts": {
-    "test": "node --test tests/extractor.test.cjs tests/network-launcher.test.cjs tests/workspaces.test.cjs",
-    "package:network": "node scripts/package-extractor.mjs --network"
+    "test": "node --test tests/core.test.cjs tests/fast-entry.test.cjs tests/supplier-categories.test.cjs tests/accounts-flow.test.cjs tests/vat.test.cjs tests/hmrc.test.cjs tests/extractor.test.cjs tests/workspaces.test.cjs tests/network-launcher.test.cjs",
+    "package": "node scripts/package-desktop.mjs",
+    "package:extractor": "node scripts/package-extractor.mjs",
+    "package:extractor:network": "node scripts/package-extractor.mjs --network",
+    "test:desktop": "node tests/desktop.test.mjs"
   }
 }

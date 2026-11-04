@@ -1,8 +1,8 @@
 @echo off
 setlocal
-title "R&W Accountants Extractor - Checking shared updates"
+title "R&W Accountants Extractor - Checking for updates"
 set "ELECTRON_RUN_AS_NODE="
-echo Checking the latest Extractor application files on the shared network...
+echo Checking for Extractor updates before launch.
 set "FARE_EXTRACTOR_NETWORK_ROOT=%~dp0"
 pushd "%~dp0" >nul 2>&1
 if errorlevel 1 (

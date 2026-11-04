@@ -1806,19 +1806,27 @@
     return !hasInvoiceNumber&&/\bTOTAL\b/i.test(text)&&/\bINVOICE\s*[1-4]\s*:/i.test(text)&&/\bSOLD\b/i.test(text)&&/\bBALANCE\b/i.test(text);
   }
   const receiptProfiles=[
-    {id:'tesco',name:'Tesco',category:'Fuel receipts',detect:text=>/\bTESCO\b/i.test(text)&&/\b(?:PUMP|PETROL|FUEL|TOTAL|UNLEADED|SALE|LITRE|LITER|RECEIPT\s+SUMMARY)\b/i.test(text)},
-    {id:'esso',name:'Esso',category:'Fuel receipts',detect:text=>/\bESSO\b/i.test(text)||/239\s*088\s*635|218\s*001\s*105/.test(text)},
+    {id:'tesco',name:'Tesco',category:'Receipts',detect:text=>/\bTESCO\b/i.test(text)&&/\b(?:PUMP|PETROL|FUEL|TOTAL|UNLEADED|SALE|LITRE|LITER|RECEIPT\s+SUMMARY)\b/i.test(text)},
+    {id:'sainsburys',name:"Sainsbury's",category:'Receipts',detect:text=>/\bSAINSBURY(?:'S|S)?\b/i.test(text)&&/\b(?:PUMP|FUEL|UNLEADED|DIESEL|VAT\s+RECEIPT\s+SUMMARY)\b/i.test(text)},
+    {id:'newtoll-services',name:'Newtoll Services (BP)',category:'Receipts',detect:text=>{const key=String(text||'').toUpperCase().replace(/[^A-Z]/g,'');return (key.includes('NEWTOLLSERVICES')||key.includes('NEWTONSERVICES'))&&/\b(?:A47|THORNEY\s+TOLL|KARAN\s+(?:FUEL|SHOP)|BPME|UNLEADED|DIESEL|TOTAL)\b/i.test(text);}},
+    {id:'faizan-e-madina',name:'Faizan-e-Madina Shop',category:'Receipts',detect:text=>/\bFAIZAN\s*[- ]?E\s*[- ]?MADINA\b/i.test(text)&&/\b(?:SHOP|GROCERIES|SHOP\s+SALES|TOTAL)\b/i.test(text)},
+    {id:'rockafellas',name:'RockaFellas',category:'Receipts',detect:text=>/\bROCKAFELLAS\b/i.test(text)&&/\b(?:TICKET|RECEIPT|TOTAL|CASH|CHANGE)\b/i.test(text)},
+    {id:'poundland',name:'Poundland',category:'Receipts',detect:text=>/\bPOUNDLAND(?:\s+LIMITED)?\b/i.test(text)&&/\b(?:TOTAL|CASH|VAT|PURCHASE|SHOPPING)\b/i.test(text)},
+    {id:'bm-retail',name:'B&M Retail Ltd',category:'Receipts',detect:text=>/\bB\s*&\s*M\s+RETAIL\b|\bB&amp;M\s+RETAIL\b/i.test(text)&&/\b(?:TOTAL\s+AMOUNT|TAX\s+GBP|SALES\s+VOUCHER)\b/i.test(text)},
+    {id:'asda',name:'Asda',category:'Receipts',detect:text=>/\bASDA\b/i.test(text)&&/\b(?:TOTAL|RECEIPT|SALE)\b/i.test(text)},
+    {id:'wilco-motor-spares',name:'Wilco Motor Spares',category:'Receipts',detect:text=>/\bWILCO\s+MOTOR\s+SPARES\b/i.test(text)&&/\b(?:TOTAL|GOODS|VAT|DOCUMENT)\b/i.test(text)},
+    {id:'esso',name:'Esso',category:'Receipts',detect:text=>/\bESSO\b/i.test(text)||/239\s*088\s*635|218\s*001\s*105/.test(text)},
     // BP receipts in these scans often lose the red BP logo in OCR. Their
     // registered VAT number is a stable content identifier across layouts.
-    {id:'bp',name:'BP',category:'Fuel receipts',detect:text=>/\b(?:BP|LITTLE HAMPTON)\b/i.test(text)||/663\s*139\s*630/.test(text)},
-    {id:'shell',name:'Shell',category:'Fuel receipts',detect:text=>{const words=String(text||'').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean),knownSite=/\b(?:HUNTINGDON\s+ROAD|FENGATE|WESTWOOD|STANGROUND|NORTHMEAD|WESTSIDE)\b/i.test(text),shellWord=words.some(word=>word.length>=4&&word.length<=7&&receiptLevenshtein(word,'SHELL')<=2);return (shellWord||knownSite)&&/\b(?:PUMP|ARTICLE|CUSTOMER|TOTAL|MASTERCARD|AMOUNT|FUEL|UNLEADED|EFT|RECEIPT)\b/i.test(text);}},
-    {id:'mfg',name:'MFG',category:'Fuel receipts',detect:text=>/\b(?:MFG|MOTOR FUEL)\b/i.test(text)&&/\b(?:PUMP|TOTAL|SALE|UNLEADED|POS)\b/i.test(text)},
+    {id:'bp',name:'BP',category:'Receipts',detect:text=>/\b(?:BP|LITTLE HAMPTON)\b/i.test(text)||/663\s*139\s*630/.test(text)},
+    {id:'shell',name:'Shell',category:'Receipts',detect:text=>{const words=String(text||'').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean),knownSite=/\b(?:HUNTINGDON\s+ROAD|FENGATE|WESTWOOD|STANGROUND|NORTHMEAD|WESTSIDE)\b/i.test(text),shellWord=words.some(word=>word.length>=4&&word.length<=7&&receiptLevenshtein(word,'SHELL')<=2);return (shellWord||knownSite)&&/\b(?:PUMP|ARTICLE|CUSTOMER|TOTAL|MASTERCARD|AMOUNT|FUEL|UNLEADED|EFT|RECEIPT)\b/i.test(text);}},
+    {id:'mfg',name:'MFG',category:'Receipts',detect:text=>/\b(?:MFG|MOTOR FUEL)\b/i.test(text)&&/\b(?:PUMP|TOTAL|SALE|UNLEADED|POS)\b/i.test(text)},
     // OCR commonly mangles the header (`EG ON THE MijVb`) but reads the
     // company name or VAT number in the footer more reliably.
-    {id:'eg-on-the-move',name:'EG On The Move',category:'Fuel receipts',detect:text=>/\bEG\s+ON\s+THE\s+(?:MOVE|MI[JV]V?B)\b/i.test(text)||/\bEIG\s+on\s+the\s+Move\s+Ltd\b/i.test(text)||/473\s*949\s*343/.test(text)},
-    {id:'saxon-autopoint',name:'Saxon AutoPoint',category:'Fuel receipts',detect:text=>/\bSAXON\s+AUTO\s*POINT\b/i.test(text)&&/\b(?:PUMP|TOTAL|SALE|UNLEADED)\b/i.test(text)},
-    {id:'other-forecourt',name:'Other forecourt',category:'Fuel receipts',detect:text=>/\b(?:UNLEADED|PETROL|PUMP|FUEL)\b/i.test(text)&&/\b(?:VAT|TOTAL|POS|RECEIPT)\b/i.test(text)},
-    {id:'unidentified-forecourt',name:'Unidentified forecourt',category:'Fuel receipts',detect:()=>false}
+    {id:'eg-on-the-move',name:'EG On The Move',category:'Receipts',detect:text=>/\bEG\s+ON\s+THE\s+(?:MOVE|MI[JV]V?B)\b/i.test(text)||/\bEIG\s+on\s+the\s+Move\s+Ltd\b/i.test(text)||/473\s*949\s*343/.test(text)},
+    {id:'saxon-autopoint',name:'Saxon AutoPoint',category:'Receipts',detect:text=>/\bSAXON\s+AUTO\s*POINT\b/i.test(text)&&/\b(?:PUMP|TOTAL|SALE|UNLEADED)\b/i.test(text)},
+    {id:'other-forecourt',name:'Other forecourt',category:'Receipts',detect:text=>/\b(?:UNLEADED|PETROL|PUMP|FUEL)\b/i.test(text)&&/\b(?:VAT|TOTAL|POS|RECEIPT)\b/i.test(text)},
+    {id:'unidentified-forecourt',name:'Unidentified forecourt',category:'Receipts',detect:()=>false}
   ];
   function compatibleCompanies(){return [
     {id:'monzo-bank',name:'Monzo',category:'Bank statements',status:'Under development',description:'Digital PDF statements with ISO dates and CR/DR transactions'},
@@ -1833,15 +1841,42 @@
   function receiptFaintTotalLabel(line,fuelY){const x=Number(line?.x)||0,y=Number(line?.y)||0,letters=String(line?.text||'').toUpperCase().replace(/[^A-Z]/g,'');return x<260&&y>=(Number(fuelY)||0)+70&&y<=(Number(fuelY)||0)+320&&letters.length>=2&&letters.length<=3&&receiptLevenshtein(letters,'TOTAL')<=3;}
   function receiptMfgTotalLabel(line){const text=String(line?.text||''),letters=text.toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/0/g,'O').replace(/1/g,'I').replace(/I/g,'L'),x=Number(line?.x)||0,y=Number(line?.y)||0;if(receiptLevenshtein(letters,'TOTALS')<receiptLevenshtein(letters,'TOTAL'))return false;return x<300&&y>500&&y<1050&&letters.length>=4&&letters.length<=7&&receiptLevenshtein(letters,'TOTAL')<=2;}
   function receiptMoneyTokens(value){
-    const text=String(value||'').replace(/[\u00A3\u20AC$]/g,' ').replace(/(^|[^\p{L}\d])[eEcCyY]\s*[aAgG]\s*[oO](?=[\s.,;-]*\d{2}(?:\s|$|[^\p{L}]))/gu,(_,lead)=>lead+'30').replace(/(^|[^\p{L}\d])[nN]\s*[oO](?=[\s.,;-]*\d{2}(?:\s|$|[^\p{L}]))/gu,(_,lead)=>lead+'20').replace(/([.,]\s*\d)\s*[bB](?=\s|$|[^\p{L}])/gu,(_,digit)=>digit+'6'),pattern=/\(?-?[\dOoIl]{1,4}(?:[\s,.'\u2019][\dOoIl]{3})*(?:\s*[.,;-]\s*[\dOoIl]{2})\)?/g,matches=[...text.matchAll(pattern)],values=[];
+    const text=String(value||'').replace(/[\u00A3\u20AC$]/g,' ').replace(/(^|[^\p{L}\d])G(?=[\sOoIl]{1,3}[.,][\sOoIlq]{2}(?:\s|$|[^\p{L}]))/gu,'$1').replace(/([.,]\s*[\dOoIl])\s*[qQ](?=\s|$|[^\p{L}])/gu,(_,prefix)=>prefix+'9').replace(/(^|[^\p{L}\d])[eEcCyY]\s*[aAgG]\s*[oO](?=[\s.,;-]*\d{2}(?:\s|$|[^\p{L}]))/gu,(_,lead)=>lead+'30').replace(/(^|[^\p{L}\d])[nN]\s*[oO](?=[\s.,;-]*\d{2}(?:\s|$|[^\p{L}]))/gu,(_,lead)=>lead+'20').replace(/([.,]\s*\d)\s*[bB](?=\s|$|[^\p{L}])/gu,(_,digit)=>digit+'6'),pattern=/\(?-?[\dOoIl]{1,4}(?:[\s,.'\u2019][\dOoIl]{3})*(?:\s*[.,;-]\s*[\dOoIl]{2})\)?/g,matches=[...text.matchAll(pattern)],values=[];
     for(const match of text.matchAll(/(?<![\d/])\d{1,4}\s+\d{2}(?!\d)/g))matches.push(match);
     matches.sort((a,b)=>a.index-b.index);
     for(const match of matches){const normalized=match[0].replace(/[Oo]/g,'0').replace(/[Il]/g,'1').replace(/[\u2019']/g,'').replace(/(\d)\s*-\s*(?=\d{2}\b)/g,'$1.').replace(/(?<=\d)\s+(?=\d{2}\b)/g,'.').replace(/\s+/g,' ').replace(/[;,]/g,'.'),parsed=invoiceAmount(normalized);if(parsed!==null&&Math.abs(parsed)<=100000&&!values.some(item=>item.index===match.index))values.push({raw:match[0],value:parsed,index:match.index});}
     return values;
   }
+  function receiptAnchoredMoneyTokens(value){
+    const raw=String(value||'').trim(),withoutCurrency=raw.replace(/^\s*[£€$EeFf]\s*/u,''),variants=[raw,withoutCurrency];
+    // Only used beside a printed Total label. Windows OCR sometimes reads the
+    // pound sign as E/F and breaks one amount across punctuation, e.g.
+    // `E 44 (_)9` or `E59 . 2.3`. Repair those glyphs in this labelled cell,
+    // never in product descriptions, dates or payment rows.
+    const wrappedZero=withoutCurrency.match(/^\s*(\d{1,3})\s*[([]\s*[_\s]*[)\]]\s*(\d)\s*$/);
+    if(wrappedZero)variants.push(`${wrappedZero[1]}.0${wrappedZero[2]}`);
+    const doubledSeparator=withoutCurrency.match(/^\s*(\d{1,3})\s*[.,]\s*(\d)\s*[.,]\s*(\d)\s*$/);
+    if(doubledSeparator)variants.push(`${doubledSeparator[1]}.${doubledSeparator[2]}${doubledSeparator[3]}`);
+    const confusedEight=withoutCurrency.match(/^\s*(\d{1,3})[tT]\s*[.,]\s*(\d{2})\s*$/);
+    if(confusedEight)variants.push(`${confusedEight[1]}8.${confusedEight[2]}`);
+    // In a printed, label-anchored amount, Windows OCR can turn `£100.32`
+    // into `El oo -32`. Join only the whole-pound glyphs and preserve the
+    // explicit two printed penny digits; this never runs on unlabelled text.
+    const separated=withoutCurrency.match(/^\s*([\dOoIl](?:[\s,.'\u2019]*[\dOoIl])*)\s*[.,;-]\s*([\dOoIl]{2})\s*$/);
+    if(separated){const whole=separated[1].replace(/[\s,.'\u2019]/g,'').replace(/[Oo]/g,'0').replace(/[Il]/g,'1'),pence=separated[2].replace(/[Oo]/g,'0').replace(/[Il]/g,'1');if(/^\d{1,5}$/.test(whole)&&/^\d{2}$/.test(pence))variants.push(`${whole}.${pence}`);}
+    const values=[];for(const variant of variants)for(const token of receiptMoneyTokens(variant))if(!values.some(item=>Math.round(item.value*100)===Math.round(token.value*100)))values.push(token);
+    if(separated&&/^\s*[Il]\s/.test(separated[1])){const repaired=invoiceAmount(`${separated[1].replace(/[\s,.'\u2019]/g,'').replace(/[Oo]/g,'0').replace(/[Il]/g,'1')}.${separated[2].replace(/[Oo]/g,'0').replace(/[Il]/g,'1')}`);if(repaired!==null)return [{raw:separated[0],value:repaired,index:0}];}
+    return values;
+  }
   function receiptDateFromText(value){
-    const text=String(value||'').replace(/\b0[bB](?=\s+20\d{2}\b)/g,'05').replace(/(\d{1,2}[./-]\s*\d{1,2})\s+(20\d{2})\b/g,'$1/$2').replace(/(?<=\d)\s+([./-])\s+(?=\d)/g,'$1').replace(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:day)?\b[:,]?\s*/ig,'');
-    const numeric=[...text.matchAll(/\b(?:\d{1,2}[./-]\s*\d{1,2}[./-]\s*\d{2,4}|20\d{2}[./-]\d{1,2}[./-]\d{1,2})\b/g)].map(match=>parseDate(match[0].replace(/\s+/g,''))).filter(Boolean);
+    let text=String(value||'').replace(/\b0[bB](?=\s+20\d{2}\b)/g,'05').replace(/\b[I|]O(?=\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))/gi,'10').replace(/\b([IOQL])(?=\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))/gi,'1').replace(/\b([OQ])(?=\d)/gi,'0').replace(/(\d{1,2}[./-]\s*\d{1,2})\s+(20\d{2})\b/g,'$1/$2').replace(/(?<=\d)\s*([./-])\s*,?\s*(?=\d)/g,'$1').replace(/\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:day)?\b[:,]?\s*/ig,'');
+    // Some till printouts use DD/MM YY on the date/time line.
+    text=text.replace(/\b(\d{1,2}[./-]\s*\d{1,2})\s+(2\d)\b/g,'$1/20$2');
+    // Windows OCR commonly removes one separator from short numeric dates,
+    // e.g. `23.0812026`. Restore the day/month/year boundaries only when the
+    // resulting calendar date is valid.
+    text=text.replace(/\b(\d{1,2})[./-](\d{2})(20\d{2})\b/g,'$1/$2/$3').replace(/\b(\d{2})(\d{2})(20\d{2})\b/g,'$1/$2/$3');
+    const numeric=[...text.matchAll(/\b(?:\d{1,2}[./-]\s*\d{1,2}[./-]\s*\d{2,4}|20\d{2}[./-]\d{1,2}[./-]\d{1,2})\b(?![A-Za-z0-9?])/g)].map(match=>parseDate(match[0].replace(/\s+/g,''))).filter(Boolean);
     const monthNames={jan:'Jan',feb:'Feb',mar:'Mar',apr:'Apr',may:'May',jun:'Jun',jul:'Jul',aug:'Aug',sep:'Sep',oct:'Oct',nov:'Nov',dec:'Dec'};
     const word=[...text.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)?[\s,.:/-]+([A-Za-z]{3,9})[\s,.:/-]+(20\d{2})\b/ig)].map(match=>parseDate(`${match[1]} ${monthNames[match[2].slice(0,3).toLowerCase()]||match[2]} ${match[3]}`)).filter(Boolean);
     return [...new Set([...numeric,...word])];
@@ -1854,6 +1889,134 @@
     for(const fragment of eligible){const text=String(fragment.text||'').trim();if(!/^\d{1,2}[./-]?$/.test(text))continue;for(const continuation of eligible){if(continuation===fragment||! /20\d{2}/.test(String(continuation.text||'')))continue;const dy=Math.abs((Number(fragment.y)||0)-(Number(continuation.y)||0)),dx=(Number(continuation.x)||0)-(Number(fragment.x)||0);if(dy<=18&&dx>=0&&dx<=240)values.push(...receiptDateFromText(`${text} ${continuation.text}`));}}
     return [...new Set(values)];
   }
+  function receiptVatFromLines(lines,total=''){
+    const ordered=[...(Array.isArray(lines)?lines:[])].filter(line=>line&&String(line.text||'').trim()).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)),isRegistration=line=>{const value=String(line?.text||'');if(/\bV(?:A|4)(?:T|I)\s*(?:NO\.?|NUMBER|REG(?:ISTRATION)?|TYPE|RATE)\b/i.test(value))return true;const x=Number(line?.x)||0,y=Number(line?.y)||0;return ordered.some(other=>{const otherText=String(other.text||''),otherX=Number(other.x)||0,otherY=Number(other.y)||0,digits=otherText.replace(/\D/g,'');if(other===line||Math.abs(otherY-y)>20||otherX<x||otherX-x>330)return false;if(/\bGB\s*\d(?:[\s\d]{7,})\b/i.test(otherText))return true;return /^\s*V(?:A|4)(?:T|I)\s*[:.]?\s*$/i.test(value)&&digits.length>=8;});},vatLines=ordered.filter(line=>/\bV(?:A|4)(?:T|I)\b/i.test(String(line.text||''))&&!isRegistration(line)),text=ordered.map(line=>String(line.text||'')).join(' ');
+    const compact=value=>String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,''),isVatWord=value=>/\bV(?:A|4)(?:T|I)\b/i.test(String(value||'')),vatAmountLabel=line=>{const value=String(line?.text||''),key=compact(value),match=key.match(/^(?:VAT|VAI|V4T)([A-Z0-9]+)$/);return Boolean(match&&receiptLevenshtein(match[1],'AMOUNT')<=2)||/\bV(?:A|4)(?:T|I)\s+(?:AMOUNT|VALUE)\b/i.test(value);},summary=ordered.find(line=>{const value=String(line.text||''),key=compact(value),summaryLike=/SUMMARY/.test(key),nearbyHeaders=ordered.filter(other=>{const y=Number(other.y)||0,anchorY=Number(line.y)||0;return y>=anchorY&&y<=anchorY+120;}),vatHeader=nearbyHeaders.find(other=>/^(?:VAT|VAI|V4T)$/i.test(String(other.text||'').trim())),totalHeader=nearbyHeaders.find(other=>/^\s*T(?:O|0)TAL\s*$/i.test(String(other.text||''))&&Math.abs((Number(other.y)||0)-(Number(vatHeader?.y)||0))<=8);return /\bVAT\s*(?:ANALYSIS|ANALYSTS|RECEIPT\s+SUMMARY|SUMMARY)\b|\bTAX\s+SUMMARY\b/i.test(value)||(summaryLike&&(key.includes('VAT')||key.includes('VAI')||key.includes('RECE'))&&(nearbyHeaders.some(other=>/F[U HJ]EL\s+ONLY/i.test(String(other.text||'')))||Boolean(vatHeader&&totalHeader)));}),summaryY=Number(summary?.y)||0,vatSeeBelow=ordered.some(line=>/\bV(?:A|4)(?:T|I)\s*[:.]?\s*SEE\s+BELOW\b/i.test(String(line.text||''))),vatAmountColumnEvidence=vatLines.some(line=>{const value=String(line.text||''),key=compact(value),x=Number(line.x)||0,y=Number(line.y)||0;if(!isVatWord(value)||/^\s*V(?:A|4)(?:T|I)\s*[:.]?\s*$/i.test(value)||/\b(?:NO\.?|NUMBER|TYPE|RATE|ANALYSIS|SUMMARY)\b/i.test(value))return false;return ordered.some(other=>other!==line&&/^\s*NETT?\s*$/i.test(String(other.text||''))&&Math.abs((Number(other.y)||0)-y)<=12&&(Number(other.x)||0)<x)||key.includes('AMOUNT');}),vatRateTable=ordered.some(line=>/^\s*VAT\s+RATE\s*$/i.test(String(line.text||''))&&ordered.some(other=>/^\s*EXCL?\s*$/i.test(String(other.text||''))&&Math.abs((Number(other.y)||0)-(Number(line.y)||0))<=12)&&ordered.some(other=>/^\s*INCL?\s*$/i.test(String(other.text||''))&&Math.abs((Number(other.y)||0)-(Number(line.y)||0))<=12)),taxAmountLabel=ordered.some(line=>/\bTAX\s+GBP\b/i.test(String(line.text||''))),poundlandVatLabel=ordered.some(line=>/\bVAT\b/i.test(String(line.text||''))&&/(?:INCLUSIVE.*VAT|VAT.*INCLUSIVE|PAID)/i.test(String(line.text||''))),taxTableLabel=ordered.some(line=>compact(line.text)==='TAX')&&ordered.some(line=>/\bRATE\b/i.test(String(line.text||'')))&&vatLines.length>0,mentioned=Boolean(summary)||vatSeeBelow||vatAmountColumnEvidence||vatRateTable||taxAmountLabel||poundlandVatLabel||taxTableLabel||vatLines.some(line=>vatAmountLabel(line)||/^\s*V(?:A|4)(?:T|I)\s*[:.]?\s*$/i.test(String(line.text||'')));
+    if(!mentioned)return {vat:0,vatMentioned:false,vatUnverified:false,vatRaw:''};
+    const cents=value=>receiptMoneyTokens(value).filter(token=>!/%/.test(String(value||''))).map(token=>Math.round(Math.abs(token.value)*100)),summaryCellCents=value=>{const values=cents(value);if(values.length)return values;const raw=String(value||'').trim(),match=raw.match(/^(\d{1,3})\s+[oO]{2}$/);if(match){const parsed=invoiceAmount(`${match[1]}.00`);return parsed===null?[]:[Math.round(parsed*100)];}const damaged=raw.match(/^[eE£]?\s*[cC]\s*[.,]\s*(\d{2})$/);if(damaged){const parsed=invoiceAmount(`9.${damaged[1]}`);return parsed===null?[]:[Math.round(parsed*100)];}const pennies=raw.match(/^[^\d]*[.,]\s*(\d{2})\s*$/);if(pennies){const parsed=invoiceAmount(`0.${pennies[1]}`);return parsed===null?[]:[Math.round(parsed*100)];}return [];},sum=values=>values.reduce((a,b)=>a+b,0)/100;
+    // Read VAT from the printed VAT column of a summary table. Many Newtoll,
+    // MFG, Asda and Tesco layouts put the net, VAT and gross values on one row;
+    // choosing a nearby number can silently select the net or gross column.
+    // Use the headers on that receipt to identify the VAT column, then read
+    // the printed VAT cells on each row (or the printed Totals row if OCR did
+    // not retain the individual rate rows).
+      const structuredVatTables=()=>{
+      const labelKey=value=>String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+      const headerLike=line=>/^(?:VAT|V4T|VAI)$/i.test(String(line.text||'').trim())||/^(?:EX\.?\s*VAT|EX\.?\s*V4T|INC\.?\s*VAT|INC\.?\s*V4T|A\.?\s*VAT)$/i.test(String(line.text||'').trim())||/^(?:NETT?|VAT\s*RATE|RATE)$/i.test(String(line.text||'').trim());
+      const exactVat=ordered.filter(line=>/^(?:VAT|V4T|VAI)$/i.test(String(line.text||'').trim()));
+      for(const vatHeader of exactVat){
+        const hy=Number(vatHeader.y)||0,vx=Number(vatHeader.x)||0;
+        const rowHeaders=ordered.filter(line=>Math.abs((Number(line.y)||0)-hy)<=12&&headerLike(line));
+        const incHeader=rowHeaders.some(line=>(Number(line.x)||0)>vx&&/^(?:INC\.?\s*VAT|INC\.?\s*V4T)$/i.test(String(line.text||'').trim())),vatHeadersLeft=rowHeaders.filter(line=>(Number(line.x)||0)<vx&&/^(?:VAT|V4T|VAI)$/i.test(String(line.text||'').trim())),previous=rowHeaders.filter(line=>(Number(line.x)||0)<vx&&(/^(?:NETT?|EX\.?\s*VAT|EX\.?\s*V4T|A\.?\s*VAT)$/i.test(String(line.text||'').trim())||incHeader&&vatHeadersLeft.length>=1&&line===vatHeadersLeft[0])).sort((a,b)=>(Number(b.x)||0)-(Number(a.x)||0))[0];
+        if(!previous)continue;
+        const title=ordered.some(line=>{const key=compact(line.text);const y=Number(line.y)||0;return y<=hy&&hy-y<=280&&(/VATANALYSIS|VATRECEIPTSUMMARY|TAXSUMMARY|VATSUMMARY/.test(key)||/MOTORFUEL|VATRATE/.test(key));});
+        const totalLabel=ordered.some(line=>/^(?:TOTALS?|TOTALS)$/i.test(String(line.text||'').trim())&&Math.abs((Number(line.y)||0)-hy)<=260);
+        if(!title&&!totalLabel)continue;
+        const px=Number(previous.x)||0,leftPitch=Math.max(40,vx-px),next= rowHeaders.filter(line=>(Number(line.x)||0)>vx&&/^(?:FUEL|VAT|V4T|VAI|INC\.?\s*VAT|INC\.?\s*V4T)$/i.test(String(line.text||'').trim())).sort((a,b)=>(Number(a.x)||0)-(Number(b.x)||0))[0],nextPitch=next?Math.max(35,(Number(next.x)||0)-vx):leftPitch;
+        // Cap the column band to about half a normal column interval. This
+        // excludes the duplicate fuel/net and gross VAT cells in Newtoll's
+        // five-column table even when OCR misses the Fuel heading.
+        const left=vx-leftPitch*0.7,right=vx+Math.min(leftPitch*0.5,nextPitch*0.55);
+        const netHeader=previous,netX=Number(netHeader.x)||0,netPrev=rowHeaders.filter(line=>(Number(line.x)||0)<netX&&/^(?:RATE|VAT\s*RATE)$/i.test(String(line.text||'').trim())).sort((a,b)=>(Number(b.x)||0)-(Number(a.x)||0))[0],netLeft=netPrev?netX-(netX-(Number(netPrev.x)||0))*0.7:netX-leftPitch*0.7,netRight=netX+(vx-netX)*0.5;
+        const valueTokensInBand=(line,bandLeft,bandRight)=>{
+          const value=String(line.text||''),width=Number(line.width)||0,x=Number(line.x)||0;
+          const tokens=receiptMoneyTokens(value).filter(token=>!/%/.test(value.slice(Math.max(0,token.index-2),token.index+token.raw.length+2))).map(token=>({value:Math.round(Math.abs(token.value)*100),x:x+(width&&value.length?width*(token.index+Math.min(token.raw.length/2,6))/value.length:token.index*6)})).filter(token=>token.x>=bandLeft&&token.x<bandRight);
+          if(!tokens.length&&bandLeft===left&&bandRight===right){const repaired=summaryCellCents(value);if(repaired.length===1)return [{value:repaired[0],x:x+Math.max(0,width/2)}].filter(token=>token.x>=bandLeft&&token.x<bandRight);}
+          return tokens;
+        };
+        const nextStop=ordered.filter(line=>(Number(line.y)||0)>hy+10&&/^(?:PAID\s+BY|CHANGE|MERCHANT\s*:|RECEIPT\s+NO\.?|DATE\s*\/\s*TIME)$/i.test(String(line.text||'').trim())).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0))[0],stopY=Math.min(nextStop?Number(nextStop.y):hy+260,hy+220);
+        const data=ordered.filter(line=>(Number(line.y)||0)>hy+10&&(Number(line.y)||0)<stopY),rateRows=data.filter(line=>/\d{1,2}[.,]\d{1,2}\s*%/.test(String(line.text||''))),rowYs=[];
+        for(const line of rateRows){const y=Number(line.y)||0;if(!rowYs.some(item=>Math.abs(item-y)<=14))rowYs.push(y);}
+        const totalRows=data.filter(line=>/^TOTALS?$/i.test(String(line.text||'').trim())).map(line=>Number(line.y)||0),netYs=[];for(const line of data){if(valueTokensInBand(line,netLeft,netRight).length){const y=Number(line.y)||0;if(!netYs.some(item=>Math.abs(item-y)<=14))netYs.push(y);}}
+        const cellAtRow=(y,bandLeft,bandRight,center)=>{const cells=data.filter(line=>Math.abs((Number(line.y)||0)-y)<=16).flatMap(line=>valueTokensInBand(line,bandLeft,bandRight));if(!cells.length)return null;const ranked=cells.sort((a,b)=>Math.abs(a.x-center)-Math.abs(b.x-center)),nearest=ranked[0],competitor=ranked.find(item=>item.value!==nearest.value);if(competitor&&Math.abs(competitor.x-center)-Math.abs(nearest.x-center)<10)return null;return nearest.value;};
+        const positionedVatAtRow=y=>{
+          const cells=data.filter(line=>Math.abs((Number(line.y)||0)-y)<=16).flatMap(line=>valueTokensInBand(line,vx-62,vx+72));
+          if(!cells.length)return null;
+          const ranked=cells.sort((a,b)=>Math.abs(a.x-vx)-Math.abs(b.x-vx)),nearest=ranked[0],competitor=ranked.find(item=>item.value!==nearest.value);
+          if(competitor&&Math.abs(competitor.x-vx)-Math.abs(nearest.x-vx)<7)return null;
+          return Math.abs(nearest.x-vx)<=62?nearest.value:null;
+        };
+        const printedTotalRows=totalRows.map(y=>({net:cellAtRow(y,netLeft,netRight,netX),vat:cellAtRow(y,left,right,vx),y})).filter(row=>row.net!==null&&row.vat!==null),pairs=[];for(const y of netYs){const net=cellAtRow(y,netLeft,netRight,netX),vat=cellAtRow(y,left,right,vx);if(net!==null&&vat!==null)pairs.push({net,vat,y});}
+        let chosen=[];if(pairs.length){
+          const detailPairs=pairs.filter(pair=>!totalRows.some(y=>Math.abs(y-pair.y)<=16)),detailVat=detailPairs.map(pair=>pair.vat),printedTotal=printedTotalRows.at(-1)?.vat;
+          // Read the VAT cells on the printed rate rows first. The repeated
+          // Totals line can be OCR'd with a one-digit error even when the
+          // original detailed VAT cell is clear. If there are several rate
+          // rows, accept their directly read cells only when their displayed
+          // aggregate agrees with the invoice's printed Totals VAT cell.
+          if(detailVat.length===1)chosen=detailVat;
+          else if(detailVat.length>1&&printedTotal!==undefined&&detailVat.reduce((a,b)=>a+b,0)===printedTotal)chosen=[printedTotal];
+          else if(!detailVat.length&&printedTotal!==undefined)chosen=[printedTotal];
+          else return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};
+        }else if(printedTotalRows.length)chosen=[printedTotalRows[printedTotalRows.length-1].vat];else{
+          const uniquePairs=new Map(pairs.map(pair=>[`${pair.net}:${pair.vat}`,pair]));chosen=[...uniquePairs.values()].map(pair=>pair.vat);
+          // Windows OCR often merges the printed rate and net cells into one
+          // text line but keeps VAT as a separate positioned value. Locate the
+          // VAT cell by its column heading and the row's printed rate instead
+          // of rejecting the row or choosing the duplicated Fuel VAT column.
+          if(!chosen.length&&rowYs.length){const rowValues=rowYs.map(positionedVatAtRow);if(rowValues.length&&rowValues.every(value=>value!==null))chosen=rowValues;}
+        }
+        if(chosen.length)return {vat:sum(chosen),vatMentioned:true,vatUnverified:false,vatRaw:chosen.map(value=>(value/100).toFixed(2)).join(' + ')};
+        if(rowYs.length||totalRows.length||netYs.length)return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};
+      }
+      // BP receipts place Nett, VAT and Incl values on one printed rate table.
+      // If OCR drops the VAT column heading, locate the VAT cell between the printed
+      // Excl and Incl headings and read its value from the Total row.
+      const tableHeaderKey=line=>String(line?.text||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/VA[1I|]$/,'VAT');
+      const rateHeaders=ordered.filter(line=>tableHeaderKey(line)==='VATRATE');
+      for(const rateHeader of rateHeaders){
+        const hy=Number(rateHeader.y)||0,headers=ordered.filter(line=>Math.abs((Number(line.y)||0)-hy)<=12),excl=headers.find(line=>['EX','EXCL','EXVAT'].includes(tableHeaderKey(line))),incl=headers.find(line=>['INC','INCL','INCVAT','LNCVAT'].includes(tableHeaderKey(line)));
+        if(!excl||!incl||(Number(incl.x)||0)<=(Number(excl.x)||0))continue;
+        const ex=Number(excl.x)||0,inc=Number(incl.x)||0,explicitVat=headers.find(line=>tableHeaderKey(line)==='VAT'&&(Number(line.x)||0)>ex&&(Number(line.x)||0)<inc),center=explicitVat?(Number(explicitVat.x)||0):(ex+inc)/2,left=(ex+center)/2,right=(center+inc)/2,totalLabels=ordered.filter(line=>/^\s*TOTALS?\s*$/i.test(String(line.text||''))&&(Number(line.y)||0)>hy&&(Number(line.y)||0)<hy+130).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0));
+        for(const label of totalLabels){const y=Number(label.y)||0,values=[];for(const line of ordered){if(Math.abs((Number(line.y)||0)-y)>16)continue;const value=String(line.text||''),x=Number(line.x)||0,width=Number(line.width)||0;for(const token of receiptMoneyTokens(value)){if(/%/.test(value.slice(Math.max(0,token.index-2),token.index+token.raw.length+2)))continue;const tokenX=x+(width&&value.length?width*(token.index+Math.min(token.raw.length/2,6))/value.length:token.index*6);if(tokenX>=left&&tokenX<right)values.push(Math.round(Math.abs(token.value)*100));}}
+          const unique=[...new Set(values)];if(unique.length===1)return {vat:unique[0]/100,vatMentioned:true,vatUnverified:false,vatRaw:(unique[0]/100).toFixed(2)};
+          if(unique.length>1)return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};
+        }
+      }
+      // Some receipts damage the VAT amount heading but retain the Nett column
+      // and the printed VAT value directly beneath it.
+      const damagedVatHeaders=vatLines.filter(line=>!isRegistration(line)&&isVatWord(line.text)&&!/^\s*V(?:A|4)(?:T|I)\s*[:.]?\s*$/i.test(String(line.text||''))&&!/\b(?:NO\.?|NUMBER|TYPE|RATE|ANALYSIS|SUMMARY)\b/i.test(String(line.text||''))&&ordered.some(other=>other!==line&&/^\s*NETT?\s*$/i.test(String(other.text||''))&&Math.abs((Number(other.y)||0)-(Number(line.y)||0))<=12&&(Number(other.x)||0)<(Number(line.x)||0)));
+      for(const header of damagedVatHeaders){const x=Number(header.x)||0,y=Number(header.y)||0,values=ordered.filter(line=>{const lx=Number(line.x)||0,ly=Number(line.y)||0;return ly>y&&ly<=y+65&&lx>=x-18&&lx<=x+205;}).flatMap(line=>cents(line.text)),unique=[...new Set(values)];if(unique.length===1)return {vat:unique[0]/100,vatMentioned:true,vatUnverified:false,vatRaw:(unique[0]/100).toFixed(2)};if(unique.length>1)return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};}
+      return null;
+    };
+    // Tax tables label the VAT column as TAX rather than VAT (for example
+    // Faizan-e-Madina). Anchor the value to same-row RATE, NET and TAX headers.
+    for(const taxHeader of ordered.filter(line=>/^\s*TAX\s*$/i.test(String(line.text||'')))){
+      const hy=Number(taxHeader.y)||0,headers=ordered.filter(line=>Math.abs((Number(line.y)||0)-hy)<=12),netHeader=headers.find(line=>/^\s*NETT?\s*$/i.test(String(line.text||''))),rateHeader=headers.find(line=>/^\s*RATE\s*$/i.test(String(line.text||'')));
+      if(!netHeader||!rateHeader)continue;
+      const tx=Number(taxHeader.x)||0,nx=Number(netHeader.x)||0,lo=Math.min(nx,tx),hi=Math.max(nx,tx),values=[];
+      for(const line of ordered){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<=hy+8||y>hy+100||x<lo+(hi-lo)*0.52||x>tx+(tx-nx)*0.5)continue;if(!ordered.some(other=>Math.abs((Number(other.y)||0)-y)<=12&&/\b(?:VAT|\d{1,2}[.,]\d{1,2}\s*%)\b/i.test(String(other.text||''))))continue;for(const value of cents(line.text))values.push(value);}
+      const unique=[...new Set(values)];if(unique.length===1)return {vat:unique[0]/100,vatMentioned:true,vatUnverified:false,vatRaw:(unique[0]/100).toFixed(2)};if(unique.length>1)return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};
+    }
+    // Some UK till receipts print a distinct `Tax GBP n.nn` transaction row.
+    // Read that printed figure directly rather than deriving VAT from total.
+    for(const taxLine of ordered.filter(line=>/\bTAX\s+GBP\b/i.test(String(line.text||'')))){const values=cents(String(taxLine.text||'').replace(/^.*?\bTAX\s+GBP\b/i,''));if(values.length===1)return {vat:values[0]/100,vatMentioned:true,vatUnverified:false,vatRaw:(values[0]/100).toFixed(2)};}
+    // Poundland prints VAT paid below its total. The amount is positioned on
+    // the VAT-inclusive row; a leading currency/digit can be damaged, so only
+    // recover the visible penny amount within that labelled row.
+    for(const label of ordered.filter(line=>/\bVAT\b/i.test(String(line.text||''))&&/(?:INCLUSIVE.*VAT|VAT.*INCLUSIVE|PAID)/i.test(String(line.text||'')))){const x=Number(label.x)||0,y=Number(label.y)||0,paid=ordered.filter(line=>/\bPAID\b/i.test(String(line.text||''))&&Math.abs((Number(line.y)||0)-y)<=60).sort((a,b)=>Math.abs((Number(a.y)||0)-y)-Math.abs((Number(b.y)||0)-y))[0],targetY=Number(paid?.y)||y,values=[];for(const line of ordered){const lx=Number(line.x)||0,ly=Number(line.y)||0;if(ly<targetY-12||ly>targetY+12||lx<=x)continue;for(const value of summaryCellCents(line.text))values.push(value);}const unique=[...new Set(values)];if(unique.length===1)return {vat:unique[0]/100,vatMentioned:true,vatUnverified:false,vatRaw:(unique[0]/100).toFixed(2)};if(unique.length>1)return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};}
+    const structuredVat=structuredVatTables();if(structuredVat)return structuredVat;
+    const summaryVatHeaders=ordered.filter(line=>['VAT','V4T','VAI'].includes(compact(line.text))&&ordered.some(other=>{const y=Number(other.y)||0,x=Number(other.x)||0;return compact(other.text)==='TOTAL'&&y>0&&Math.abs(y-(Number(line.y)||0))<=10&&x>(Number(line.x)||0);}));
+    for(const vatHeader of summaryVatHeaders){const headerY=Number(vatHeader.y)||0,vatX=Number(vatHeader.x)||0,totalHeader=ordered.find(line=>compact(line.text)==='TOTAL'&&Math.abs((Number(line.y)||0)-headerY)<=10&&(Number(line.x)||0)>vatX),caption=ordered.some(line=>{const y=Number(line.y)||0,key=compact(line.text);return y<headerY&&headerY-y<=150&&key.includes('SUMMARY')&&(key.includes('VAT')||key.includes('VAI')||key.includes('RECE'));});if(!totalHeader||!caption)continue;const right=(vatX+(Number(totalHeader.x)||vatX+130))/2,rows=new Map();for(const line of ordered){const x=Number(line.x)||0,y=Number(line.y)||0;if(y<=headerY||y>headerY+52||x<vatX-45||x>=right)continue;const values=summaryCellCents(line.text);if(values.length){const key=Math.round(y/10);if(!rows.has(key))rows.set(key,[]);rows.get(key).push(...values);}}const rowValues=[...rows.values()];if(rowValues.length&&rowValues.every(values=>values.length===1)){const values=rowValues.map(items=>items[0]);return {vat:sum(values),vatMentioned:true,vatUnverified:false,vatRaw:values.map(value=>(value/100).toFixed(2)).join(' + ')};}}
+    if(summary){
+      const summaryIndex=ordered.indexOf(summary),summaryWindow=ordered.slice(summaryIndex+1,summaryIndex+30),rateHeader=summaryWindow.find(line=>/^\s*Rate\s*$/i.test(String(line.text||''))),netHeader=summaryWindow.find(line=>/^\s*Nett?\s*$/i.test(String(line.text||''))),vatHeaders=summaryWindow.filter(line=>/^\s*VAT\s*\.?\s*$/i.test(String(line.text||''))).sort((a,b)=>(Number(a.x)||0)-(Number(b.x)||0)),fallbackVatHeaders=vatHeaders.filter(line=>(Number(line.y)||0)>summaryY&&(Number(line.y)||0)<=summaryY+70);
+      const firstVat=rateHeader&&netHeader?vatHeaders.find(header=>Number(header.x)>Number(netHeader.x)):fallbackVatHeaders[0];
+      if(rateHeader&&netHeader&&firstVat){
+        const x=Number(firstVat.x)||0,nx=Number(netHeader.x)||0,previousBound=(nx+x)/2,nextHeader=summaryWindow.filter(line=>Number(line.x)>x&&(/^\s*Fuel\s*$/i.test(String(line.text||''))||/^\s*VAT\s*\.?\s*$/i.test(String(line.text||'')))).sort((a,b)=>(Number(a.x)||0)-(Number(b.x)||0))[0],nextX=nextHeader?Number(nextHeader.x):x+(x-nx),rightBound=(x+nextX)/2,rateRows=summaryWindow.filter(line=>/^\s*\d{1,2}[.,]\d{1,2}\s*%\s*$/i.test(String(line.text||''))),rowValues=[];
+        for(const rate of rateRows){const y=Number(rate.y)||0,candidates=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=20&&(Number(line.x)||0)>=previousBound&&(Number(line.x)||0)<rightBound&&!/%/.test(String(line.text||''))).flatMap(line=>cents(line.text));if(candidates.length===1)rowValues.push(candidates[0]);else if(candidates.length>1)return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};}
+        if(rowValues.length)return {vat:sum(rowValues),vatMentioned:true,vatUnverified:false,vatRaw:rowValues.map(value=>(value/100).toFixed(2)).join(' + ')};
+      }
+      if(firstVat){
+        const vatX=Number(firstVat.x)||0,headerY=Number(firstVat.y)||summaryY,totalHeader=summaryWindow.filter(line=>Number(line.x)>vatX&&/^\s*TOTAL\s*$/i.test(String(line.text||''))).sort((a,b)=>Math.abs((Number(a.y)||0)-headerY)-Math.abs((Number(b.y)||0)-headerY))[0],right=totalHeader?(vatX+Number(totalHeader.x))/2:vatX+65,under=ordered.filter(line=>{const x=Number(line.x)||0,y=Number(line.y)||0;return y>headerY&&y<=headerY+48&&x>=vatX-48&&x<right;}).flatMap(line=>summaryCellCents(line.text));
+        if(under.length===1)return {vat:under[0]/100,vatMentioned:true,vatUnverified:false,vatRaw:(under[0]/100).toFixed(2)};
+        if(under.length>1)return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};
+      }
+    }
+    const explicitLabels=vatLines.filter(vatAmountLabel),labels=explicitLabels.length?explicitLabels:vatLines.filter(line=>/^\s*V(?:A|4)(?:T|I)\s*[:.]?\s*$/i.test(String(line.text||''))),candidates=[];
+    for(const label of labels){const raw=String(label.text||''),match=raw.match(/\bV(?:A|4)(?:T|I)\s*(?:AMOUNT|VALUE|ALNOUNT|AM0UNT)?\s*[:#-]?\s*(.*)$/i),inline=match?.[1]||'',x=Number(label.x)||0,y=Number(label.y)||0;for(const value of cents(inline))candidates.push({value,score:explicitLabels.length?0:100});for(const line of ordered){const lx=Number(line.x)||0,ly=Number(line.y)||0;if(ly<y-5||ly>y+48||lx<x-30||lx>x+280||/%/.test(String(line.text||''))||isRegistration(line))continue;for(const value of cents(line.text))candidates.push({value,score:(explicitLabels.length?0:100)+Math.abs(ly-y)+Math.max(0,x-lx)*0.04});}}
+    if(!candidates.length)return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};
+    candidates.sort((a,b)=>a.score-b.score);const best=candidates[0],near=candidates.filter(item=>item.score<=best.score+8),values=[...new Set(near.map(item=>item.value))];if(values.length===1)return {vat:values[0]/100,vatMentioned:true,vatUnverified:false,vatRaw:(values[0]/100).toFixed(2)};return {vat:'',vatMentioned:true,vatUnverified:true,vatRaw:''};
+  }
   function receiptFuelDescription(value){
     const letters=String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/UN[I1]/g,'UNL');if(letters.includes('PETROLEUM'))return false;
     for(const target of ['UNLEADED','DIESEL','PETROL']){const allowance=target.length>=8?2:1;for(let length=Math.max(5,target.length-allowance);length<=target.length+allowance;length++)for(let start=0;start+length<=letters.length;start++)if(receiptLevenshtein(letters.slice(start,start+length),target)<=allowance)return true;}
@@ -1865,7 +2028,8 @@
   }
   function isReceiptBackPage(pageLines){
     const text=(Array.isArray(pageLines)?pageLines:[]).map(line=>String(line.text||'')).join(' ').replace(/\s+/g,' ').trim();
-    return /should you change your mind about your purchase|please return the product with your proof of purchase|thank you for using pay at pump/i.test(text)&&!/\b(?:UNLEADED|DIESEL|LITRE|LITER|VAT\s+RECEIPT\s+SUMMARY|MASTERCARD|SALE|CARD\s+PAYMENT)\b/i.test(text);
+    const transactionEvidence=/\b(?:UNLEADED|DIESEL|LITRE|LITER|VAT\s+RECEIPT\s+SUMMARY|MASTERCARD|SALE|CARD\s+PAYMENT|PUMP\s*#?\s*\d+)\b/i.test(text),backOrMarketing=/should you change your mind about your purchase|please return the product with your proof of purchase|thank you for using pay at pump|ASDA\.COM\/MOBILE|SIM\s+PLANS|complete a short survey|download our app|terms and conditions apply/i.test(text);
+    return backOrMarketing&&!transactionEvidence;
   }
   function mfgMoneyTokens(value){
     const tokens=receiptMoneyTokens(value);if(tokens.length)return tokens;
@@ -1917,13 +2081,43 @@
     const counts=receiptAmountCounts(lines,Math.min(...labels.map(line=>Number(line.y)||0)),maximum);candidates.sort((a,b)=>a.score-b.score);const best=candidates[0],sameBand=candidates.filter(item=>item.score<=best.score+20),distinct=[...new Set(sameBand.map(item=>Math.round(item.value*100)))];if(distinct.length===1)return best.value;
     const frequent=[...counts].filter(([,count])=>count>=2).sort((a,b)=>b[1]-a[1]);return frequent.length?frequent[0][0]/100:best.value;
   }
+  function receiptSinglePaidTotal(lines,maximum){
+    const ordered=[...(Array.isArray(lines)?lines:[])],paid=ordered.filter(line=>/\bPAID\s+BY\b/i.test(String(line.text||''))),noChange=ordered.some(line=>/\bNO\s+CHANGE\b/i.test(String(line.text||''))),hasChange=ordered.some(line=>/\bCHANGE\s*:?/i.test(String(line.text||''))&&!/\bNO\s+CHANGE\b/i.test(String(line.text||''))&&receiptMoneyTokens(line.text).some(token=>Math.abs(token.value)>=0.01));
+    // A single printed tender with an explicit NO CHANGE is a second printed
+    // copy of the receipt amount. Do not use it for split tenders, or when
+    // change is given (cash tender can exceed the purchase total).
+    if(paid.length!==1||!noChange||hasChange||ordered.some(line=>/\b(?:BALANCE|AMOUNT)\s+DUE\b/i.test(String(line.text||''))))return '';
+    const anchor=paid[0],x=Number(anchor.x)||0,y=Number(anchor.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=18&&(Number(line.x)||0)>=x+100).flatMap(line=>receiptAnchoredMoneyTokens(line.text).map(token=>Math.round(Math.abs(token.value)*100))).filter(value=>value>=200&&value<=maximum*100),paidValues=[...new Set(values)];
+    if(paidValues.length>1)return '';
+    const amountLabels=ordered.filter(line=>/^\s*AMOUNT\s*:?\s*$/i.test(String(line.text||''))),amountValues=[];
+    for(const label of amountLabels){const lx=Number(label.x)||0,ly=Number(label.y)||0;for(const line of ordered){if(Math.abs((Number(line.y)||0)-ly)>20||(Number(line.x)||0)<lx+90)continue;for(const token of receiptAnchoredMoneyTokens(line.text)){const value=Math.round(Math.abs(token.value)*100);if(value>=200&&value<=maximum*100)amountValues.push(value);}}}
+    const uniqueAmount=[...new Set(amountValues)];if(uniqueAmount.length>1)return '';
+    if(paidValues.length===1&&uniqueAmount.length===1&&paidValues[0]!==uniqueAmount[0])return '';
+    const confirmed=uniqueAmount.length===1?uniqueAmount[0]:paidValues.length===1?paidValues[0]:null;
+    if(confirmed!==null)return confirmed/100;
+    const totalLabels=ordered.filter(line=>receiptTotalLabel(line.text));if(totalLabels.length!==1)return '';
+    const totalY=Number(totalLabels[0].y)||0,volumeRows=ordered.filter(line=>/\d[\dOoIl]{0,3}[.,]?\d{0,2}\s*[LlI1]\b/i.test(String(line.text||''))&&/(?:@|[.,]\s*\d{3}\s*\/\s*[LlI1])/i.test(String(line.text||'')));
+    if(volumeRows.length!==1)return '';
+    const fuelY=Number(volumeRows[0].y)||0;if(receiptOtherPurchases(ordered,fuelY,totalY,maximum).length)return '';
+    const printedFuel=receiptFuelAmount(ordered,maximum),cents=printedFuel===''?null:Math.round(Number(printedFuel)*100);
+    return Number.isInteger(cents)&&cents>=200&&cents<=maximum*100?cents/100:'';
+  }
   function receiptFuelAmount(lines,maximum){
+    const volumeRows=lines.filter(line=>/\d[\dOoIl]{0,3}[.,]?\d{0,2}\s*[LlI1]\b/i.test(String(line.text||''))&&/(?:@|[.,]\s*\d{3}\s*\/\s*[LlI1])/i.test(String(line.text||'')));
+    if(volumeRows.length){
+      const candidates=[];for(const anchor of volumeRows){const x=Number(anchor.x)||0,y=Number(anchor.y)||0,width=Number(anchor.width)||0,anchorText=String(anchor.text||''),slash=anchorText.search(/\/\s*[LlI1]/),afterRate=slash>=0?slash+2:0;
+        for(const line of lines){const lx=Number(line.x)||0,ly=Number(line.y)||0;if(Math.abs(ly-y)>14)continue;const raw=String(line.text||'').trim(),correctedFuelAmount=/^N\s*O\s*[.,]\s*\d{2}$/i.test(raw)?raw.replace(/^N\s*O/i,'40'):raw;
+          for(const token of receiptAnchoredMoneyTokens(correctedFuelAmount)){const tokenX=lx+(Number(line.width)&&raw.length?Number(line.width)*(token.index+Math.min(token.raw.length/2,6))/raw.length:token.index*6);if(line===anchor&&token.index<afterRate)continue;if(line!==anchor&&tokenX<x+Math.max(100,width*0.75))continue;const amount=Math.abs(token.value);if(amount>=2&&amount<=maximum)candidates.push(Math.round(amount*100));}
+        }
+      }
+      const unique=[...new Set(candidates)];return unique.length===1?unique[0]/100:'';
+    }
     const anchors=lines.filter(line=>receiptFuelDescription(line.text)).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0));if(!anchors.length)return '';
     const candidates=[];for(const anchor of anchors){const x=Number(anchor.x)||0,y=Number(anchor.y)||0;for(const line of lines){const lx=Number(line.x)||0,ly=Number(line.y)||0,dy=Math.abs(ly-y);if(dy>55||lx<x+170)continue;for(const token of receiptMoneyTokens(line.text)){const value=Math.abs(token.value);if(value<2||value>maximum)continue;candidates.push({value,score:dy+Math.max(0,x+300-lx)*0.03});}}}
     if(!candidates.length)return '';candidates.sort((a,b)=>a.score-b.score);const best=candidates[0],sameBand=candidates.filter(item=>item.score<=best.score+8),distinct=[...new Set(sameBand.map(item=>Math.round(item.value*100)))];return distinct.length===1?best.value:'';
   }
   function receiptOtherPurchases(lines,fuelY,totalY,maximum){
-    const knownFuelY=Number(fuelY)||0,knownTotalY=Number(totalY)||0,start=Math.max(180,knownFuelY-120),end=knownTotalY>start?knownTotalY+18:knownFuelY+360,ignored=/\b(?:TOTAL|TOTALS|MASTERCARD|VISA|CARD|SALE|PAYMENT|PAID|PUMP|UNLEADED|DIESEL|PETROL|FUEL|LITRE|LITER|VAT|NET|RATE|RECEIPT|CHANGE|AUTH|MERCHANT|TERMINAL|TRANSACTION|AMOUNT|AID|PAN|SEQUENCE|POINTS?|CLUBCARD|QUALIFYING|EXPIR|DATE|TIME|CUSTOMER|THANK|PLEASE|COPY|NO\s+CHANGE|CASH|CREDIT|DEBIT|PENALTY|DISCOUNT|SAVING|LOYALTY|PROMOTION|ARTICLE|QTY|QUANTITY|PRICE|GBP|APPROVED|NO\s+TAXI\s+DRIVER)\b/i,items=[],faintTotalLabels=lines.filter(line=>receiptFaintTotalLabel(line,knownFuelY));
+    const knownFuelY=Number(fuelY)||0,knownTotalY=Number(totalY)||0,start=Math.max(180,knownFuelY-120),end=knownTotalY>start?knownTotalY+18:knownFuelY+360,ignored=/\b(?:TOTAL|TOTALS|MASTERCARD|VISA|CARD|SALE|PAYMENT|PAID|PUMP|UNLEADED|DIESEL|PETROL|FUEL|LITRE|LITER|VAT|NET|RATE|RECEIPT|CHANGE|AUTH|MERCHANT|TERMINAL|TRANSACTION|AMOUNT|AID|PAN|SEQUENCE|POINTS?|CLUBCARD|QUALIFYING|EXPIR|DATE|TIME|CUSTOMER|THANK|PLEASE|COPY|NO\s+CHANGE|CASH|ASH|CREDIT|DEBIT|PENALTY|DISCOUNT|SAVING|LOYALTY|PROMOTION|ARTICLE|QTY|QUANTITY|PRICE|GBP|APPROVED|DUE|BALANCE|NO\s+TAXI\s+DRIVER)\b/i,items=[],faintTotalLabels=lines.filter(line=>receiptFaintTotalLabel(line,knownFuelY));
     for(const line of lines){const x=Number(line.x)||0,y=Number(line.y)||0,text=String(line.text||'').trim(),compact=text.toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/UN[I1]/g,'UNLEADED'),letters=text.toUpperCase().replace(/[^A-Z]/g,'');const totalLabelContinuation=faintTotalLabels.some(label=>{const labelText=String(label.text||'').toUpperCase().replace(/[^A-Z]/g,'');return Math.abs(y-(Number(label.y)||0))<=42&&x>(Number(label.x)||0)&&x<(Number(label.x)||0)+220&&labelText.length>=2&&letters.length>=labelText.length&&letters.startsWith(labelText);});if(x>500||y<start||y>end||Math.abs(y-knownFuelY)<=22||totalLabelContinuation||!/\p{L}{3}/u.test(text)||ignored.test(text)||receiptTotalLabel(text)||receiptFaintTotalLabel(line,knownFuelY)||receiptFuelDescription(text)||/^(?:PUMP\d*|TOTALS?|MASTERCARD|VISA|CARD|SALE|PAYMENT|UNLEADED|DIESEL|PETROL|FUEL|PFS|POS\d*)/.test(compact))continue;
       const amounts=[];for(const candidate of lines){const lx=Number(candidate.x)||0,ly=Number(candidate.y)||0,dy=Math.abs(ly-y);if(dy>42||lx<x+150)continue;for(const token of receiptMoneyTokens(candidate.text)){const value=Number(token.value);if(Number.isFinite(value)&&Math.abs(value)>=0.01&&Math.abs(value)<=maximum)amounts.push(value);}}
       if(amounts.length)items.push({line,text,amounts:[...new Set(amounts.map(value=>Math.round(value*100)))].map(value=>value/100)});
@@ -1933,31 +2127,48 @@
   function receiptHasOtherPurchase(lines,fuelY,totalY,maximum){return receiptOtherPurchases(lines,fuelY,totalY,maximum).length>0;}
   const maximumReceiptAmount=10000;
   function inferredReceiptSupplier(flat){
-    const text=String(flat||'');if(/\b(?:TESCO|ESSO)\b|239\s*088\s*635|218\s*001\s*105/i.test(text))return {supplier:'Tesco',profileId:'tesco',category:'Fuel receipts'};
-    if(/\b(?:MFG|MOTOR\s+FUEL|MOTORFUELGROUP)\b/i.test(text))return {supplier:'MFG',profileId:'mfg',category:'Fuel receipts'};
-    if(/\b(?:SHELL|SHELL\s+UK)\b/i.test(text))return {supplier:'Shell',profileId:'shell',category:'Fuel receipts'};
-    if(/\b(?:BP|LITTLE\s+HAMPTON)\b|663\s*139\s*630/i.test(text))return {supplier:'BP',profileId:'bp',category:'Fuel receipts'};
-    return {supplier:'Unidentified forecourt',profileId:'unidentified-forecourt',category:'Fuel receipts'};
+    const text=String(flat||''),profile=receiptProfiles.find(item=>item.detect(text));
+    if(profile)return {supplier:profile.name,profileId:profile.id,category:profile.category};
+    return {supplier:'Unidentified forecourt',profileId:'unidentified-forecourt',category:'Receipts'};
   }
-  function parseReceiptPage(pageLines,source='',profileHint=''){
+  function parseReceiptPage(pageLines,source='',profileHint='',options={}){
     const ordered=[...pageLines].sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)),text=ordered.map(line=>String(line.text||'')).join(' '),flat=text.replace(/\s+/g,' ').trim();let profile=receiptProfiles.find(item=>item.detect(flat))||receiptProfiles.find(item=>item.id===profileHint);if(!profile&&looksLikeUnidentifiedReceipt(ordered))profile=receiptProfiles.find(item=>item.id==='unidentified-forecourt');
     if(!profile)return null;
     // Receipt backs and marketing pages can repeat the retailer name. Only
     // treat a page as a receipt when its transaction area has money and date
     // evidence as well as a fuel/POS marker.
-    const hasReceiptMarker=['eg-on-the-move','unidentified-forecourt'].includes(profile.id)||/\b(?:PUMP|UNLEADED|PETROL|FUEL|SALE|CASHSLIP|ARTICLE|AMOUNT|MASTERCARD|LITRE|LITER|P\/L|CARD\s+PAYMENT|TRANSACTION|RECEIPT\s+SUMMARY)\b/i.test(flat),hasMoney=ordered.some(line=>receiptMoneyTokens(line.text).length),dateValues=receiptDateValuesFromLines(ordered),hasTenderAmount=receiptTenderTotal(ordered,profile.category==='Vehicle expense receipts'?10000:200)!=='';
+    const hasReceiptMarker=['eg-on-the-move','unidentified-forecourt','rockafellas','poundland','bm-retail'].includes(profile.id)||profile.id==='faizan-e-madina'&&/\b(?:SALES\s+RECEIPT|SHOP\s+SALES|GROCERIES)\b/i.test(flat)||/\b(?:PUMP|UNLEADED|PETROL|FUEL|SALE|CASHSLIP|ARTICLE|AMOUNT|MASTERCARD|LITRE|LITER|P\/L|CARD\s+PAYMENT|TRANSACTION|RECEIPT\s+SUMMARY|CUSTOMER\s+RECEIPT|COPY\s+RECEIPT|TOTAL)\b/i.test(flat)||(profile.id==='mfg'&&/\b(?:STORE\s+\d+|TRANS\s+\d+|POS\s*\d*)\b/i.test(flat)),hasMoney=ordered.some(line=>receiptMoneyTokens(line.text).length),dateValues=receiptDateValuesFromLines(ordered),hasTenderAmount=receiptTenderTotal(ordered,profile.category==='Vehicle expense receipts'?10000:200)!=='';
     const termsBack=['tesco','esso'].includes(profile.id)&&/thank you for using pay at pump/i.test(flat)&&!/\b(?:UNLEADED|LITRE|LITER|VAT\s+RECEIPT\s+SUMMARY|MASTERCARD|SALE)\b/i.test(flat);
     if(termsBack||!hasReceiptMarker||(!hasMoney&&!dateValues.length&&!hasTenderAmount&&!['eg-on-the-move','unidentified-forecourt'].includes(profile.id)&&!/\b(?:RECEIPT\s+SUMMARY|CUSTOMER\s+RECEIPT|CASHSLIP)\b/i.test(flat)))return null;
-    const maximum=profile.category==='Vehicle expense receipts'?10000:200,anchorLines=ordered.filter(line=>profile.id==='mfg'?receiptMfgTotalLabel(line):receiptTotalLabel(line.text));
+    const maximum=profile.category==='Vehicle expense receipts'?10000:200,totalColumnHeader=line=>{const y=Number(line.y)||0,labels=ordered.filter(other=>other!==line&&Math.abs((Number(other.y)||0)-y)<=10&&/^(?:VAT|VAI|V4T|NET|NETT|RATE|AMOUNT)$/i.test(String(other.text||'').trim()));return labels.length>=2;},anchorLines=ordered.filter(line=>(profile.id==='mfg'?receiptMfgTotalLabel(line):receiptTotalLabel(line.text))&&!totalColumnHeader(line));
     const candidates=[];
     for(const anchor of anchorLines){
       const ax=Number(anchor.x)||0,ay=Number(anchor.y)||0;
       // Totals are printed beside their label on these receipts. A wide search
       // window can pick up pump volume/price rows or VAT tables instead.
-      for(const line of ordered){const x=Number(line.x)||0,y=Number(line.y)||0,dy=Math.abs(y-ay);if(dy>50)continue;for(const token of receiptMoneyTokens(line.text)){const value=Math.abs(token.value);if(value<2||value>maximum)continue;if(line===anchor&&token.index<Math.max(0,String(anchor.text||'').search(/[\d\u00A3\u20AC$]/)))continue;if(x<ax-10&&dy<30)continue;candidates.push({value,score:dy+Math.max(0,ax-x)*0.02+(x<ax?35:0),anchorY:ay,anchorX:ax});}}
+      for(const line of ordered){const x=Number(line.x)||0,y=Number(line.y)||0,dy=Math.abs(y-ay);if(dy>50)continue;for(const token of receiptAnchoredMoneyTokens(line.text)){const value=Math.abs(token.value);if(value<2||value>maximum)continue;if(line===anchor&&token.index<Math.max(0,String(anchor.text||'').search(/[\d\u00A3\u20AC$]/)))continue;if(x<ax-10&&dy<30)continue;candidates.push({value,score:dy+Math.max(0,ax-x)*0.02+(x<ax?35:0),anchorY:ay,anchorX:ax});}}
     }
     let total='';
     if(candidates.length){candidates.sort((a,b)=>a.score-b.score);const best=candidates[0],sameBand=candidates.filter(item=>Math.abs(item.anchorY-best.anchorY)<1&&item.score<=best.score+8);const distinct=[...new Set(sameBand.map(item=>Math.round(item.value*100)))];if(distinct.length===1)total=best.value;}
+    const vatSummaryAnchor=ordered.filter(line=>/\b(?:VAT\s+ANALYSIS|VAT\s+RECEIPT\s+SUMMARY|TAX\s+SUMMARY|VAT\s+RATE)\b/i.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0))[0],vatSummaryY=vatSummaryAnchor?Number(vatSummaryAnchor.y)||0:Infinity;
+    const printedReceiptTotals=anchorLines.filter(line=>(Number(line.y)||0)<vatSummaryY),hasPrintedTotalLabel=printedReceiptTotals.length>0;
+    if(total===''&&hasPrintedTotalLabel){
+      const positioned=[];
+      for(const anchor of printedReceiptTotals){const ax=Number(anchor.x)||0,ay=Number(anchor.y)||0,aw=Number(anchor.width)||0;
+        for(const line of ordered){const x=Number(line.x)||0,y=Number(line.y)||0,dy=Math.abs(y-ay);if(dy>20||/\b\d[\dOoIl]{0,3}[.,]?\d{0,2}\s*[Ll]\b|@\s*[£$]?\s*\d[.,]\d{3}\s*\/\s*[Ll]\b/i.test(String(line.text||'')))continue;
+          if(line!==anchor&&x<ax+Math.max(45,Math.min(aw,100)))continue;
+          for(const token of receiptMoneyTokens(line.text)){const value=Math.abs(token.value);if(value<2||value>maximum)continue;positioned.push({value,dy,dx:line===anchor?0:Math.max(0,x-(ax+aw)),anchorY:ay});}
+        }
+      }
+      if(positioned.length){positioned.sort((a,b)=>a.dy-b.dy||a.dx-b.dx);const best=positioned[0],nearest=positioned.filter(item=>item.anchorY===best.anchorY&&item.dy<=best.dy+4&&item.dx<=best.dx+35),values=[...new Set(nearest.map(item=>Math.round(item.value*100)))];if(values.length===1)total=values[0]/100;}
+    }
+    // Shell receipts can place the value on the line below their TOTAL label.
+    // Read the unique amount aligned to that label; item prices above the row
+    // and the later card/cash tender remain outside this narrow total row.
+    if(total===''&&profile.id==='shell'){
+      const positioned=[];for(const anchor of anchorLines){const ax=Number(anchor.x)||0,ay=Number(anchor.y)||0;for(const line of ordered){const x=Number(line.x)||0,y=Number(line.y)||0,dy=Math.abs(y-ay);if(dy>100||x<ax+45)continue;for(const token of receiptMoneyTokens(line.text)){const value=Math.abs(token.value);if(value>=2&&value<=maximum)positioned.push({value,dy,anchorY:ay});}}}
+      if(positioned.length){positioned.sort((a,b)=>a.dy-b.dy);const best=positioned[0],values=[...new Set(positioned.filter(item=>item.anchorY===best.anchorY&&item.dy<=best.dy+8).map(item=>Math.round(item.value*100)))];if(values.length===1)total=values[0]/100;}
+    }
     // Some Shell slips have a broken/missing TOTAL label in OCR. Use only the
     // printed amount column beneath its AMOUNT heading, never a VAT amount or
     // a reconstructed sum.
@@ -1965,7 +2176,7 @@
       const headers=ordered.filter(line=>receiptLevenshtein(String(line.text||'').toUpperCase().replace(/[^A-Z]/g,''),'AMOUNT')<=1&&Number(line.x)>350),header=headers[0];
       if(header){const x=Number(header.x)||0,y=Number(header.y)||0,values=ordered.filter(line=>(Number(line.x)||0)>=x-20&&(Number(line.y)||0)>y+80&&(Number(line.y)||0)<y+500).flatMap(line=>receiptMoneyTokens(line.text).map(token=>({value:Math.abs(token.value),distance:(Number(line.y)||0)-y}))).filter(item=>item.value<=10000).sort((a,b)=>a.distance-b.distance);if(values.length)total=values[0].value;}
     }
-    if(profile.id==='bp'){
+    if(profile.id==='bp'&&total===''){
       const labels=ordered.filter(line=>/^\s*AMOUNT\s*:?\s*$/i.test(String(line.text||'')));
       for(const label of labels){const x=Number(label.x)||0,y=Number(label.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=45&&(Number(line.x)||0)>=x+80).flatMap(line=>receiptMoneyTokens(line.text).map(token=>({value:Math.abs(token.value),score:Math.abs((Number(line.y)||0)-y)}))).filter(item=>item.value<=10000).sort((a,b)=>a.score-b.score);if(values.length){total=values[0].value;break;}}
     }
@@ -1976,14 +2187,39 @@
       const labels=ordered.filter(line=>{const value=String(line.text||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/0/g,'O').replace(/1/g,'I');return value.length>=4&&value.length<=7&&receiptLevenshtein(value,'TOTALS')<=2;});
       for(const label of labels){const y=Number(label.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=12&&(Number(line.x)||0)>=500).flatMap(line=>{const tokens=receiptMoneyTokens(line.text);if(tokens.length)return tokens.map(token=>Math.abs(token.value));const integer=String(line.text||'').match(/^\s*[£€]?\s*([\dOoIl]{1,4})\s*$/);if(!integer)return [];const value=invoiceAmount(integer[1].replace(/[Oo]/g,'0').replace(/[Il]/g,'1'));return value===null?[]:[Math.abs(value)];}).filter(value=>value>=2&&value<=200);if(values.length===1){total=values[0];break;}}
     }
+    if(total===''&&profile.id==='faizan-e-madina'){
+      const labels=ordered.filter(line=>/\bSHOP\s+SALES\b/i.test(String(line.text||''))||/^\s*(?:TOR[NM]|TOTAL)\.?\s*$/i.test(String(line.text||''))||receiptTotalLabel(line.text));
+      for(const label of labels){const x=Number(label.x)||0,y=Number(label.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=24&&(Number(line.x)||0)>x+120).flatMap(line=>receiptAnchoredMoneyTokens(line.text).map(token=>Math.abs(token.value))).filter(value=>value>=2&&value<=maximum),unique=[...new Set(values.map(value=>Math.round(value*100)))];if(unique.length===1){total=unique[0]/100;break;}}
+    }
+    if(total===''&&profile.id==='poundland'){
+      const labels=ordered.filter(line=>/INCLUSIVE.*VAT|VAT.*INCLUSIVE/i.test(String(line.text||'')));
+      for(const label of labels){const x=Number(label.x)||0,y=Number(label.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=20&&(Number(line.x)||0)>x+100).flatMap(line=>receiptAnchoredMoneyTokens(line.text).map(token=>Math.abs(token.value))).filter(value=>value>=2&&value<=maximum),unique=[...new Set(values.map(value=>Math.round(value*100)))];if(unique.length===1){total=unique[0]/100;break;}}
+    }
+    if(total===''&&profile.id==='bm-retail'){
+      const labels=ordered.filter(line=>/\bTOTAL\s+AMOUNT\s+GBP\b/i.test(String(line.text||'')));
+      for(const label of labels){const values=receiptAnchoredMoneyTokens(label.text).map(token=>Math.abs(token.value)).filter(value=>value>=2&&value<=maximum);if(values.length===1){total=values[0];break;}}
+    }
+    if(total===''&&profile.id==='sainsburys'&&/V(?:AT|AI|4T)\s+RECEIPT\s+SUMMARY\s*[-:]?\s*FUEL\s+ONLY/i.test(flat)){
+      // This Sainsbury's layout prints the directly charged fuel total beside
+      // the pump marker. The VAT summary's TOTAL is a column heading, not the
+      // receipt amount, so use only the amount on the pump's own row.
+      const pump=ordered.find(line=>/\bPUMP\s*#?\s*\d+\b/i.test(String(line.text||'')));
+      if(pump){const x=Number(pump.x)||0,y=Number(pump.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=48&&(Number(line.x)||0)>x+25).flatMap(line=>receiptAnchoredMoneyTokens(line.text).map(token=>Math.abs(token.value))).filter(value=>value>=2&&value<=maximum),unique=[...new Set(values.map(value=>Math.round(value*100)))];if(unique.length===1)total=unique[0]/100;}
+    }
     // MFG receipts repeat a fuel-only VAT table beneath the receipt total. Use
     // that printed gross only when there is exactly one VAT-summary footer and
     // no additional purchased item between the fuel row and the total. When a
     // shop item is present, its footer has separate totals and we leave the
     // receipt rejected if the actual receipt total is unreadable.
     if(total===''&&profile.id==='mfg'){
+      // MFG prints a second, labelled VAT summary below the receipt. If its
+      // main Total cell is damaged, use the directly printed gross value in
+      // the Inc. VAT column only when there is one unambiguous Totals row.
+      const grossHeaders=ordered.filter(line=>{const key=String(line.text||'').toUpperCase().replace(/[^A-Z]/g,'').replace(/[1I]/g,'I');return receiptLevenshtein(key,'INCVAT')<=1;}),grossRows=[];
+      for(const header of grossHeaders){const hy=Number(header.y)||0,hx=Number(header.x)||0,near=ordered.filter(line=>{const y=Number(line.y)||0;return Math.abs(y-hy)<=12;});const leftHeader=near.filter(line=>(Number(line.x)||0)<hx&&/^(?:VAT|EX\.?\s*VAT)$/i.test(String(line.text||'').trim())).sort((a,b)=>(Number(b.x)||0)-(Number(a.x)||0))[0];if(!leftHeader)continue;const leftX=Number(leftHeader.x)||0,pitch=hx-leftX,right=hx+pitch*.7,left=(leftX+hx)/2,labels=ordered.filter(line=>{const key=String(line.text||'').toUpperCase().replace(/[^A-Z]/g,'');return receiptLevenshtein(key,'TOTALS')<=1&&(Number(line.y)||0)>hy&&(Number(line.y)||0)<hy+120;});for(const label of labels){const y=Number(label.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=16).flatMap(line=>receiptMoneyTokens(line.text).filter(token=>{const width=Number(line.width)||0,x=Number(line.x)||0,center=x+(width&&String(line.text||'').length?width*(token.index+Math.min(token.raw.length/2,6))/String(line.text||'').length:token.index*6);return center>=left&&center<=right;}).map(token=>Math.abs(token.value)));const unique=[...new Set(values.map(value=>Math.round(value*100)))];if(unique.length===1)grossRows.push(unique[0]);}}
+      const uniqueGross=[...new Set(grossRows)];if(uniqueGross.length===1)total=uniqueGross[0]/100;
       const receiptTotal=ordered.find(line=>receiptTotalLabel(line.text)&&(Number(line.y)||0)>500&&(Number(line.y)||0)<1050),footerTotals=ordered.filter(line=>{const value=String(line.text||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/0/g,'O').replace(/1/g,'I');return (value==='TOTALS'||receiptLevenshtein(value,'TOTALS')<=1)&&(Number(line.x)||0)<220&&(Number(line.y)||0)>(Number(receiptTotal?.y)||0)+40;});
-      if(receiptTotal&&footerTotals.length===1){const fy=Number(footerTotals[0].y)||0,ty=Number(receiptTotal.y)||0,fuel=ordered.find(line=>/\b(?:UNLEADED|DIESEL)\b/i.test(String(line.text||''))&&(Number(line.y)||0)<ty),fuelY=Number(fuel?.y)||0,extraItem=ordered.some(line=>{const y=Number(line.y)||0,x=Number(line.x)||0,t=String(line.text||'').trim();return y>fuelY+35&&y<ty-10&&x<500&&/[A-Za-z]{3}/.test(t)&&!/^\s*(?:pump\s*\d*|sale|master ?card|visa|card|total|unleaded|diesel)\b/i.test(t);});const values=ordered.filter(line=>Math.abs((Number(line.y)||0)-fy)<=12&&(Number(line.x)||0)>=500).flatMap(line=>receiptMoneyTokens(line.text).map(token=>Math.abs(token.value))).filter(value=>value>=2&&value<=200);if(!extraItem&&values.length===1)total=values[0];}
+      if(total===''&&receiptTotal&&footerTotals.length===1){const fy=Number(footerTotals[0].y)||0,ty=Number(receiptTotal.y)||0,fuel=ordered.find(line=>/\b(?:UNLEADED|DIESEL)\b/i.test(String(line.text||''))&&(Number(line.y)||0)<ty),fuelY=Number(fuel?.y)||0,extraItem=ordered.some(line=>{const y=Number(line.y)||0,x=Number(line.x)||0,t=String(line.text||'').trim();return y>fuelY+35&&y<ty-10&&x<500&&/[A-Za-z]{3}/.test(t)&&!/^\s*(?:pump\s*\d*|sale|master ?card|visa|card|total|unleaded|diesel)\b/i.test(t);});const values=ordered.filter(line=>Math.abs((Number(line.y)||0)-fy)<=12&&(Number(line.x)||0)>=500).flatMap(line=>receiptMoneyTokens(line.text).map(token=>Math.abs(token.value))).filter(value=>value>=2&&value<=200);if(!extraItem&&values.length===1)total=values[0];}
     }
     if(total===''&&profile.id==='tesco'){
       const labels=ordered.filter(line=>/\bMASTERCARD\s+SALE\b/i.test(String(line.text||'')));
@@ -1999,9 +2235,21 @@
       const fuelLines=ordered.filter(line=>/\b(?:PUMP|LITRE|LITER)\b/i.test(String(line.text||'')));
       for(const anchor of fuelLines){const x=Number(anchor.x)||0,y=Number(anchor.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=55&&(Number(line.x)||0)>=x+220).flatMap(line=>receiptMoneyTokens(line.text).map(token=>({value:Math.abs(token.value),score:Math.abs((Number(line.y)||0)-y)}))).filter(item=>item.value>=2&&item.value<=10000).sort((a,b)=>a.score-b.score);if(values.length){total=values[0].value;break;}}
     }
-    const tenderTotal=receiptTenderTotal(ordered,maximum);if(tenderTotal!=='')total=tenderTotal;
-    const filteredDates=[...new Set(dateValues)].sort(),date=filteredDates.length===1?filteredDates[0]:'';
-    const fuelLine=ordered.find(line=>receiptFuelDescription(line.text)),fuelY=Number(fuelLine?.y)||0,totalLine=ordered.find(line=>receiptTotalLabel(line.text))||(profile.id==='tesco'?ordered.find(line=>receiptFaintTotalLabel(line,fuelY)):undefined),totalY=Number(totalLine?.y)||0,otherPurchases=receiptOtherPurchases(ordered,fuelY,totalY,maximum),hasTaxiDriver=/\bTAXI\s+DRIVER\b/i.test(flat);
+    // The explicit receipt Total is authoritative. Card/tender lines may show
+    // one part of a split payment, cash given, loyalty redemption or change;
+    // use them only when the receipt's own Total was not readable.
+    if(total===''&&hasPrintedTotalLabel){const paidTotal=receiptSinglePaidTotal(ordered,maximum);if(paidTotal!=='')total=paidTotal;}
+    const tenderTotal=receiptTenderTotal(ordered,maximum);if(total===''&&!hasPrintedTotalLabel&&tenderTotal!=='')total=tenderTotal;
+    if(total===''&&profile.id==='sainsburys'){
+      const summaryTotalHeader=ordered.find(line=>String(line.text||'').toUpperCase().replace(/[^A-Z0-9]/g,'')==='TOTAL'&&ordered.some(other=>{const y=Number(other.y)||0,key=String(other.text||'').toUpperCase().replace(/[^A-Z0-9]/g,'');return key.includes('SUMMARY')&&(key.includes('VAT')||key.includes('VAI')||key.includes('RECE'))&&y<(Number(line.y)||0)&&(Number(line.y)||0)-y<=150;}));
+      if(summaryTotalHeader){const x=Number(summaryTotalHeader.x)||0,y=Number(summaryTotalHeader.y)||0,values=ordered.filter(line=>{const lx=Number(line.x)||0,ly=Number(line.y)||0;return ly>y&&ly<=y+52&&lx>=x-55&&lx<=x+70;}).flatMap(line=>receiptMoneyTokens(line.text).map(token=>Math.abs(token.value))),unique=[...new Set(values.map(value=>Math.round(value*100)))];if(unique.length===1)total=unique[0]/100;}
+    }
+    // Tesco prints the date, time and checkout identifiers together in one
+    // footer string. If OCR returns that as a single unlabelled run-on date,
+    // require a separate date label before accepting it; a valid-looking OCR
+    // digit can still be a wrong month (as on faded receipt scans).
+    const filteredDates=[...new Set(dateValues)].sort(),unverifiedTescoRunOnDate=profile.id==='tesco'&&ordered.some(line=>/\bSTORE\s*:/i.test(String(line.text||''))&&/\bCHECKOUT\s*:/i.test(String(line.text||''))&&receiptDateFromText(line.text).length>0)&&!ordered.some(line=>/\b(?:DATE|DATE\s*\/\s*TIME|TRANSACTION\s+DATE)\b/i.test(String(line.text||''))&&receiptDateFromText(line.text).length>0),date=!unverifiedTescoRunOnDate&&filteredDates.length===1?filteredDates[0]:'';
+    const fuelLine=ordered.find(line=>receiptFuelDescription(line.text)||/\b(?:UNLEADED|DIESEL|PETROL)\b/i.test(String(line.text||''))),fuelOnly=/\bFUEL\s+ONLY\b/i.test(flat),fuelEvidence=Boolean(fuelLine||fuelOnly||/\bPUMP\s*#?\s*\d+\b/i.test(flat)||profile.id==='newtoll-services'&&/\bKARAN\s+FUEL\b/i.test(flat)),fuelY=Number(fuelLine?.y)||0,totalLine=ordered.find(line=>receiptTotalLabel(line.text))||(profile.id==='tesco'?ordered.find(line=>receiptFaintTotalLabel(line,fuelY)):undefined),totalY=Number(totalLine?.y)||0,otherPurchases=receiptOtherPurchases(ordered,fuelY,totalY,maximum),hasTaxiDriver=/\bTAXI\s+DRIVER\b/i.test(flat);
     let breakdown=hasTaxiDriver?{fuelAmount:total===''?'':Number(total),drawingsAmount:''}:profile.id==='mfg'?mfgReceiptBreakdown(ordered,total):{fuelAmount:total===''?'':Number(total),drawingsAmount:''};
     if(!hasTaxiDriver&&otherPurchases.length){
       const mfgSplit=profile.id==='mfg'&&Number.isFinite(Number(breakdown.fuelAmount))&&breakdown.drawingsAmount!==''&&breakdown.drawingsAmount!==null&&breakdown.drawingsAmount!==undefined;
@@ -2011,21 +2259,54 @@
         else if(totalCents!==null&&fuelCents===null){const itemCents=otherPurchases.map(item=>item.amounts.length===1?Math.round(item.amounts[0]*100):null);if(itemCents.every(Number.isInteger)){const drawingsCents=itemCents.reduce((sum,value)=>sum+value,0),remainder=totalCents-drawingsCents;if(drawingsCents>0&&remainder>0)breakdown={fuelAmount:remainder/100,drawingsAmount:drawingsCents/100};else breakdown={fuelAmount:'',drawingsAmount:''};}else breakdown={fuelAmount:'',drawingsAmount:''};}
       }
     }
-    const plausibleTotal=total!==''&&Number.isFinite(Number(total))&&Number(total)>=2&&Number(total)<=maximum,fuelCents=Number.isFinite(Number(breakdown.fuelAmount))?Math.round(Number(breakdown.fuelAmount)*100):null,drawingsCents=breakdown.drawingsAmount===''||breakdown.drawingsAmount===null||breakdown.drawingsAmount===undefined?0:Number.isFinite(Number(breakdown.drawingsAmount))?Math.round(Number(breakdown.drawingsAmount)*100):null,totalCents=plausibleTotal?Math.round(Number(total)*100):null,splitComplete=totalCents!==null&&fuelCents!==null&&drawingsCents!==null&&fuelCents>=0&&drawingsCents>=0&&fuelCents+drawingsCents===totalCents&&(hasTaxiDriver||!otherPurchases.length||drawingsCents>0),accepted=Boolean(date&&plausibleTotal&&splitComplete),reason=accepted?'':!date?'Receipt date could not be confirmed from this page.':!plausibleTotal?'Printed receipt total is missing or outside the expected receipt range.':!splitComplete?'Fuel and other purchase amounts could not be separated confidently.':'Receipt values were ambiguous.';
-    return {date,total,fuelAmount:breakdown.fuelAmount,drawingsAmount:breakdown.drawingsAmount,supplier:profile.name,profileId:profile.id,category:profile.category,source,page:Number(ordered[0]?.page)||1,status:accepted?'ACCEPTED':'REJECTED',accepted,rejected:!accepted,rejectedReason:reason};
+    const businessType=options.businessType==='company'?'company':options.businessType==='taxi-driver'?'taxi-driver':'legacy',plausibleTotal=total!==''&&Number.isFinite(Number(total))&&Number(total)>=2&&Number(total)<=maximum,totalCents=plausibleTotal?Math.round(Number(total)*100):null;
+    let fuelAmount=breakdown.fuelAmount,otherAmount=breakdown.drawingsAmount,drawingsAmount=breakdown.drawingsAmount;
+    if(businessType!=='legacy'){
+      if(hasTaxiDriver){fuelAmount=plausibleTotal?Number(total):'';otherAmount=0;drawingsAmount='';}
+      else if(fuelOnly||profile.id==='sainsburys'&&fuelEvidence){fuelAmount=plausibleTotal?Number(total):'';otherAmount=0;drawingsAmount='';}
+      else if(!fuelEvidence){fuelAmount=0;otherAmount=plausibleTotal?Number(total):'';drawingsAmount=businessType==='taxi-driver'?otherAmount:'';}
+      else if(!otherPurchases.length){fuelAmount=plausibleTotal?Number(total):'';otherAmount=0;drawingsAmount='';}
+      else{
+        const printedFuel=receiptFuelAmount(ordered,maximum),candidateFuel=printedFuel!==''?printedFuel:profile.id==='mfg'?breakdown.fuelAmount:'',totalFuelCents=plausibleTotal?Math.round(Number(total)*100):null,candidateFuelCents=Number.isFinite(Number(candidateFuel))?Math.round(Number(candidateFuel)*100):null;
+        if(totalFuelCents!==null&&candidateFuel!==''&&candidateFuel!==null&&candidateFuel!==undefined&&candidateFuelCents!==null&&candidateFuelCents>0&&candidateFuelCents<totalFuelCents){fuelAmount=candidateFuelCents/100;otherAmount=(totalFuelCents-candidateFuelCents)/100;drawingsAmount=businessType==='taxi-driver'?otherAmount:'';}
+        else{fuelAmount='';otherAmount='';drawingsAmount='';}
+      }
+    }
+    const fuelCents=Number.isFinite(Number(fuelAmount))?Math.round(Number(fuelAmount)*100):null,otherCents=otherAmount===''||otherAmount===null||otherAmount===undefined?0:Number.isFinite(Number(otherAmount))?Math.round(Number(otherAmount)*100):null,splitComplete=totalCents!==null&&fuelCents!==null&&otherCents!==null&&fuelCents>=0&&otherCents>=0&&fuelCents+otherCents===totalCents&&(hasTaxiDriver||fuelOnly||profile.id==='sainsburys'&&fuelEvidence||!otherPurchases.length||otherCents>0),vatResult=receiptVatFromLines(ordered,total),accepted=Boolean(date&&plausibleTotal&&splitComplete&&!vatResult.vatUnverified),reason=accepted?'':!date?'Receipt date could not be confirmed from this page.':!plausibleTotal?'Printed receipt total is missing or outside the expected receipt range.':vatResult.vatUnverified?'VAT is printed on the receipt but its amount could not be confirmed.':!splitComplete?'Fuel and other purchase amounts could not be separated confidently.':'Receipt values were ambiguous.';
+    return {date,total,fuelAmount,otherAmount,drawingsAmount:businessType==='taxi-driver'?drawingsAmount:businessType==='company'?'':drawingsAmount,vat:vatResult.vat,vatMentioned:vatResult.vatMentioned,vatUnverified:vatResult.vatUnverified,vatRaw:vatResult.vatRaw,handling:businessType,vatSplit:Boolean(options.vatSplit),supplier:profile.name,profileId:profile.id,category:profile.category,source,page:Number(ordered[0]?.page)||1,status:accepted?'ACCEPTED':'REJECTED',accepted,rejected:!accepted,rejectedReason:reason};
+  }
+  function receiptHeaderProfile(line){
+    const text=String(line?.text||'').trim(),upper=text.toUpperCase(),compact=upper.replace(/[^A-Z0-9]/g,'');
+    if(compact.includes('NEWTOLLSERVICES')||compact.includes('NEWTONSERVICES'))return 'newtoll-services';
+    if(/^MFG\b|^MOTOR\s+FUEL\s+(?:LTD|LIMITED)\b/i.test(text))return 'mfg';
+    const first=(upper.match(/^[A-Z]{4,8}/)||[])[0]||'';
+    if(first&&receiptLevenshtein(first,'SHELL')<=1&&/\b(?:KINGS\s+LYNN|A47|WEST\s+LYNN|STAT\s+NO)\b/i.test(text))return 'shell';
+    for(const profile of receiptProfiles){if(['newtoll-services','mfg','shell','bp','other-forecourt','unidentified-forecourt'].includes(profile.id))continue;const brand=String(profile.name||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(brand.length>=4&&compact.startsWith(brand))return profile.id;}
+    return '';
+  }
+  function splitCompositeReceiptPage(pageLines,source='',options={}){
+    const ordered=[...(Array.isArray(pageLines)?pageLines:[])].sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)),candidates=[];
+    for(const line of ordered){const profileId=receiptHeaderProfile(line);if(!profileId)continue;const startY=Number(line.y)||0,context=ordered.filter(item=>{const y=Number(item.y)||0;return y>=startY-24&&y<=startY+950;}),profile=receiptProfiles.find(item=>item.id===profileId),contextText=context.map(item=>String(item.text||'')).join(' '),partialMfg=profileId==='mfg'&&/\b(?:STORE\s+\d+|TRANS\s+\d+|POS\s*\d*)\b/i.test(contextText);
+      if(!profile||(!profile.detect(contextText)&&!partialMfg))continue;
+      const previous=candidates.at(-1);if(previous&&previous.profileId===profileId&&startY-previous.y<700)continue;
+      candidates.push({profileId,y:startY});
+    }
+    if(candidates.length<2)return null;
+    const rows=[];for(let index=0;index<candidates.length;index++){const current=candidates[index],next=candidates[index+1],segment=ordered.filter(line=>(Number(line.y)||0)>=current.y-2&&(!next||(Number(line.y)||0)<next.y));const row=parseReceiptPage(segment,source,current.profileId,options);if(row)rows.push(row);}
+    return rows.length>=2?rows:null;
   }
   function parseReceiptBatch(text,source='',ocrLines,options={}){
     const grouped=new Map();
     for(const line of Array.isArray(ocrLines)?ocrLines:[]){const page=Math.max(1,Number(line.page)||1);if(!grouped.has(page))grouped.set(page,[]);grouped.get(page).push(line);}
     let parsed=[];
-    if(grouped.size)parsed=[...grouped.entries()].sort((a,b)=>a[0]-b[0]).map(([page,items])=>parseReceiptPage(items,source,options.profileHintByPage?.[page]||options.profileHint||'')).filter(Boolean);
-    else{const flat=String(text||''),parts=flat.split(/\n\s*(?:PAGE\s*[:#-]?\s*\d+)\s*\n/ig);parsed=parts.map((part,index)=>{const lines=part.split(/\r?\n/).map(text=>({text,page:index+1,x:0,y:index*30,width:0,height:0}));return parseReceiptPage(lines,source);}).filter(Boolean);}
+    if(grouped.size)parsed=[...grouped.entries()].sort((a,b)=>a[0]-b[0]).flatMap(([page,items])=>{const segments=splitCompositeReceiptPage(items,source,options);return segments||[parseReceiptPage(items,source,options.profileHintByPage?.[page]||options.profileHint||'',options)];}).filter(Boolean);
+    else{const flat=String(text||''),parts=flat.split(/\n\s*(?:PAGE\s*[:#-]?\s*\d+)\s*\n/ig);parsed=parts.map((part,index)=>{const lines=part.split(/\r?\n/).map(text=>({text,page:index+1,x:0,y:index*30,width:0,height:0}));return parseReceiptPage(lines,source,'',options);}).filter(Boolean);}
     if(!options.auditUnmatchedPages||!Number.isFinite(Number(options.pageCount)))return parsed;
     const byPage=new Map(parsed.map(row=>[Number(row.page)||1,row])),visual=new Set((options.visualPages||[]).map(Number));
     for(let page=1;page<=Number(options.pageCount);page++){
       if(byPage.has(page))continue;const lines=grouped.get(page)||[],flat=lines.map(line=>String(line.text||'')).join(' ').replace(/\s+/g,' ').trim(),hasVisibleContent=visual.has(page)||lines.some(line=>String(line.text||'').trim());
       if(!hasVisibleContent||isReceiptBackPage(lines))continue;
-      const inferred=inferredReceiptSupplier(flat),row={date:'',total:'',fuelAmount:'',drawingsAmount:'',supplier:inferred.supplier,profileId:inferred.profileId,category:inferred.category,source,page,status:'REJECTED',accepted:false,rejected:true,auditPlaceholder:true,rejectedReason:'Receipt page could not be read confidently. Enter the date and total manually.'};
+      const inferred=inferredReceiptSupplier(flat),row={date:'',total:'',fuelAmount:'',otherAmount:'',drawingsAmount:'',vat:'',vatUnverified:true,handling:options.businessType||'company',vatSplit:Boolean(options.vatSplit),supplier:inferred.supplier,profileId:inferred.profileId,category:inferred.category,source,page,status:'REJECTED',accepted:false,rejected:true,auditPlaceholder:true,rejectedReason:'Receipt page could not be read confidently. Enter the date, total and VAT manually.'};
       parsed.push(row);byPage.set(page,row);
     }
     return parsed.sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
