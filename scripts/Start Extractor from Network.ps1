@@ -575,7 +575,12 @@ if ($updateWillReset -and -not $NoLaunch -and -not $PrepareLocalAppOnly) {
     $restartPowerShell = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
   }
   $restartArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -RuntimeRoot "' + $RuntimeRoot + '" -ProfileRoot "' + $ProfileRoot + '"'
-  Start-Process -FilePath $restartPowerShell -ArgumentList $restartArguments -WorkingDirectory $source -NoNewWindow
+  $restartProcess = Start-Process -FilePath $restartPowerShell -ArgumentList $restartArguments -WorkingDirectory $source -NoNewWindow -PassThru
+  $restartProcess.WaitForExit()
+  if ($restartProcess.ExitCode -ne 0) {
+    throw "Extractor could not finish applying the Git update (exit code $($restartProcess.ExitCode)). Review the startup log and try again."
+  }
+  Write-Output 'EXTRACTOR_UPDATE_RESTART_COMPLETE: Updated local application startup finished.'
   exit 0
 }
 $runtimeLoaderSource = Join-Path $source 'ExtractorRuntimeLoader.cjs'
@@ -743,7 +748,11 @@ if (-not $NoLaunch -or $PrepareLocalAppOnly) {
 }
 
 if (-not $NoLaunch -and $localApplicationDirectory) {
-  Ensure-ExtractorDesktopShortcut $localApplicationDirectory
+  try {
+    Ensure-ExtractorDesktopShortcut $localApplicationDirectory
+  } catch {
+    Write-Warning "Could not verify or create the desktop shortcut. Extractor will still try to open from its local application copy. $($_.Exception.Message)"
+  }
 }
 
 if ($PrepareLocalAppOnly) {

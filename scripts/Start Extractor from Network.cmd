@@ -17,11 +17,19 @@ if errorlevel 1 (
   if not "%FARE_EXTRACTOR_NO_PAUSE%"=="1" pause
   exit /b 1
 )
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%CD%\Start Extractor from Network.ps1" %* 2>>"%LOG%"
+if "%FARE_EXTRACTOR_NO_PAUSE%"=="1" (
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%CD%\Start Extractor from Network.ps1" %* 2>>"%LOG%"
+) else (
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%CD%\Start Extractor from Network.ps1" %* >>"%LOG%" 2>&1
+)
 set "RESULT=%ERRORLEVEL%"
 popd
+if not "%FARE_EXTRACTOR_NO_PAUSE%"=="1" if "%RESULT%"=="0" (
+  findstr /I /C:"Extractor is running (process ID" /C:"EXTRACTOR_UPDATE_RESTART_COMPLETE:" /C:"Shared application files are ready." /C:"The local application copy is ready." "%LOG%" >nul
+  if errorlevel 1 set "RESULT=1"
+)
 if not "%RESULT%"=="0" (
-  echo Extractor could not be installed or started. Read the error above, then ask your administrator if access is blocked.
+  echo Extractor did not confirm that the local application opened. The complete startup output follows.
   type "%LOG%"
   echo Full error details saved to "%LOG%".
   if not "%FARE_EXTRACTOR_NO_PAUSE%"=="1" pause
