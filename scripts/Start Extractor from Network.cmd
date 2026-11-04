@@ -16,9 +16,9 @@ if errorlevel 1 (
   if not "%FARE_EXTRACTOR_NO_PAUSE%"=="1" pause
   exit /b 1
 )
-rem Use the drive that PUSHd mapped for the share. Passing the original UNC
-rem path makes child PowerShell processes and update staging fragile on some PCs.
-set "FARE_EXTRACTOR_NETWORK_ROOT=%CD%\"
+rem Keep the durable UNC folder path for child processes and local app settings.
+rem PUSHd maps the share only so CMD can invoke the script from that location.
+set "FARE_EXTRACTOR_NETWORK_ROOT=%~dp0"
 if "%FARE_EXTRACTOR_NO_PAUSE%"=="1" (
   powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%CD%\Start Extractor from Network.ps1" %* 2>>"%LOG%"
 ) else (

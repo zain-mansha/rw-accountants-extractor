@@ -10,7 +10,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $sourceRoot = if (-not [string]::IsNullOrWhiteSpace($NetworkSource)) { $NetworkSource } elseif (-not [string]::IsNullOrWhiteSpace($env:FARE_EXTRACTOR_NETWORK_ROOT)) { $env:FARE_EXTRACTOR_NETWORK_ROOT } else { $PSScriptRoot }
-$source = [IO.Path]::GetFullPath($sourceRoot)
+function ConvertTo-ExtractorPersistentPath([string]$Path) {
+  $fullPath = [IO.Path]::GetFullPath($Path)
+  if ($fullPath -match '^([A-Za-z]):\\') {
+    $drive = Get-PSDrive -Name $Matches[1] -PSProvider FileSystem -ErrorAction SilentlyContinue
+    $networkRoot = [string]$drive.DisplayRoot
+    if ($networkRoot.StartsWith('\\')) {
+      return Join-Path $networkRoot $fullPath.Substring(3)
+    }
+  }
+  return $fullPath
+}
+$source = ConvertTo-ExtractorPersistentPath $sourceRoot
 $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
 if ([string]::IsNullOrWhiteSpace($localAppData)) {
   throw 'Windows did not provide a local application-data folder for this account.'
@@ -573,8 +584,9 @@ if ($updateWillReset -and -not $NoLaunch -and -not $PrepareLocalAppOnly) {
   if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
     $restartPowerShell = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
   }
-  $restartArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -RuntimeRoot "' + $RuntimeRoot + '" -ProfileRoot "' + $ProfileRoot + '" -ExpectedUpdateCommit "' + $commitSha + '"'
-  $restartProcess = Start-Process -FilePath $restartPowerShell -ArgumentList $restartArguments -WorkingDirectory $source -NoNewWindow -PassThru
+  $restartScript = Join-Path $source 'Start Extractor from Network.ps1'
+  $restartArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $restartScript + '" -NetworkSource "' + $source + '" -RuntimeRoot "' + $RuntimeRoot + '" -ProfileRoot "' + $ProfileRoot + '" -ExpectedUpdateCommit "' + $commitSha + '"'
+  $restartProcess = Start-Process -FilePath $restartPowerShell -ArgumentList $restartArguments -WorkingDirectory ([IO.Path]::GetTempPath()) -NoNewWindow -PassThru
   $restartProcess.WaitForExit()
   if ($restartProcess.ExitCode -ne 0) {
     throw "Extractor could not finish applying the Git update (exit code $($restartProcess.ExitCode)). Review the startup log and try again."
