@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Path,[string]$Password='',[double]$Scale=2.5,[string]$PageList='',[string]$FocusPageList='',[string]$DairyFooterRows='[]',[string]$BankRetryRegions='[]')
+param([Parameter(Mandatory=$true)][string]$Path,[string]$Password='',[double]$Scale=2.5,[string]$PageList='',[string]$FocusPageList='',[string]$DairyFooterRows='[]',[string]$BankRetryRegions='[]',[string]$InvoiceRetryRegions='[]')
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -345,6 +345,20 @@ function Read-EnhancedReceiptRegion($bitmap,$scale,$left,$top,$width,$height,$en
     return @{Text=[string]$result.Text;Lines=$lines.ToArray()}
   }catch{return @{Text='';Lines=@()}}finally{if($enhanced){$enhanced.Dispose()};$stream.Dispose()}
 }
+function Read-FocusedPdfRegion($page,$region,$pageNumber,$engine){
+  $stream=New-Object Windows.Storage.Streams.InMemoryRandomAccessStream;$software=$null
+  try{
+    # OCR line coordinates use the same 2.5x page-point scale as bank retry
+    # regions. Convert them back to PDF points for SourceRect, then map the
+    # crop OCR results back into the original OCR line coordinate system.
+    $coordinateScale=2.5;$left=[math]::Max(0.0,[double]$region.left);$top=[math]::Max(0.0,[double]$region.top);$sourceLeft=$left/$coordinateScale;$sourceTop=$top/$coordinateScale;$sourceWidth=[math]::Min([double]$page.Size.Width-$sourceLeft,[double]$region.width/$coordinateScale);$sourceHeight=[math]::Min([double]$page.Size.Height-$sourceTop,[double]$region.height/$coordinateScale);$width=$sourceWidth*$coordinateScale;$height=$sourceHeight*$coordinateScale
+    if($sourceWidth -le 0 -or $sourceHeight -le 0){throw "The text-anchored invoice retry region is outside the PDF page. Page size is $($page.Size.Width) by $($page.Size.Height); region starts at $sourceLeft,$sourceTop and spans $sourceWidth by $sourceHeight."}
+    $cropScale=[math]::Min(10.0,3000.0/[math]::Max($width,$height));$sourceRect=[Windows.Foundation.Rect]::new($sourceLeft,$sourceTop,$sourceWidth,$sourceHeight);$options=New-Object Windows.Data.Pdf.PdfPageRenderOptions;$options.SourceRect=$sourceRect;$options.DestinationWidth=[uint32]([math]::Max(1,[math]::Round($width*$cropScale)));$options.DestinationHeight=[uint32]([math]::Max(1,[math]::Round($height*$cropScale)))
+    Await($page.RenderToStreamAsync($stream,$options))|Out-Null;$stream.Seek(0)|Out-Null;$decoder=Await ([Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]);$software=Await($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap,Windows.Graphics,ContentType=WindowsRuntime]);$result=Await($engine.RecognizeAsync($software)) ([Windows.Media.Ocr.OcrResult,Windows,ContentType=WindowsRuntime]);$lines=New-Object System.Collections.Generic.List[object]
+    foreach($line in $result.Lines){$words=@($line.Words);if(!$words.Count){continue};$lefts=@($words|ForEach-Object{[double]$_.BoundingRect.X});$tops=@($words|ForEach-Object{[double]$_.BoundingRect.Y});$rights=@($words|ForEach-Object{[double]$_.BoundingRect.X+[double]$_.BoundingRect.Width});$bottoms=@($words|ForEach-Object{[double]$_.BoundingRect.Y+[double]$_.BoundingRect.Height});$minX=($lefts|Measure-Object -Minimum).Minimum;$minY=($tops|Measure-Object -Minimum).Minimum;$maxX=($rights|Measure-Object -Maximum).Maximum;$maxY=($bottoms|Measure-Object -Maximum).Maximum;$lines.Add([pscustomobject]@{page=$pageNumber;text=[string]$line.Text;x=$left+[double]$minX/$cropScale;y=$top+[double]$minY/$cropScale;width=[double]($maxX-$minX)/$cropScale;height=[double]($maxY-$minY)/$cropScale;confidence=(Get-OcrLineConfidence $line)})}
+    return @{Text=[string]$result.Text;Lines=$lines.ToArray()}
+  }catch{throw}finally{if($software){$software.Dispose()};$stream.Dispose()}
+}
 function Read-DairyFreshFooterRegion($bitmap,$scale,$left,$top,$width,$height,$engine,$page){
   # The printer's pale address watermark crosses Dairy Fresh's right-hand
   # totals column. OCR the closing block at a moderate crop scale, then try a
@@ -386,6 +400,7 @@ try {
   if($PageList){$pageIndexes=@($PageList.Split(',')|ForEach-Object{[int]$n=0;if([int]::TryParse($_,[ref]$n)-and $n -ge 1 -and $n -le $pdf.PageCount){$n-1}}|Sort-Object -Unique)}else{$pageIndexes=@(0..($pdf.PageCount-1))}
   $focusPageNumbers=@($FocusPageList.Split([char]44)|ForEach-Object{[int]$n=0;if([int]::TryParse($_,[ref]$n)-and $n -ge 1 -and $n -le $pdf.PageCount){$n}}|Sort-Object -Unique)
   $dairyFooterRows=@();try{$dairyFooterRows=@($DairyFooterRows|ConvertFrom-Json)}catch{$dairyFooterRows=@()}
+  $parsedInvoiceRetryRegions=@();try{$parsedInvoiceRetryRegions=@($InvoiceRetryRegions|ConvertFrom-Json)}catch{$parsedInvoiceRetryRegions=@()}
   # PowerShell variable names are case-insensitive. Keep the parsed regions in
   # a separate variable so this does not overwrite the BankRetryRegions input.
   $parsedBankRetryRegions=$null;try{$parsedBankRetryRegions=ConvertFrom-Json -InputObject $BankRetryRegions}catch{$parsedBankRetryRegions=$null}
@@ -393,6 +408,17 @@ try {
   foreach($index in $pageIndexes) {
     $page=$pdf.GetPage($index)
     $pageLines=New-Object System.Collections.Generic.List[object]
+    $invoiceRegion=$parsedInvoiceRetryRegions|Where-Object{[int]$_.page -eq ($index+1)}|Select-Object -First 1
+    if($invoiceRegion){
+      $focused=Read-FocusedPdfRegion $page $invoiceRegion ($index+1) $engine
+      if($focused.Text){$parts.Add([string]$focused.Text)}
+      foreach($line in $focused.Lines){$ocrLines.Add($line);$pageLines.Add($line)}
+      if($pageLines.Count){$visualPages.Add($index+1)}
+      [Console]::WriteLine('PAGE:'+(@{page=$index+1;pageCount=$pdf.PageCount;ocrLanguage=$ocrLanguage;text=$focused.Text;lines=$pageLines.ToArray()}|ConvertTo-Json -Compress -Depth 5))
+      $page.Dispose();$processedPageCount++
+      if($processedPageCount%3 -eq 0){[GC]::Collect();[GC]::WaitForPendingFinalizers()}
+      continue
+    }
     $stream=New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
     # A bank reconciliation retry rereads only the printed vertical interval
     # between the last confirmed balance and the first mismatched one.

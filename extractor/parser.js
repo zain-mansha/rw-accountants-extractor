@@ -2812,11 +2812,30 @@
     }
     return null;
   }
+  function invoiceRetryRegionsForRow(row,ocrLines){
+    if(row?.profileId!=='kin-global')return [];
+    const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),pages=[...new Set((row.sourcePages||[row.page]).map(Number).filter(page=>Number.isInteger(page)&&page>0))],regions=[];
+    for(const page of pages){
+      const pageLines=lines.filter(line=>(Number(line.page)||1)===page),vatSections=pageLines.filter(line=>/\bVAT\s+stat/i.test(String(line.text||'').normalize('NFKD'))),totalLabels=pageLines.filter(line=>/\btotal\s*\(\s*\d+\s*it/i.test(String(line.text||'').normalize('NFKD')));
+      if(!vatSections.length||!totalLabels.length)continue;
+      const total=totalLabels.at(-1),totalY=Number(total.y)||0,section=vatSections.sort((a,b)=>Math.abs((Number(a.y)||0)-totalY)-Math.abs((Number(b.y)||0)-totalY))[0],fontHeights=pageLines.map(line=>Number(line.height)||0).filter(height=>height>0&&height<50).sort((a,b)=>a-b),lineHeight=fontHeights.length?fontHeights[Math.floor(fontHeights.length/2)]:Math.max(1,Number(section.height)||Number(total.height)||1),padding=lineHeight*2;
+      const top=Math.max(0,Math.min(Number(section.y)||0,totalY)-padding),bottom=Math.max((Number(section.y)||0)+(Number(section.height)||lineHeight),totalY+(Number(total.height)||lineHeight))+padding,left=Math.max(0,Math.min(Number(section.x)||0,Number(total.x)||0)-padding),rightMost=pageLines.filter(line=>{const y=Number(line.y)||0,x=Number(line.x)||0;return y+(Number(line.height)||lineHeight)>=top&&y<=bottom&&x>=left;}).reduce((right,line)=>Math.max(right,(Number(line.x)||0)+(Number(line.width)||0)),0),right=rightMost+padding;
+      if(right>left&&bottom>top)regions.push({page,left,top,width:right-left,height:bottom-top,profileId:'kin-global'});
+    }
+    return regions;
+  }
   function kinGlobalVatFromColumn(lines,totalLabel){
-    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),page=Number(totalLabel?.page)||1,section=items.filter(line=>(Number(line.page)||1)===page&&/\bVAT\s+statement\b/i.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0))[0];
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),page=Number(totalLabel?.page)||1,section=items.filter(line=>(Number(line.page)||1)===page&&/\bVAT\s+stat/i.test(String(line.text||'').normalize('NFKD'))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0))[0];
     if(!section)return null;
     const sh=Math.max(Number(section.height)||0,1),sx=Number(section.x)||0,sw=Math.max(Number(section.width)||0,String(section.text||'').length*8),headers=items.filter(line=>(Number(line.page)||1)===page&&/^\s*VAT\s*$/i.test(String(line.text||''))&&Math.abs((Number(line.y)||0)-(Number(section.y)||0))<=sh*1.5&&(Number(line.x)||0)>=sx+sw*.5).sort((a,b)=>(Number(a.x)||0)-(Number(b.x)||0));
-    const header=headers.at(-1);if(!header)return null;
+    const header=headers.at(-1);
+    if(!header){
+      const sameHeaderRow=items.filter(line=>(Number(line.page)||1)===page&&Math.abs((Number(line.y)||0)-(Number(section.y)||0))<=sh*1.5),rateHeader=sameHeaderRow.find(line=>/^\s*(?:VAT\s+)?rate\s*$/i.test(String(line.text||''))),grossHeader=sameHeaderRow.find(line=>/^\s*gross\s*$/i.test(String(line.text||'')));
+      if(!rateHeader||!grossHeader)return null;
+      const rateRight=(Number(rateHeader.x)||0)+Math.max(Number(rateHeader.width)||0,sh),grossLeft=Number(grossHeader.x)||0,totalY=Number(totalLabel.y)||0,totalHeight=Math.max(Number(totalLabel.height)||0,sh),rowTolerance=Math.max(totalHeight*1.5,sh*2),values=[];
+      for(const line of items){if((Number(line.page)||1)!==page||Math.abs((Number(line.y)||0)-totalY)>rowTolerance)continue;const x=Number(line.x)||0,width=Math.max(Number(line.width)||0,sh*.5),center=x+width/2;if(center<rateRight||center>=grossLeft)continue;values.push(...kinKmMoneyValues(line.text));}
+      const unique=[...new Set(values)];return unique.length===1?unique[0]:null;
+    }
     const hx=Number(header.x)||0,hh=Math.max(Number(header.height)||0,1),hy=Number(totalLabel.y)||0,candidates=[];
     for(const line of items){
       if((Number(line.page)||1)!==page||Math.abs((Number(line.y)||0)-hy)>Math.max(hh*1.5,12))continue;
@@ -2842,30 +2861,35 @@
   function parseKinGlobalInvoice(flat,source='',ocrLines){
     const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),text=String(flat||lines.map(line=>String(line.text||'')).join(' ')),fullNumber=kinGlobalInvoiceReference(text),number=kinKmInvoiceNumber(fullNumber),date=kinGlobalInvoiceDate(lines,text),invoiceDocument=Boolean(isKinGlobalText(text)&&/\bVAT\s+INVOICE\b/i.test(text));
     const pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b),pageMaps=pages.map(page=>[page,lines.filter(line=>(Number(line.page)||1)===page)]),totals=[];
-    for(const [,pageLines] of pageMaps){const found=kinKmSummaryRow(pageLines,/\btotal\s*\(\s*\d+\s*items?\s*\)/i);if(found)totals.push(found);}
+    for(const [,pageLines] of pageMaps){const found=kinKmSummaryRow(pageLines,/\btotal\s*\(\s*\d+\s*it/i);if(found)totals.push(found);}
     const totalRow=totals.at(-1),rowValues=totalRow?.values||[],total=rowValues.length>=3?rowValues.at(-1):kinKmLabeledValue(lines,/\bamount\s+due\b/i,value=>kinKmMoneyValues(value)[0]??null,'row'),vat=rowValues.length>=3?rowValues.at(-2):totalRow?kinGlobalVatFromColumn(lines,totalRow.label):null,complete=Boolean(invoiceDocument&&number&&date&&total!==null&&vat!==null),reason=complete?'':!invoiceDocument?'This document does not appear to be a Kin Global VAT invoice.':!number?'Kin Global invoice number could not be confirmed from the printed VAT invoice reference.':!date?'Kin Global date of issuance could not be confirmed.':total===null?'Printed Kin Global Total (items) and Amount Due could not be confirmed.':'Printed Kin Global VAT summary could not be confirmed.';
-    return {invoiceNumber:number,originalInvoiceNumber:fullNumber,date,supplier:'Kin Global Distribution Ltd',subtotal:'',vat:vat??'',total:total??'',documentType:'INVOICE',isInvoiceDocument:invoiceDocument,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(invoiceDocument&&!complete),review:false,layoutId:'kin-global-vat-statement',profileId:'kin-global'};
+    return {invoiceNumber:number,originalInvoiceNumber:fullNumber,date,supplier:'Kin Global Distribution Ltd',subtotal:'',vat:vat??'',vatUnverified:vat===null,vatMentioned:vat!==null,total:total??'',documentType:'INVOICE',isInvoiceDocument:invoiceDocument,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(invoiceDocument&&!complete),review:false,layoutId:'kin-global-vat-statement',profileId:'kin-global'};
   }
   function parseKmDistributionInvoice(flat,source='',ocrLines){
     const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),text=String(flat||lines.map(line=>String(line.text||'')).join(' ')),fullNumber=kmDistributionInvoiceReference(text),number=kinKmInvoiceNumber(fullNumber),date=kmDistributionInvoiceDate(lines,text),invoiceDocument=Boolean(isKmDistributionText(text)&&/\binvoice\b/i.test(text)),pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b),rows=[];
     for(const page of pages){const pageLines=lines.filter(line=>(Number(line.page)||1)===page),found=kinKmSummaryRow(pageLines,/^\s*total\s*:/i);if(found)rows.push(found);}
     const totalRow=rows.at(-1),values=totalRow?.values||[],vat=values.length>=3?values.at(-2):null,total=values.length>=3?values.at(-1):null,complete=Boolean(invoiceDocument&&number&&date&&total!==null&&vat!==null),reason=complete?'':!invoiceDocument?'This document does not appear to be a KM Distribution invoice.':!number?'KM Distribution invoice number could not be confirmed.':!date?'KM Distribution invoice date could not be confirmed.':total===null?'Printed KM Distribution Total row could not be confirmed.':'Printed KM Distribution VAT cell could not be confirmed.';
-    return {invoiceNumber:number,originalInvoiceNumber:fullNumber,date,supplier:'KM Distribution Centre Ltd',subtotal:'',vat:vat??'',total:total??'',documentType:'INVOICE',isInvoiceDocument:invoiceDocument,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(invoiceDocument&&!complete),review:false,layoutId:'km-distribution-vat-summary',profileId:'km-distribution'};
+    return {invoiceNumber:number,originalInvoiceNumber:fullNumber,date,supplier:'KM Distribution Centre Ltd',subtotal:'',vat:vat??'',vatUnverified:vat===null,vatMentioned:vat!==null,total:total??'',documentType:'INVOICE',isInvoiceDocument:invoiceDocument,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(invoiceDocument&&!complete),review:false,layoutId:'km-distribution-vat-summary',profileId:'km-distribution'};
   }
   function parseKinKmProfileBatch(pageLines,source,profileId,options={}){
-    const pages=[...new Set(pageLines.keys())].sort((a,b)=>a-b),kin=profileId==='kin-global',isSupplier=kin?isKinGlobalText:isKmDistributionText,isInvoicePage=kin?isKinGlobalInvoicePage:isKmDistributionInvoicePage,readNumber=kin?kinGlobalInvoiceReference:kmDistributionInvoiceReference,groups=[];
+    const pages=[...new Set(pageLines.keys())].sort((a,b)=>a-b),kin=profileId==='kin-global',isSupplier=kin?isKinGlobalText:isKmDistributionText,isInvoicePage=kin?isKinGlobalInvoicePage:isKmDistributionInvoicePage,readNumber=kin?kinGlobalInvoiceReference:kmDistributionInvoiceReference,groups=[],consumedPages=new Set();let activeGroup=null;
     for(const page of pages){
-      const lines=pageLines.get(page)||[],text=lines.map(line=>String(line.text||'')).join(' ');if(!isSupplier(text))continue;
-      const reference=readNumber(text),starts=kin?isInvoicePage(lines):isInvoicePage(lines)||/\binvoice\s+date\b/i.test(text),previous=groups.at(-1);
-      if(reference){if(previous&&previous.reference===reference){previous.pages.push(page);continue;}groups.push({reference,page,pages:[page]});continue;}
-      if(starts){groups.push({reference:'',page,pages:[page]});continue;}
-      if(previous)previous.pages.push(page);
+      const lines=pageLines.get(page)||[],text=lines.map(line=>String(line.text||'')).join(' '),otherSupplier=invoiceProfiles.some(profile=>profile.kind==='supplier'&&profile.id!==profileId&&profile.detect(text));if(otherSupplier){activeGroup=null;continue;}
+      if(!isSupplier(text)){
+        const continuation=kin?/\bVAT\s+INVOICE\b|\bpage\s+\d+\s+(?:z|of)\s+\d+\b|\bVAT\s+stat|\btotal\s*\(\s*\d+\s*it/i.test(text.normalize('NFKD')):/\bVAT\s*(?:no|number)\b|\bpage\s+\d+\s+(?:of|z)\s+\d+\b|\btotal\s*:/i.test(text);
+        if(activeGroup&&continuation){activeGroup.pages.push(page);consumedPages.add(page);}else if(activeGroup)activeGroup=null;
+        continue;
+      }
+      const reference=readNumber(text),starts=kin?isInvoicePage(lines):isInvoicePage(lines)||/\binvoice\s+date\b/i.test(text);
+      if(reference){if(activeGroup&&activeGroup.reference===reference){activeGroup.pages.push(page);consumedPages.add(page);continue;}activeGroup={reference,page,pages:[page]};groups.push(activeGroup);consumedPages.add(page);continue;}
+      if(starts){activeGroup={reference:'',page,pages:[page]};groups.push(activeGroup);consumedPages.add(page);continue;}
+      if(activeGroup){activeGroup.pages.push(page);consumedPages.add(page);}
     }
     const rows=groups.map(group=>{
       const lines=group.pages.flatMap(page=>pageLines.get(page)||[]),text=lines.map(line=>String(line.text||'').trim()).filter(Boolean).join('\n'),row=parseInvoiceRobust(text,source,lines,options);
       return {...row,page:group.page,sourcePages:group.pages,profileId};
     });
-    const supplierPages=pages.filter(page=>isSupplier((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))),otherLines=[...pageLines.values()].flat().filter(line=>!supplierPages.includes(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
+    const otherLines=[...pageLines.values()].flat().filter(line=>!consumedPages.has(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
     return [...otherRows,...rows].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
   }
   // Keep supplier/document-specific parsing isolated here. Detection uses
@@ -2942,9 +2966,9 @@
     const pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b);
     const pageLines=new Map(pages.map(page=>[page,lines.filter(line=>(Number(line.page)||1)===page).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0))]));
     const kinPages=pages.filter(page=>isKinGlobalText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
-    if(kinPages.length)return parseKinKmProfileBatch(new Map(kinPages.map(page=>[page,pageLines.get(page)])),source,'kin-global',options);
+    if(kinPages.length)return parseKinKmProfileBatch(pageLines,source,'kin-global',options);
     const kmPages=pages.filter(page=>isKmDistributionText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
-    if(kmPages.length)return parseKinKmProfileBatch(new Map(kmPages.map(page=>[page,pageLines.get(page)])),source,'km-distribution',options);
+    if(kmPages.length)return parseKinKmProfileBatch(pageLines,source,'km-distribution',options);
     const amazonPages=pages.filter(page=>isAmazonInvoiceText(amazonPositionedText(pageLines.get(page))));
     if(amazonPages.length){
       const groups=[];
@@ -3111,10 +3135,11 @@
   }
   function invoiceRetryAccepted(row,candidate,complete){
     const first=String(row?.originalInvoiceNumber||'').replace(/\D/g,''),retry=String(candidate?.originalInvoiceNumber||'').replace(/\D/g,''),sameEaglePage=(candidate?.sourcePages||[candidate?.page]).map(Number).includes(Number(row?.page)),eaglePageMatch=row?.profileId==='eagle-foods'&&candidate?.profileId==='eagle-foods'&&sameEaglePage&&(!first||first===retry||first.length>=2&&first.length<6&&retry.endsWith(first));
-    return Boolean(complete&&!row?.freshwaysVatOcrAmbiguous&&!row?.eagleSummaryConflict&&!row?.eagleSummaryAmbiguousReference&&!Object.keys(row?.ocrAmountConflicts||{}).length&&(row?.profileId==='bestway'||candidate?.accepted||row?.freshwaysVatOcrRetryResolved||eaglePageMatch));
+    const kinFooterRetry=row?.profileId==='kin-global'&&candidate?.profileId==='kin-global';
+    return Boolean(complete&&!row?.freshwaysVatOcrAmbiguous&&!row?.eagleSummaryConflict&&!row?.eagleSummaryAmbiguousReference&&!Object.keys(row?.ocrAmountConflicts||{}).length&&(row?.profileId==='bestway'||kinFooterRetry||candidate?.accepted||row?.freshwaysVatOcrRetryResolved||eaglePageMatch));
   }
   function mergeInvoiceRetryCandidate(row,candidate,{preserveGeneratedReference=false}={}){
-    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','date','supplier','subtotal','vat','total','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured'];
+    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','date','supplier','subtotal','vat','vatUnverified','vatMentioned','total','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured'];
     for(const key of fields){
       if(preserveGeneratedReference&&(key==='invoiceNumber'||key==='originalInvoiceNumber'))continue;
       const value=candidate?.[key];if(value===''||value===null||value===undefined)continue;
@@ -3149,7 +3174,7 @@
     else{delete merged.ocrAmountConflicts;delete merged.ocrConflictReason;}
     return merged;
   }
-  return {extractText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
+  return {extractText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
 });
 
 
