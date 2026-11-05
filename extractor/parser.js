@@ -2685,7 +2685,7 @@
   }
   function amazonMoneyValue(value){
     let text=String(value||'').trim().replace(/^([(-]?\s*)[£€$Ee]\s*/,'$1').replace(/^[^0-9OoQqIiLl|()\-]*/,'');
-    const match=text.match(/[(-]?\s*[0-9OoQqIiLl|]{1,3}(?:[\s,.'’][0-9OoQqIiLl|]{3})*[.,]\s*[0-9OoQqIiLl|]{2}\)?/);
+    const match=text.match(/[(-]?\s*[0-9OoQqIiLl|](?:[0-9OoQqIiLl|]|[\s,.'’](?=[0-9OoQqIiLl|]))*\s*[.,]\s*[0-9OoQqIiLl|]{2}\)?/);
     if(!match)return null;
     const normalized=match[0].replace(/[OoQq]/g,'0').replace(/[IiLl|]/g,'1').replace(/[’']/g,'').replace(/\s+/g,'').replace(/,(?=\d{2}$)/,'.');
     return invoiceAmount(normalized);
