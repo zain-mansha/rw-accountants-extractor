@@ -1890,7 +1890,7 @@
     {id:'metro-bank',name:'Metro Bank',category:'Bank statements',status:'Review',description:'Column-based statements and online transaction reports with separate money out, money in and balance columns'},
     {id:'hsbc-bank',name:'HSBC',category:'Bank statements',status:'Under development',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
     ...receiptProfiles.map(({id,name,category})=>({id,name,category,status:'Under development'})),
-    ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status})=>({id,name,category:'Invoices',...(status?{status}:{})}))
+    ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status,formatTag})=>({id,name,category:'Invoices',...(status?{status}:{}),...(formatTag?{formatTag}:{})}))
   ];}
   function receiptLevenshtein(a,b){const row=Array.from({length:b.length+1},(_,i)=>i);for(let i=1;i<=a.length;i++){let previous=row[0];row[0]=i;for(let j=1;j<=b.length;j++){const current=row[j];row[j]=Math.min(row[j]+1,row[j-1]+1,previous+(a[i-1]===b[j-1]?0:1));previous=current;}}return row[b.length];}
   function receiptTotalLabel(value){const letters=String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/0/g,'O').replace(/1/g,'I');return !['TOTALS','TODAY'].includes(letters)&&letters.length>=4&&letters.length<=6&&receiptLevenshtein(letters,'TOTAL')<=2;}
@@ -2896,9 +2896,9 @@
   // document content, never just the file name, because users often rename
   // statements and batch PDFs from several suppliers together.
   const invoiceProfiles=[
-    {id:'amazon',name:'Amazon',kind:'supplier',status:'Review',detect:isAmazonInvoiceText,parse:(flat,source,lines)=>parseAmazonInvoice(flat,source,lines)},
-    {id:'kin-global',name:'Kin Global Distribution Ltd',kind:'supplier',status:'Under development',detect:isKinGlobalText,parse:(flat,source,lines)=>parseKinGlobalInvoice(flat,source,lines)},
-    {id:'km-distribution',name:'KM Distribution Centre Ltd',kind:'supplier',status:'Under development',detect:isKmDistributionText,parse:(flat,source,lines)=>parseKmDistributionInvoice(flat,source,lines)},
+    {id:'amazon',name:'Amazon',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isAmazonInvoiceText,parse:(flat,source,lines)=>parseAmazonInvoice(flat,source,lines)},
+    {id:'kin-global',name:'Kin Global Distribution Ltd',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isKinGlobalText,parse:(flat,source,lines)=>parseKinGlobalInvoice(flat,source,lines)},
+    {id:'km-distribution',name:'KM Distribution Centre Ltd',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isKmDistributionText,parse:(flat,source,lines)=>parseKmDistributionInvoice(flat,source,lines)},
     {id:'freshways',name:'Freshways',kind:'supplier',detect:isFreshwaysText,parse:(flat,source,lines)=>parseFreshwaysInvoice(flat,source,lines)},
     {id:'bestway',name:'Bestway Wholesale',kind:'supplier',detect:isBestwayText,parse:(flat,source,lines)=>parseBestwayInvoice(flat,source,lines)},
     {id:'eagle-foods',name:'Eagle Foods Ltd',kind:'supplier',status:'Under development',detect:isEagleFoodsText,parse:(flat,source,lines)=>parseEagleFoodsInvoice(flat,source,lines)},

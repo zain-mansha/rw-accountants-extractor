@@ -111,7 +111,7 @@
       if(numeric(rates.standardRate)&&Number(rates.standardRate)!==0)analysis.push({amount:Number(rates.standardRate),label:'Standard rate'});
       if(numeric(rates.zeroRate)&&Number(rates.zeroRate)!==0)analysis.push({amount:Number(rates.zeroRate),label:'Zero rate'});
       if(!analysis.length)analysis.push({amount:Math.round((total-vat)*100)/100,label:'Net'});
-      analysis.forEach(line=>{line.account=line.label==='Standard rate'||(line.label==='Net'&&vat!==0)?'Cost of Sales: Standard Rated Purchases':'Cost of Sales: Zero Rated Purchases';});
+      analysis.forEach(line=>{line.account=line.label==='Standard rate'||(line.label==='Net'&&vat!==0)?'Cost of Sales: Standard Rate Purchases':'Cost of Sales: Zero Rated Purchases';});
       const invoiceRef=invoiceNumberOf(row),documentType=typeOf(row),label=credit?'Credit note':documentType.includes('CORRECT')?'Corrected invoice':documentType==='DELIVERY NOTE'?'Delivery note':'Invoice',details=`${label} ${invoiceRef}`;
       analysis.forEach((line,index)=>output.push(index===0
         ?[credit?'PCR':'PIN','',dateOf(row),supplierOf(row),details,total,vat,line.amount,line.account,`${details} | ${line.label}`]
