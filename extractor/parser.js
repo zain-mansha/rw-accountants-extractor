@@ -2751,11 +2751,130 @@
     const complete=Boolean(number&&datePair?.value&&totalPair&&totalPair.value!==null&&vat!==null&&itemName),reason=complete?'':!number?'Amazon invoice number could not be confirmed.':!datePair?.value?'Amazon invoice date could not be confirmed.':!totalPair||totalPair.value===null?'Printed Amazon total payable could not be confirmed.':vat===null?'Printed Amazon VAT subtotal could not be confirmed.':'Amazon item description could not be confirmed.';
     return {invoiceNumber:number,originalInvoiceNumber:number,date:datePair?.value||'',supplier:'Amazon',soldBy,itemName,subtotal:'',vat:vat??'',total:totalPair?.value??'',currency:'GBP',documentType:'INVOICE',isInvoiceDocument:Boolean(number||dateLabel||pages.some(([,items])=>/amazon\.co\.uk\/contact-us/i.test(amazonPositionedText(items)))),source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:!complete,review:false,layoutId:'amazon-vat-invoice'};
   }
+  function isKinGlobalText(value){const text=String(value||'');return /\bKIN\s+GLOBAL(?:\s+DISTRIBUTION)?\s+LTD\b/i.test(text)||/\bVAT\s+INVOICE\s+\d{4}\s*[/|1]?\s*K[I1L]N\s*[/|1]\s*20\d{2}\b/i.test(text);}
+  function isKmDistributionText(value){const text=String(value||'');return /\bKM\s+DISTRIBUTION\s+CENTRE\s+LTD\b/i.test(text)||/\b(?:Invoice\s+)?\d{3,}\s*\/\s*LX\s*\/\s*\d{1,2}\s*\/\s*20\d{2}\b/i.test(text)||/\bGB\s*893651485\b/i.test(text);}
+  function kinGlobalInvoiceReference(value){
+    const text=String(value||''),matches=[...text.matchAll(/\bVAT\s+INVOICE\s+(\d{4})\s*[/|1]?\s*K[I1L]N\s*[/|1]\s*(20\d{2})\b/gi)];
+    if(!matches.length)return '';
+    const match=matches.find(item=>/page\s+\d+/i.test(text.slice(item.index||0,(item.index||0)+120)))||matches[0];
+    return `${match[1]}/KIN/${match[2]}`;
+  }
+  function kmDistributionInvoiceReference(value){
+    const match=String(value||'').match(/\b(?:Invoice\s+)?(\d{3,})\s*\/\s*LX\s*\/\s*(\d{1,2})\s*\/\s*(20\d{2})\b/i);
+    return match?`${match[1]}/LX/${String(Number(match[2])).padStart(2,'0')}/${match[3]}`:'';
+  }
+  function kinKmInvoiceNumber(value){return String(value||'').match(/^\s*(\d+)/)?.[1]?.slice(-4)||'';}
+  function kinKmMoneyValues(value){
+    const source=String(value||''),pattern=/(?:\(?-?\s*)?(?:[0-9OoQqIl|]{1,3}(?:[\s,\u00A0][0-9OoQqIl|]{3})+|[0-9OoQqIl|]+)[.,;]\s*[0-9OoQqIl|]{2}\)?/g,values=[];
+    for(const match of source.matchAll(pattern)){
+      const normalized=match[0].replace(/[OoQq]/g,'0').replace(/[Il|]/g,'1').replace(/\s+/g,' ').replace(/[;,](?=\s*\d{2}\)?$)/,'.');
+      const parsed=invoiceAmount(normalized);if(parsed!==null)values.push(parsed);
+    }
+    return values;
+  }
+  function kinKmDateValue(value){
+    const text=String(value||'').trim().replace(/[OoQq]/g,'0').replace(/[Il|]/g,'1').replace(/\b(\d)\s+(\d)(?=\s*[-/.]\s*\d{1,2}\s*[-/.]\s*20\d{2})/g,'$1$2'),candidates=[...(text.match(/\b20\d{2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}\b/g)||[]),...(text.match(/\b\d{1,2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*20\d{2}\b/g)||[])];
+    for(const candidate of candidates){const parsed=parseDate(candidate.replace(/\s+/g,''));if(parsed)return parsed;}
+    return '';
+  }
+  function kinKmLabeledValue(lines,labelPattern,parseValue,mode='row'){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),labels=items.filter(line=>labelPattern.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0));
+    for(const label of labels){
+      const text=String(label.text||''),match=text.match(labelPattern),inline=match?text.slice((match.index||0)+match[0].length).replace(/^\s*[:#.-]?\s*/,''):'';
+      const direct=parseValue(inline);if(direct!==null&&direct!==undefined&&direct!=='')return direct;
+      const lx=Number(label.x)||0,ly=Number(label.y)||0,lh=Math.max(Number(label.height)||0,1),lw=Math.max(Number(label.width)||0,text.length*8),peers=[];
+      for(const line of items){
+        if(line===label||line.page!==undefined&&label.page!==undefined&&Number(line.page)!==Number(label.page))continue;
+        const value=parseValue(line.text);if(value===null||value===undefined||value==='')continue;
+        const x=Number(line.x)||0,y=Number(line.y)||0,delta=y-ly,height=Math.max(Number(line.height)||0,lh);
+        if(mode==='below'?(delta<lh*.25||delta>lh*4.5):(Math.abs(delta)>Math.max(lh*1.3,12)))continue;
+        if(x<lx-lh*1.5||x>lx+lw+lh*20)continue;
+        peers.push({value,score:Math.abs(delta)/lh+Math.max(0,x-lx-lw)/(lh*2)});
+      }
+      peers.sort((a,b)=>a.score-b.score);if(peers.length)return peers[0].value;
+    }
+    return null;
+  }
+  function kinKmSummaryRow(lines,labelPattern){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),labels=items.filter(line=>labelPattern.test(String(line.text||''))).sort((a,b)=>(Number(b.y)||0)-(Number(a.y)||0));
+    for(const label of labels){
+      const lx=Number(label.x)||0,ly=Number(label.y)||0,lh=Math.max(Number(label.height)||0,1),lw=Math.max(Number(label.width)||0,String(label.text||'').length*8),cells=[];
+      for(const line of items){
+        if(line.page!==undefined&&label.page!==undefined&&Number(line.page)!==Number(label.page))continue;
+        const y=Number(line.y)||0,x=Number(line.x)||0,height=Math.max(Number(line.height)||0,lh);
+        if(Math.abs(y-ly)>Math.max(lh*1.3,12))continue;
+        const text=String(line.text||''),inline=line===label?text.slice((text.match(labelPattern)?.index||0)+(text.match(labelPattern)?.[0].length||0)):text;
+        if(line!==label&&x<lx+lw*.25)continue;
+        const values=kinKmMoneyValues(inline);values.forEach((value,index)=>cells.push({value,x:line===label?lx+lw+index:x+index*.01}));
+      }
+      cells.sort((a,b)=>a.x-b.x);
+      if(cells.length)return {label,values:cells.map(cell=>cell.value)};
+    }
+    return null;
+  }
+  function kinGlobalVatFromColumn(lines,totalLabel){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),page=Number(totalLabel?.page)||1,section=items.filter(line=>(Number(line.page)||1)===page&&/\bVAT\s+statement\b/i.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0))[0];
+    if(!section)return null;
+    const sh=Math.max(Number(section.height)||0,1),sx=Number(section.x)||0,sw=Math.max(Number(section.width)||0,String(section.text||'').length*8),headers=items.filter(line=>(Number(line.page)||1)===page&&/^\s*VAT\s*$/i.test(String(line.text||''))&&Math.abs((Number(line.y)||0)-(Number(section.y)||0))<=sh*1.5&&(Number(line.x)||0)>=sx+sw*.5).sort((a,b)=>(Number(a.x)||0)-(Number(b.x)||0));
+    const header=headers.at(-1);if(!header)return null;
+    const hx=Number(header.x)||0,hh=Math.max(Number(header.height)||0,1),hy=Number(totalLabel.y)||0,candidates=[];
+    for(const line of items){
+      if((Number(line.page)||1)!==page||Math.abs((Number(line.y)||0)-hy)>Math.max(hh*1.5,12))continue;
+      const x=Number(line.x)||0;if(x<hx-hh*2||x>hx+hh*7)continue;
+      for(const value of kinKmMoneyValues(line.text))candidates.push({value,score:Math.abs((x+Math.max(Number(line.width)||0,0)/2)-hx)/hh});
+    }
+    candidates.sort((a,b)=>a.score-b.score);return candidates[0]?.value??null;
+  }
+  function kinGlobalInvoiceDate(lines,flat=''){
+    const fromLabel=kinKmLabeledValue(lines,/\bdate\s+of\s+issuance\b/i,kinKmDateValue,'row');
+    if(fromLabel)return fromLabel;
+    const text=String(flat||''),match=text.match(/date\s+of\s+issuance\s*:?\s*(20\d{2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}|\d{1,2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*20\d{2})/i);
+    return match?kinKmDateValue(match[1]):'';
+  }
+  function kmDistributionInvoiceDate(lines,flat=''){
+    const fromLabel=kinKmLabeledValue(lines,/\binvoice\s+date\b/i,kinKmDateValue,'below');
+    if(fromLabel)return fromLabel;
+    const text=String(flat||''),match=text.match(/invoice\s+date\s*:?\s*(\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*20\d{2})/i);
+    return match?kinKmDateValue(match[1]):'';
+  }
+  function isKinGlobalInvoicePage(lines){const text=(lines||[]).map(line=>String(line.text||'')).join(' ');return isKinGlobalText(text)&&/\bVAT\s+INVOICE\b/i.test(text);}
+  function isKmDistributionInvoicePage(lines){const text=(lines||[]).map(line=>String(line.text||'')).join(' ');return isKmDistributionText(text)&&Boolean(kmDistributionInvoiceReference(text)||/\binvoice\s+date\b/i.test(text));}
+  function parseKinGlobalInvoice(flat,source='',ocrLines){
+    const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),text=String(flat||lines.map(line=>String(line.text||'')).join(' ')),fullNumber=kinGlobalInvoiceReference(text),number=kinKmInvoiceNumber(fullNumber),date=kinGlobalInvoiceDate(lines,text),invoiceDocument=Boolean(isKinGlobalText(text)&&/\bVAT\s+INVOICE\b/i.test(text));
+    const pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b),pageMaps=pages.map(page=>[page,lines.filter(line=>(Number(line.page)||1)===page)]),totals=[];
+    for(const [,pageLines] of pageMaps){const found=kinKmSummaryRow(pageLines,/\btotal\s*\(\s*\d+\s*items?\s*\)/i);if(found)totals.push(found);}
+    const totalRow=totals.at(-1),rowValues=totalRow?.values||[],total=rowValues.length>=3?rowValues.at(-1):kinKmLabeledValue(lines,/\bamount\s+due\b/i,value=>kinKmMoneyValues(value)[0]??null,'row'),vat=rowValues.length>=3?rowValues.at(-2):totalRow?kinGlobalVatFromColumn(lines,totalRow.label):null,complete=Boolean(invoiceDocument&&number&&date&&total!==null&&vat!==null),reason=complete?'':!invoiceDocument?'This document does not appear to be a Kin Global VAT invoice.':!number?'Kin Global invoice number could not be confirmed from the printed VAT invoice reference.':!date?'Kin Global date of issuance could not be confirmed.':total===null?'Printed Kin Global Total (items) and Amount Due could not be confirmed.':'Printed Kin Global VAT summary could not be confirmed.';
+    return {invoiceNumber:number,originalInvoiceNumber:fullNumber,date,supplier:'Kin Global Distribution Ltd',subtotal:'',vat:vat??'',total:total??'',documentType:'INVOICE',isInvoiceDocument:invoiceDocument,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(invoiceDocument&&!complete),review:false,layoutId:'kin-global-vat-statement',profileId:'kin-global'};
+  }
+  function parseKmDistributionInvoice(flat,source='',ocrLines){
+    const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),text=String(flat||lines.map(line=>String(line.text||'')).join(' ')),fullNumber=kmDistributionInvoiceReference(text),number=kinKmInvoiceNumber(fullNumber),date=kmDistributionInvoiceDate(lines,text),invoiceDocument=Boolean(isKmDistributionText(text)&&/\binvoice\b/i.test(text)),pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b),rows=[];
+    for(const page of pages){const pageLines=lines.filter(line=>(Number(line.page)||1)===page),found=kinKmSummaryRow(pageLines,/^\s*total\s*:/i);if(found)rows.push(found);}
+    const totalRow=rows.at(-1),values=totalRow?.values||[],vat=values.length>=3?values.at(-2):null,total=values.length>=3?values.at(-1):null,complete=Boolean(invoiceDocument&&number&&date&&total!==null&&vat!==null),reason=complete?'':!invoiceDocument?'This document does not appear to be a KM Distribution invoice.':!number?'KM Distribution invoice number could not be confirmed.':!date?'KM Distribution invoice date could not be confirmed.':total===null?'Printed KM Distribution Total row could not be confirmed.':'Printed KM Distribution VAT cell could not be confirmed.';
+    return {invoiceNumber:number,originalInvoiceNumber:fullNumber,date,supplier:'KM Distribution Centre Ltd',subtotal:'',vat:vat??'',total:total??'',documentType:'INVOICE',isInvoiceDocument:invoiceDocument,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(invoiceDocument&&!complete),review:false,layoutId:'km-distribution-vat-summary',profileId:'km-distribution'};
+  }
+  function parseKinKmProfileBatch(pageLines,source,profileId,options={}){
+    const pages=[...new Set(pageLines.keys())].sort((a,b)=>a-b),kin=profileId==='kin-global',isSupplier=kin?isKinGlobalText:isKmDistributionText,isInvoicePage=kin?isKinGlobalInvoicePage:isKmDistributionInvoicePage,readNumber=kin?kinGlobalInvoiceReference:kmDistributionInvoiceReference,groups=[];
+    for(const page of pages){
+      const lines=pageLines.get(page)||[],text=lines.map(line=>String(line.text||'')).join(' ');if(!isSupplier(text))continue;
+      const reference=readNumber(text),starts=kin?isInvoicePage(lines):isInvoicePage(lines)||/\binvoice\s+date\b/i.test(text),previous=groups.at(-1);
+      if(reference){if(previous&&previous.reference===reference){previous.pages.push(page);continue;}groups.push({reference,page,pages:[page]});continue;}
+      if(starts){groups.push({reference:'',page,pages:[page]});continue;}
+      if(previous)previous.pages.push(page);
+    }
+    const rows=groups.map(group=>{
+      const lines=group.pages.flatMap(page=>pageLines.get(page)||[]),text=lines.map(line=>String(line.text||'').trim()).filter(Boolean).join('\n'),row=parseInvoiceRobust(text,source,lines,options);
+      return {...row,page:group.page,sourcePages:group.pages,profileId};
+    });
+    const supplierPages=pages.filter(page=>isSupplier((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))),otherLines=[...pageLines.values()].flat().filter(line=>!supplierPages.includes(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
+    return [...otherRows,...rows].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
+  }
   // Keep supplier/document-specific parsing isolated here. Detection uses
   // document content, never just the file name, because users often rename
   // statements and batch PDFs from several suppliers together.
   const invoiceProfiles=[
     {id:'amazon',name:'Amazon',kind:'supplier',status:'Review',detect:isAmazonInvoiceText,parse:(flat,source,lines)=>parseAmazonInvoice(flat,source,lines)},
+    {id:'kin-global',name:'Kin Global Distribution Ltd',kind:'supplier',status:'Under development',detect:isKinGlobalText,parse:(flat,source,lines)=>parseKinGlobalInvoice(flat,source,lines)},
+    {id:'km-distribution',name:'KM Distribution Centre Ltd',kind:'supplier',status:'Under development',detect:isKmDistributionText,parse:(flat,source,lines)=>parseKmDistributionInvoice(flat,source,lines)},
     {id:'freshways',name:'Freshways',kind:'supplier',detect:isFreshwaysText,parse:(flat,source,lines)=>parseFreshwaysInvoice(flat,source,lines)},
     {id:'bestway',name:'Bestway Wholesale',kind:'supplier',detect:isBestwayText,parse:(flat,source,lines)=>parseBestwayInvoice(flat,source,lines)},
     {id:'eagle-foods',name:'Eagle Foods Ltd',kind:'supplier',status:'Under development',detect:isEagleFoodsText,parse:(flat,source,lines)=>parseEagleFoodsInvoice(flat,source,lines)},
@@ -2801,7 +2920,7 @@
     // explicit zero for this supplier only, so its exports never contain N/A.
     if(profile?.id==='polish-village-bread'&&row.isInvoiceDocument!==false)row.vat=0;
     row.originalInvoiceNumber=originalInvoiceNumber;
-    row.invoiceNumber=profile?.id==='amazon'?String(originalInvoiceNumber||'').replace(/[^A-Z0-9]/gi,'').toUpperCase():profile?.id==='maspo'?normalizeMaspoInvoiceNumber(originalInvoiceNumber):profile?.id==='liberty-frozen-foods'?originalInvoiceNumber:normalizeInvoiceNumber(originalInvoiceNumber);
+    row.invoiceNumber=profile?.id==='amazon'?String(originalInvoiceNumber||'').replace(/[^A-Z0-9]/gi,'').toUpperCase():['kin-global','km-distribution'].includes(profile?.id)?kinKmInvoiceNumber(originalInvoiceNumber):profile?.id==='maspo'?normalizeMaspoInvoiceNumber(originalInvoiceNumber):profile?.id==='liberty-frozen-foods'?originalInvoiceNumber:normalizeInvoiceNumber(originalInvoiceNumber);
     if(row.subtotal===null||row.subtotal===undefined)row.subtotal='';
     if(row.vat===null||row.vat===undefined)row.vat='';
     // Only an explicitly configured supplier profile is allowed to accept a
@@ -2822,6 +2941,10 @@
     if(!lines.length){if(/\bE\s*\.?\s*P\s*\.?\s*A\s*\.?\s*FOODS?\s+LTD\b|\bEPA\s+FOODS\b/i.test(String(text||'')))return [];if(isEagleFoodsText(text)&&isEagleNonInvoicePage(text)&&!eagleInvoicePage([],text))return [];if(isIsaacWholesaleText(text)&&isaacSummaryPage([{text:String(text||'')}])&&!isaacInvoicePageText(text))return [];const row=parseInvoiceRobust(text,source,undefined,options);row.profileId=identifyInvoiceProfile(text)?.id||'generic';return row.profileId==='isaac-wholesale'&&!row.isInvoiceDocument?[]:disambiguateGeneratedShahidReferences([row]);}
     const pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b);
     const pageLines=new Map(pages.map(page=>[page,lines.filter(line=>(Number(line.page)||1)===page).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0))]));
+    const kinPages=pages.filter(page=>isKinGlobalText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
+    if(kinPages.length)return parseKinKmProfileBatch(new Map(kinPages.map(page=>[page,pageLines.get(page)])),source,'kin-global',options);
+    const kmPages=pages.filter(page=>isKmDistributionText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
+    if(kmPages.length)return parseKinKmProfileBatch(new Map(kmPages.map(page=>[page,pageLines.get(page)])),source,'km-distribution',options);
     const amazonPages=pages.filter(page=>isAmazonInvoiceText(amazonPositionedText(pageLines.get(page))));
     if(amazonPages.length){
       const groups=[];

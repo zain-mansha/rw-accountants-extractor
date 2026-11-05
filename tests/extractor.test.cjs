@@ -31,7 +31,9 @@ test('bank review and both bank workbook sheets link transactions to their PDF p
   const app=fs.readFileSync(path.join(__dirname,'..','extractor','app.js'),'utf8');
   const html=fs.readFileSync(path.join(__dirname,'..','extractor','index.html'),'utf8');
   assert.match(app,/<th>Source<\/th><th>PDF \/ page<\/th><th>Review<\/th>/);
-  assert.ok(app.includes("bankHeaders=['Date','Details','Receipt','Payment','Balance','Source file','Page','Confidence','Review','PDF / page']"));
+  assert.ok(app.includes("bankHeaders=['Date','Type','Details','Receipt','Payment','Balance','Source file','Page','Confidence','Review','PDF / page']"));
+  assert.match(app,/bankDetails=row=>\{const details=String\(row\.details\|\|''\),type=String\(row\.type\|\|''\)/);
+  assert.match(app,/encode_cell\(\{r:index\+1,c:10\}\)/);
   assert.match(app,/addBankPageLinks\(ws,bankSourceRows\)/);
   assert.match(app,/addBankPageLinks\(rejectedSheet,rejectedRows\)/);
   assert.match(app,/pdfPageTarget\(row\.sourcePath,row\.page\)/);
@@ -60,7 +62,7 @@ test('bank CSV import detects semicolon exports and signed amount columns',()=>{
 });
 test('invoice PDF text extracts number, date, supplier, VAT and total',async()=>{const r=await P.parsePdf(pdf('(ACME MOTORS) Tj (Invoice number: AM-1042) Tj (Invoice date: 11/11/2026) Tj (Subtotal: £100.00) Tj (VAT: £20.00) Tj (Total due: £120.00) Tj'),'invoice','invoice.pdf');assert.equal(r.invoice.invoiceNumber,'1042');assert.equal(r.invoice.date,'2026-11-11');assert.equal(r.invoice.vat,20);assert.equal(r.invoice.total,120);assert.equal(r.invoice.subtotal,100);});
 test('image-only PDF is reported without invented values',async()=>{const r=await P.parsePdf(pdf(''), 'invoice','scan.pdf');assert.equal(r.info.hasText,false);assert.equal(r.invoice.status,'REJECTED');assert.equal(r.invoice.total,'');});
-test('invoice profiles identify supplier-specific and generic document formats',()=>{assert.equal(P.identifyInvoiceProfile('MARION TRADING LTD Invoice No 10445946').id,'marion-trading');assert.equal(P.identifyInvoiceProfile('MONOLITH (UK) LTD AUTO INVOICE - A 310642').id,'monolith');assert.equal(P.identifyInvoiceProfile('Peterborough Bazaar Limited Invoice No 0279659 VAT NO 104 2318 66').id,'peterborough-bazaar');assert.equal(P.identifyInvoiceProfile('Deens produce Ltd VAT number-354695660 Invoice No: 36163').id,'deens-produce');assert.equal(P.identifyInvoiceProfile('LIBERTY Frozen Foods MAP-210726-1').id,'liberty-frozen-foods');assert.equal(P.identifyInvoiceProfile('DAIRY FRESH LTD VAT Reg: GB1408634-22 Order Invoice').id,'dairy-fresh');assert.equal(P.identifyInvoiceProfile('SHAHD HALAL POULTRY LTD VAT No 159 5722 76').id,'shahid-halal-poultry');assert.equal(P.identifyInvoiceProfile('MASPO LTD Invoice number 123-AB/02/2026').id,'maspo');assert.equal(P.identifyInvoiceProfile('Polish Village Bread LTD DELIVERY 666715/MAG/2026').id,'polish-village-bread');assert.equal(P.identifyInvoiceProfile('DELIVERY 666715/MAG/2026 Issued baskets').id,'wz-delivery');assert.equal(P.identifyInvoiceProfile('Bestway Wholesale Invoice No. 262484240').id,'bestway');assert.equal(P.identifyInvoiceProfile('ISAAC WHOLESALE LTD Invoice No Sl-020056').id,'isaac-wholesale');assert.equal(P.identifyInvoiceProfile('EAGLEFOODS Invoice To: Customer Invoice No 143871').id,'eagle-foods');assert.equal(P.identifyInvoiceProfile('Acme Motors Invoice 1042').id,'generic');assert.ok(P.compatibleCompanies.some(company=>company.id==='eagle-foods'&&company.name==='Eagle Foods Ltd'&&company.category==='Invoices'&&company.status==='Under development'));assert.ok(P.compatibleCompanies.some(company=>company.id==='isaac-wholesale'&&company.name==='Isaac Wholesale Ltd'&&company.category==='Invoices'));assert.deepEqual(P.invoiceProfiles.map(profile=>profile.id),['freshways','bestway','eagle-foods','shahid-halal-poultry','marion-trading','monolith','peterborough-bazaar','parkers','deens-produce','liberty-frozen-foods','isaac-wholesale','dairy-fresh','maspo','polish-village-bread','wz-delivery','generic']);});
+test('invoice profiles identify supplier-specific and generic document formats',()=>{assert.equal(P.identifyInvoiceProfile('MARION TRADING LTD Invoice No 10445946').id,'marion-trading');assert.equal(P.identifyInvoiceProfile('MONOLITH (UK) LTD AUTO INVOICE - A 310642').id,'monolith');assert.equal(P.identifyInvoiceProfile('Peterborough Bazaar Limited Invoice No 0279659 VAT NO 104 2318 66').id,'peterborough-bazaar');assert.equal(P.identifyInvoiceProfile('Deens produce Ltd VAT number-354695660 Invoice No: 36163').id,'deens-produce');assert.equal(P.identifyInvoiceProfile('LIBERTY Frozen Foods MAP-210726-1').id,'liberty-frozen-foods');assert.equal(P.identifyInvoiceProfile('DAIRY FRESH LTD VAT Reg: GB1408634-22 Order Invoice').id,'dairy-fresh');assert.equal(P.identifyInvoiceProfile('SHAHD HALAL POULTRY LTD VAT No 159 5722 76').id,'shahid-halal-poultry');assert.equal(P.identifyInvoiceProfile('MASPO LTD Invoice number 123-AB/02/2026').id,'maspo');assert.equal(P.identifyInvoiceProfile('Polish Village Bread LTD DELIVERY 666715/MAG/2026').id,'polish-village-bread');assert.equal(P.identifyInvoiceProfile('DELIVERY 666715/MAG/2026 Issued baskets').id,'wz-delivery');assert.equal(P.identifyInvoiceProfile('Bestway Wholesale Invoice No. 262484240').id,'bestway');assert.equal(P.identifyInvoiceProfile('ISAAC WHOLESALE LTD Invoice No Sl-020056').id,'isaac-wholesale');assert.equal(P.identifyInvoiceProfile('KIN GLOBAL DISTRIBUTION LTD VAT INVOICE 3685/KIN/2026').id,'kin-global');assert.equal(P.identifyInvoiceProfile('KM Distribution Centre Ltd Invoice 6956/LX/09/2026').id,'km-distribution');assert.equal(P.identifyInvoiceProfile('EAGLEFOODS Invoice To: Customer Invoice No 143871').id,'eagle-foods');assert.equal(P.identifyInvoiceProfile('Acme Motors Invoice 1042').id,'generic');assert.ok(P.compatibleCompanies.some(company=>company.id==='eagle-foods'&&company.name==='Eagle Foods Ltd'&&company.category==='Invoices'&&company.status==='Under development'));assert.ok(P.compatibleCompanies.some(company=>company.id==='isaac-wholesale'&&company.name==='Isaac Wholesale Ltd'&&company.category==='Invoices'));assert.ok(P.compatibleCompanies.some(company=>company.id==='amazon'&&company.status==='Review'));assert.ok(P.compatibleCompanies.some(company=>company.id==='kin-global'&&company.name==='Kin Global Distribution Ltd'&&company.category==='Invoices'&&company.status==='Under development'));assert.ok(P.compatibleCompanies.some(company=>company.id==='km-distribution'&&company.name==='KM Distribution Centre Ltd'&&company.category==='Invoices'&&company.status==='Under development'));assert.deepEqual(P.invoiceProfiles.map(profile=>profile.id),['amazon','kin-global','km-distribution','freshways','bestway','eagle-foods','shahid-halal-poultry','marion-trading','monolith','peterborough-bazaar','parkers','deens-produce','liberty-frozen-foods','isaac-wholesale','dairy-fresh','maspo','polish-village-bread','wz-delivery','generic']);});
 test('Parkers profile reads invoice identity and printed footer cells without using VAT rate or item prices',()=>{
   const line=(page,text,x,y,width=String(text).length*9,height=20)=>({page,text,x,y,width,height,confidence:1});
   const invoice=(page=1,changes={})=>[
@@ -90,7 +92,7 @@ test('Parkers profile reads invoice identity and printed footer cells without us
 });
 test('Parkers is a recognized supplier profile with the remaining invoice suppliers',()=>{
   assert.equal(P.identifyInvoiceProfile('PARKERS Invoice Tax Point Document No 81N234558').id,'parkers');
-  assert.deepEqual(P.invoiceProfiles.map(profile=>profile.id),['freshways','bestway','eagle-foods','shahid-halal-poultry','marion-trading','monolith','peterborough-bazaar','parkers','deens-produce','liberty-frozen-foods','isaac-wholesale','dairy-fresh','maspo','polish-village-bread','wz-delivery','generic']);
+  assert.deepEqual(P.invoiceProfiles.map(profile=>profile.id),['amazon','kin-global','km-distribution','freshways','bestway','eagle-foods','shahid-halal-poultry','marion-trading','monolith','peterborough-bazaar','parkers','deens-produce','liberty-frozen-foods','isaac-wholesale','dairy-fresh','maspo','polish-village-bread','wz-delivery','generic']);
 });
 test('Eagle Foods uses invoice pages only and statement rows only confirm existing invoice pages',()=>{
   const line=(page,text,x,y,width=String(text).length*9)=>({page,text,x,y,width,height:20,confidence:1});
@@ -1107,7 +1109,29 @@ test('an unreadable amount rejects every transaction in its unverified balance i
   assert.equal(rows[2].include,undefined);
   assert.match(rows[2].rejectedReason,/interval .* contains an unreadable transaction amount/i);
 });
-test('compatible formats list the supported Monzo, Barclays, Metro Bank and HSBC statement layouts',()=>{const banks=P.compatibleCompanies.filter(company=>company.category==='Bank statements');assert.deepEqual(banks.map(company=>company.name),['Monzo','Barclays','Metro Bank','HSBC']);assert.match(banks[0].description,/ISO dates/);assert.match(banks[1].description,/OCR-supported/);assert.match(banks[2].description,/money out, money in and balance columns/);assert.match(banks[3].description,/paid out, paid in and balance columns/);});
+test('compatible formats list the supported SumUp, Monzo, Barclays, Metro Bank and HSBC statement layouts',()=>{const banks=P.compatibleCompanies.filter(company=>company.category==='Bank statements');assert.deepEqual(banks.map(company=>company.name),['SumUp','Monzo','Barclays','Metro Bank','HSBC']);assert.match(banks[0].description,/content-detected Date, Reference, Type, Amount and Description columns/);assert.match(banks[1].description,/ISO dates/);assert.match(banks[2].description,/OCR-supported/);assert.match(banks[3].description,/money out, money in and balance columns/);assert.match(banks[4].description,/paid out, paid in and balance columns/);});
+test('SumUp OCR follows table headings on shifted pages and gets direction from the transaction type',()=>{
+  const header=(page,y,xs)=>[
+    {page,text:'Date',x:xs[0],y,width:50,height:20},{page,text:'Reference',x:xs[1],y,width:90,height:20},{page,text:'Type',x:xs[2],y,width:110,height:20},{page,text:'Amount',x:xs[3],y,width:90,height:20},{page,text:'Description',x:xs[4],y,width:130,height:20}
+  ];
+  const lines=[
+    {page:1,text:'SumUp Account Statement',x:30,y:20},...header(1,100,[20,120,280,470,620]),
+    {page:1,text:'30/04/2026',x:25,y:150,width:80,height:20},{page:1,text:'ABC123',x:120,y:150,width:70,height:20},{page:1,text:'Incoming Transfer',x:280,y:150,width:145,height:20},{page:1,text:'-E12.34',x:485,y:150,width:70,height:20},{page:1,text:'+E13.34',x:485,y:150,width:80,height:20,sumupFocused:true},{page:1,text:'CLIENT PAYMENT',x:620,y:150,width:180,height:20},
+    {page:1,text:'29/04/2026',x:25,y:230,width:80,height:20},{page:1,text:'XYZ789',x:120,y:230,width:70,height:20},{page:1,text:'Card Payment',x:280,y:230,width:120,height:20},{page:1,text:'+E45.60',x:485,y:230,width:80,height:20},{page:1,text:'SHOP PURCHASE',x:620,y:230,width:180,height:20},
+    ...header(2,80,[100,300,510,730,930]),
+    {page:2,text:'28/04/2026',x:105,y:130,width:80,height:20},{page:2,text:'LMN456',x:300,y:130,width:70,height:20},{page:2,text:'Outgoing Transfer',x:510,y:130,width:145,height:20},{page:2,text:'-E50.00',x:745,y:130,width:80,height:20},{page:2,text:'SUPPLIER PAYMENT',x:930,y:130,width:190,height:20}
+  ];
+  const rows=P.parseOcrBank(lines,'SumUp Account Statement','sample.pdf');
+  assert.equal(rows.length,3);assert.deepEqual(rows.map(row=>[row.date,row.reference,row.type,row.amount,row.status,row.profileId]),[['2026-04-30','ABC123','Incoming Transfer',13.34,'REJECTED','sumup-bank'],['2026-04-29','XYZ789','Card Payment',-45.6,'ACCEPTED','sumup-bank'],['2026-04-28','LMN456','Outgoing Transfer',-50,'ACCEPTED','sumup-bank']]);
+  assert.equal(rows[0].sumupAmountConflict,true);assert.match(rows[0].rejectedReason,/higher-resolution check/i);
+  assert.equal(P.resolveSumUpAmount(rows[0],12.34).amount,12.34);assert.equal(P.resolveSumUpAmount(rows[0],12.34).status,'ACCEPTED');
+  const unresolved=P.resolveSumUpAmount(rows[0],14.34);assert.equal(unresolved.amount,'');assert.equal(unresolved.status,'REJECTED');
+});
+test('SumUp empty statement pages are recognized without inventing transactions',()=>{
+  const lines=[{page:1,text:'SumUp Account Statement',x:20,y:20},{page:1,text:'Date',x:20,y:100,width:50,height:20},{page:1,text:'Reference',x:120,y:100,width:90,height:20},{page:1,text:'Type',x:280,y:100,width:110,height:20},{page:1,text:'Amount',x:470,y:100,width:90,height:20},{page:1,text:'Description',x:620,y:100,width:130,height:20}];
+  assert.deepEqual(P.parseOcrBank(lines,'SumUp Account Statement','empty.pdf'),[]);
+  assert.deepEqual(P.parseOcrBank(lines,'','C:\\Statements\\Sum-UP\\empty.pdf'),[]);
+});
 test('HSBC OCR follows labelled columns and carries a date across a page break',()=>{
   const lines=[
     {page:1,text:'HSBC',x:20,y:10},
@@ -1565,6 +1589,35 @@ test('Isaac Wholesale uses relative footer labels, ignores account balances and 
   assert.equal(rejected.status,'REJECTED');assert.equal(rejected.total,'','the account balance must never be substituted for a missing invoice total');
   const summary=[line(3,'Isaac Wholesale Ltd',100,20),line(3,'Invoice Summary',100,80),line(3,'INVOICE 1: 3,394.73',500,300),line(3,'SOLD 1744.87',500,340),line(3,'BALANCE 7599.81',500,380)];
   assert.deepEqual(P.parseInvoiceBatch(summary.map(item=>item.text).join('\n'),'renamed.pdf',summary),[],'summary pages must not create invoice records');
+});
+test('Kin Global groups continuation pages and reads its printed total and zero VAT from the VAT statement',()=>{
+  const line=(page,text,x,y,width=String(text).length*8,height=20)=>({page,text,x,y,width,height,confidence:1});
+  const pages=[
+    [line(1,'KIN GLOBAL DISTRIBUTION LTD',80,20),line(1,'VAT INVOICE 3685/KIN/2026, Page 1 z 2',1100,1900),line(1,'VAT INVOICE 3685/KIN/2026',80,80),line(1,'Date of issuance',900,180,145,20),line(1,'06.07.2026',1230,180,96,18)],
+    [line(2,'KIN GLOBAL DISTRIBUTION LTD',80,20),line(2,'VAT INVOICE 3685/KIN/2026, Page 2 z 2',1100,1900),line(2,'VAT statement',600,200),line(2,'VAT',900,200,30,18),line(2,'Total (52 Item)',400,300,125,20),line(2,'2 297,63',700,302),line(2,'o,oo',900,302),line(2,'2 297,63',1100,302),line(2,'AMOUNT DUE',80,380),line(2,'2 297,63 GBP',430,380)]
+  ],parse=items=>P.parseInvoiceBatch(items.flat().map(item=>item.text).join('\n'),'renamed.pdf',items.flat()),[row]=parse(pages);
+  assert.deepEqual([row.profileId,row.invoiceNumber,row.originalInvoiceNumber,row.date,row.supplier,row.vat,row.total,row.status,row.sourcePages],['kin-global','3685','3685/KIN/2026','2026-07-06','Kin Global Distribution Ltd',0,2297.63,'ACCEPTED',[1,2]]);
+  const moved=pages.flat().map(item=>({...item,x:item.x*1.8+347,y:item.y*1.8+211,width:item.width*1.8,height:item.height*1.8})),[shifted]=parse([moved]);
+  assert.deepEqual([shifted.invoiceNumber,shifted.date,shifted.vat,shifted.total,shifted.status],['3685','2026-07-06',0,2297.63,'ACCEPTED'],'field labels and summary columns continue to work when the scan shifts or scales');
+  const missing=pages.flat().filter(item=>item.text!=='o,oo'),[rejected]=parse([missing]);
+  assert.deepEqual([rejected.vat,rejected.status,rejected.retryOcr],['','REJECTED',true],'a missing printed VAT value stays rejected for OCR retry instead of being inferred');
+});
+test('KM Distribution groups pages and reads the mixed-rate VAT and gross from the printed Total row',()=>{
+  const line=(page,text,x,y,width=String(text).length*8,height=20)=>({page,text,x,y,width,height,confidence:1}),
+  make=(number,date,net,vat,gross,pages=2)=>[
+    [line(1,'KM Distribution Centre Ltd',80,20),line(1,`Invoice ${number}`,700,80),line(1,'Invoice date:',900,120),line(1,date,920,168),line(1,`Invoice ${number}`,900,1900)],
+    [line(2,'KM Distribution Centre Ltd',80,20),line(2,`Invoice ${number}`,900,1900),line(2,'VAT',700,100),line(2,'Total:',600,250,70,20),line(2,net,800,252),line(2,vat,1000,252),line(2,gross,1200,252)]
+  ],parse=items=>P.parseInvoiceBatch(items.flat().map(item=>item.text).join('\n'),'renamed.pdf',items.flat());
+  const zeroPages=make('6956/LX/09/2026','12.09.2026','15,60','o,oo','15,60'),[zero]=parse(zeroPages);
+  assert.deepEqual([zero.profileId,zero.invoiceNumber,zero.originalInvoiceNumber,zero.date,zero.supplier,zero.vat,zero.total,zero.status,zero.sourcePages],['km-distribution','6956','6956/LX/09/2026','2026-09-12','KM Distribution Centre Ltd',0,15.6,'ACCEPTED',[1,2]]);
+  const mixed=make('7691/LX/10/2026','04.10.2026','3 597,95','36,86','3 634,81'),[row]=parse(mixed);
+  assert.deepEqual([row.invoiceNumber,row.date,row.vat,row.total,row.status],['7691','2026-10-04',36.86,3634.81,'ACCEPTED']);
+  const splitDay=make('5280/LX/07/2026','1 1.07.2026','3 463,45','143,99','3 607,44'),[splitDate]=parse(splitDay);
+  assert.equal(splitDate.date,'2026-07-11','a space inserted between the two OCR-read day digits must not lose the second digit');
+  const moved=mixed.flat().map(item=>({...item,x:item.x*1.6+520,y:item.y*1.6+160,width:item.width*1.6,height:item.height*1.6})),[shifted]=parse([moved]);
+  assert.deepEqual([shifted.invoiceNumber,shifted.date,shifted.vat,shifted.total,shifted.status],['7691','2026-10-04',36.86,3634.81,'ACCEPTED'],'relative invoice labels and row alignment survive a different scan scale and offset');
+  const missing=mixed.flat().filter(item=>item.text!=='36,86'),[rejected]=parse([missing]);
+  assert.deepEqual([rejected.vat,rejected.status,rejected.retryOcr],['','REJECTED',true],'an unreadable VAT cell is never calculated from the gross');
 });
 test('Isaac Wholesale OCR sample extracts every printed invoice footer once',{skip:process.env.CLEARCOUNT_RUN_ISAAC_OCR!=='1'||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/Isaac Wholesale/Isaac Wholesale.pdf'))},()=>{
   const fixture=path.resolve(__dirname,'../samples/extractor/Invoices/Isaac Wholesale/Isaac Wholesale.pdf'),helper=path.resolve(__dirname,'../extractor/ocr-helper.ps1'),raw=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',fixture,'-Scale','2.5'],{encoding:'utf8',windowsHide:true,maxBuffer:60*1024*1024}),pages=raw.split(/\r?\n/).filter(item=>item.startsWith('PAGE:')).map(item=>JSON.parse(item.slice(5))),lines=pages.flatMap(page=>page.lines||[]),rows=P.parseInvoiceBatch(pages.map(page=>page.text||'').join('\n'),fixture,lines),expected=[[1,'0056','2026-09-01',56.38,338.30],[2,'9758','2026-08-29',0,53.16],[3,'8841','2026-08-22',0,25.12],[4,'4554','2026-10-06',48.71,292.27],[5,'7503','2026-08-13',42.51,304.52],[6,'8593','2026-08-20',40.80,299.06],[7,'4456','2026-07-21',62.37,374.23]];
