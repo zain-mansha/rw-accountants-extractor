@@ -9,6 +9,7 @@
     invoiceNumber:['invoicenumber','invoiceno','invoicereference','refno','reference'],
     date:['invoicedate','date'],
     supplier:['supplier','suppliername','account','company','payee'],
+    itemName:['itemname','item','description','productdescription'],
     vat:['vat','vatamount','tax'],
     total:['total','gross','grossamount','invoicetotal'],
     status:['status','result'],
@@ -80,7 +81,7 @@
       if(Object.values(values).every(value=>value===null||value===undefined||String(value).trim()===''))continue;
       const total=money(values.total),documentType=String(values.documentType||(receiptTable?'RECEIPT':'INVOICE')).trim().toUpperCase(),reason=String(values.reason||'').trim(),isFuelReceipt=documentType.includes('RECEIPT')||receiptTable,fuelAmount=columns.fuelAmount>=0?money(values.fuelAmount):isFuelReceipt?total:null,otherAmount=money(values.otherAmount),handling=String(values.handling||'').trim().toLowerCase(),vatSplit=/^(?:yes|true|1)$/i.test(String(values.vatSplit||'').trim());
       const row={
-        invoiceNumber:String(values.invoiceNumber??'').trim(),date:date(values.date),supplier:String(values.supplier??'').trim(),
+        invoiceNumber:String(values.invoiceNumber??'').trim(),date:date(values.date),supplier:String(values.supplier??'').trim(),itemName:String(values.itemName??'').trim(),
         vat:columns.vat>=0?money(values.vat):isFuelReceipt?0:null,total,fuelAmount,otherAmount,drawingsAmount:columns.drawingsAmount>=0?money(values.drawingsAmount):handling==='taxi-driver'?otherAmount:null,handling,vatSplit,
         standardRate:money(values.standardRate),zeroRate:money(values.zeroRate),isFuelReceipt,
         status:status(values.status,documentType),documentType,

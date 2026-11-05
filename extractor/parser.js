@@ -1010,7 +1010,7 @@
         target.accepted=Boolean(!target.unconfiguredSupplier&&target.invoiceNumber&&target.date&&target.supplier&&Number.isFinite(Number(target.total))&&Number.isFinite(Number(target.vat)));
         target.rejected=!target.accepted;target.status=target.accepted?'ACCEPTED':'REJECTED';
         if(target.accepted)target.rejectedReason='';
-        else if(target.unconfiguredSupplier)target.rejectedReason='Supplier profile is not set up. All invoices from this supplier are rejected until a supplier profile is configured.';
+        else if(target.unconfiguredSupplier)target.rejectedReason='Supplier not recognised or configured. This invoice is rejected until a supplier profile is configured.';
         target.correctionReference=[previousReference,reference].filter(Boolean).join('; ');
         target.correctedTotal=revisedTotal;
         target.correctedVat=revisedVat;
@@ -2667,10 +2667,95 @@
       return {...row,page:group.page,sourcePages:group.pages};
     });
   }
+  function amazonPositionedText(items){return (items||[]).map(line=>String(line?.text||'').trim()).filter(Boolean).join(' ');}
+  function isAmazonInvoiceText(value){
+    const text=String(value||'');
+    const amazonMarker=/\bAmazon\b/i.test(text)||/amazon\.co\.uk\/contact-us/i.test(text),invoiceHeader=/\bInvoice\s*#/i.test(text),amountSection=/\b(?:Total\s+payable|VAT\s+subtotal|Invoice\s+date\s*\/\s*Delivery\s+date)\b/i.test(text);
+    return amazonMarker&&invoiceHeader&&amountSection;
+  }
+  function amazonInvoiceId(items){
+    const labels=(items||[]).filter(line=>/\binvoice\s*#/i.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0));
+    for(const label of labels){
+      const inline=String(label.text||'').match(/\binvoice\s*#\s*(GB[A-Z0-9]{7,})/i);
+      if(inline){const value=inline[1].replace(/[^A-Z0-9]/gi,'').toUpperCase();if(value.length>=9)return value;}
+      const sameRow=(items||[]).filter(line=>line!==label&&Number(line.x)>=Number(label.x||0)+Math.max(8,Number(label.width||0)*.35)&&Math.abs(Number(line.y||0)-Number(label.y||0))<=Math.max(20,Number(label.height||18)*1.1)).map(line=>({line,value:String(line.text||'').replace(/[^A-Z0-9]/gi,'').toUpperCase()})).filter(item=>/^GB[A-Z0-9]{7,}$/i.test(item.value)).sort((a,b)=>Number(a.line.x)-Number(b.line.x));
+      if(sameRow.length)return sameRow[0].value;
+    }
+    return '';
+  }
+  function amazonMoneyValue(value){
+    let text=String(value||'').trim().replace(/^([(-]?\s*)[£€$Ee]\s*/,'$1').replace(/^[^0-9OoQqIiLl|()\-]*/,'');
+    const match=text.match(/[(-]?\s*[0-9OoQqIiLl|]{1,3}(?:[\s,.'’][0-9OoQqIiLl|]{3})*[.,]\s*[0-9OoQqIiLl|]{2}\)?/);
+    if(!match)return null;
+    const normalized=match[0].replace(/[OoQq]/g,'0').replace(/[IiLl|]/g,'1').replace(/[’']/g,'').replace(/\s+/g,'').replace(/,(?=\d{2}$)/,'.');
+    return invoiceAmount(normalized);
+  }
+  function amazonDateValue(value){
+    const text=String(value||'').trim(),formats=[text,...(text.match(/\b\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{4}\b/gi)||[]),...(text.match(/\b\d{1,2}[./-]\d{1,2}[./-]\d{4}\b/g)||[])];
+    for(const candidate of formats){const parsed=parseDate(candidate);if(parsed)return parsed;}
+    return '';
+  }
+  function amazonValueBesideLabel(items,label,kind='money'){
+    const labelText=String(label?.text||''),pattern=kind==='date'?/invoice\s+date\s*\/\s*delivery\s+date/i:/total\s+payable/i,match=labelText.match(pattern);
+    if(match){const inline=labelText.slice(match.index+match[0].length),value=kind==='date'?amazonDateValue(inline):amazonMoneyValue(inline);if(value!==''&&value!==null)return {value,line:label};}
+    const minX=Number(label?.x||0)+Math.max(4,Number(label?.width||0)*.35),tolerance=Math.max(22,Number(label?.height||18)*1.15),peers=(items||[]).filter(line=>line!==label&&Number(line.x||0)>=minX&&Math.abs(Number(line.y||0)-Number(label.y||0))<=tolerance).map(line=>({line,value:kind==='date'?amazonDateValue(line.text):amazonMoneyValue(line.text)})).filter(item=>item.value!==''&&item.value!==null).sort((a,b)=>Math.abs(Number(a.line.y)-Number(label.y))-Math.abs(Number(b.line.y)-Number(label.y))||Number(a.line.x)-Number(b.line.x));
+    return peers[0]||null;
+  }
+  function amazonVatSubtotal(pages){
+    const candidates=[];
+    for(const [page,items] of pages){
+      for(const label of items.filter(line=>/\bVAT\s+subtotal\b/i.test(String(line.text||'')))){
+        const threshold=Number(label.x||0)+Math.max(Number(label.width||0)*.75,12),rowTolerance=Math.max(18,Number(label.height||18)*.85),totalRows=items.filter(line=>/^\s*total\s*$/i.test(String(line.text||''))&&Number(line.y)>Number(label.y)+rowTolerance/2).sort((a,b)=>Number(a.y)-Number(b.y));
+        for(const totalRow of totalRows){
+          const values=items.filter(line=>line!==label&&Number(line.x||0)>=threshold&&Math.abs(Number(line.y||0)-Number(totalRow.y||0))<=rowTolerance).map(line=>({line,value:amazonMoneyValue(line.text)})).filter(item=>item.value!==null).sort((a,b)=>Number(b.line.x)-Number(a.line.x));
+          if(values.length)candidates.push({page,y:Number(totalRow.y)||0,value:values[0].value});
+        }
+        if(!totalRows.length){
+          const values=items.filter(line=>line!==label&&Number(line.x||0)>=threshold&&Number(line.y)>Number(label.y)&&Number(line.y)<=Number(label.y)+420).map(line=>({line,value:amazonMoneyValue(line.text)})).filter(item=>item.value!==null).sort((a,b)=>Number(a.line.y)-Number(b.line.y));
+          if(values.length)candidates.push({page,y:Number(values.at(-1).line.y)||0,value:values.at(-1).value});
+        }
+      }
+    }
+    return candidates.sort((a,b)=>a.page-b.page||a.y-b.y).at(-1)?.value??null;
+  }
+  function amazonItemNames(pages){
+    const names=[];
+    const flush=current=>{
+      if(!current.length)return;
+      const name=current.map(line=>String(line.text||'').trim()).join(' ').replace(/\s+/g,' ').replace(/\s*(?:\||\bI)\s*B[A-Z0-9]{9}\b.*$/i,'').replace(/\s*ASIN\s*:.*$/i,'').replace(/^[A-Z0-9._-]{3,}@,\s*/i,'').replace(/\s+/g,' ').trim();
+      if(name&&/[A-Za-z]{3}/.test(name)&&!names.some(value=>value.toLocaleLowerCase('en-GB')===name.toLocaleLowerCase('en-GB')))names.push(name);
+      current.length=0;
+    };
+    for(const [,items] of pages){
+      const headers=items.filter(line=>/^\s*description\s*$/i.test(String(line.text||'')));
+      for(const header of headers){
+        const qty=items.filter(line=>/^\s*(?:qty|quantity)\s*$/i.test(String(line.text||''))&&Number(line.x)>Number(header.x||0)&&Math.abs(Number(line.y||0)-Number(header.y||0))<=Math.max(34,Number(header.height||18)*1.4)).sort((a,b)=>Number(a.x)-Number(b.x))[0];
+        if(!qty)continue;
+        const stop=items.filter(line=>Number(line.y)>Number(header.y)&&Number(line.x)<Number(qty.x)&&/^(?:shipping\s+charges?|promotions?|discounts?)\b/i.test(String(line.text||'').trim())).sort((a,b)=>Number(a.y)-Number(b.y))[0],endY=Number(stop?.y??Infinity),descriptionLines=items.filter(line=>Number(line.y)>Number(header.y)+Math.max(2,Number(header.height||18)*.15)&&Number(line.y)<endY&&Number(line.x)<Number(qty.x)&&Number(line.x)>=Number(header.x||0)-Math.max(20,Number(header.width||0)*.2)).sort((a,b)=>Number(a.y)-Number(b.y)||Number(a.x)-Number(b.x));
+        const current=[];let lastY=null;
+        for(const line of descriptionLines){
+          const text=String(line.text||'').trim();if(!text)continue;
+          if(/\bASIN\s*:/i.test(text)){flush(current);lastY=Number(line.y)||lastY;continue;}
+          if(/^(?:B[A-Z0-9]{9}|[A-Z0-9]{10})$/i.test(text))continue;
+          if(/^(?:unit\s+price|vat\s+rate|item\s+subtotal|invoice\s+total|total\s+payable|qty|quantity)\b/i.test(text))continue;
+          if(lastY!==null&&current.length&&Number(line.y)-lastY>Math.max(90,Number(line.height||18)*3.5))flush(current);
+          current.push(line);lastY=Number(line.y)||lastY;
+        }
+        flush(current);
+      }
+    }
+    return names.join('; ');
+  }
+  function parseAmazonInvoice(text,source='',ocrLines){
+    const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()).map(line=>({...line,page:Number(line.page)||1,x:Number(line.x)||0,y:Number(line.y)||0,width:Number(line.width)||0,height:Number(line.height)||0})),pages=[...new Set(lines.map(line=>line.page))].sort((a,b)=>a-b).map(page=>[page,lines.filter(line=>line.page===page).sort((a,b)=>a.y-b.y||a.x-b.x)]),firstPage=pages[0]?.[1]||[],number=pages.map(([,items])=>amazonInvoiceId(items)).find(Boolean)||'',invoiceLabel=firstPage.filter(line=>/\binvoice\s*#/i.test(String(line.text||''))).sort((a,b)=>a.y-b.y)[0],dateLabel=firstPage.filter(line=>/invoice\s+date\s*\/\s*delivery\s+date/i.test(String(line.text||''))).sort((a,b)=>a.y-b.y)[0],datePair=dateLabel?amazonValueBesideLabel(firstPage,dateLabel,'date'):null,totalLabels=firstPage.filter(line=>/\btotal\s+payable\b/i.test(String(line.text||''))).sort((a,b)=>Math.abs(Number(a.y)-Number(invoiceLabel?.y||0))-Math.abs(Number(b.y)-Number(invoiceLabel?.y||0))),totalPair=totalLabels.map(label=>amazonValueBesideLabel(firstPage,label,'money')).find(Boolean),vat=amazonVatSubtotal(pages),itemName=amazonItemNames(pages),sellerLine=firstPage.find(line=>/^\s*sold\s+by\s+/i.test(String(line.text||''))),soldBy=sellerLine?String(sellerLine.text||'').replace(/^\s*sold\s+by\s+/i,'').trim():'';
+    const complete=Boolean(number&&datePair?.value&&totalPair&&totalPair.value!==null&&vat!==null&&itemName),reason=complete?'':!number?'Amazon invoice number could not be confirmed.':!datePair?.value?'Amazon invoice date could not be confirmed.':!totalPair||totalPair.value===null?'Printed Amazon total payable could not be confirmed.':vat===null?'Printed Amazon VAT subtotal could not be confirmed.':'Amazon item description could not be confirmed.';
+    return {invoiceNumber:number,originalInvoiceNumber:number,date:datePair?.value||'',supplier:'Amazon',soldBy,itemName,subtotal:'',vat:vat??'',total:totalPair?.value??'',currency:'GBP',documentType:'INVOICE',isInvoiceDocument:Boolean(number||dateLabel||pages.some(([,items])=>/amazon\.co\.uk\/contact-us/i.test(amazonPositionedText(items)))),source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:!complete,review:false,layoutId:'amazon-vat-invoice'};
+  }
   // Keep supplier/document-specific parsing isolated here. Detection uses
   // document content, never just the file name, because users often rename
   // statements and batch PDFs from several suppliers together.
   const invoiceProfiles=[
+    {id:'amazon',name:'Amazon',kind:'supplier',status:'Review',detect:isAmazonInvoiceText,parse:(flat,source,lines)=>parseAmazonInvoice(flat,source,lines)},
     {id:'freshways',name:'Freshways',kind:'supplier',detect:isFreshwaysText,parse:(flat,source,lines)=>parseFreshwaysInvoice(flat,source,lines)},
     {id:'bestway',name:'Bestway Wholesale',kind:'supplier',detect:isBestwayText,parse:(flat,source,lines)=>parseBestwayInvoice(flat,source,lines)},
     {id:'eagle-foods',name:'Eagle Foods Ltd',kind:'supplier',status:'Under development',detect:isEagleFoodsText,parse:(flat,source,lines)=>parseEagleFoodsInvoice(flat,source,lines)},
@@ -2716,19 +2801,19 @@
     // explicit zero for this supplier only, so its exports never contain N/A.
     if(profile?.id==='polish-village-bread'&&row.isInvoiceDocument!==false)row.vat=0;
     row.originalInvoiceNumber=originalInvoiceNumber;
-    row.invoiceNumber=profile?.id==='maspo'?normalizeMaspoInvoiceNumber(originalInvoiceNumber):profile?.id==='liberty-frozen-foods'?originalInvoiceNumber:normalizeInvoiceNumber(originalInvoiceNumber);
+    row.invoiceNumber=profile?.id==='amazon'?String(originalInvoiceNumber||'').replace(/[^A-Z0-9]/gi,'').toUpperCase():profile?.id==='maspo'?normalizeMaspoInvoiceNumber(originalInvoiceNumber):profile?.id==='liberty-frozen-foods'?originalInvoiceNumber:normalizeInvoiceNumber(originalInvoiceNumber);
     if(row.subtotal===null||row.subtotal===undefined)row.subtotal='';
     if(row.vat===null||row.vat===undefined)row.vat='';
     // Only an explicitly configured supplier profile is allowed to accept a
     // supplier document. Layout-only parsers (such as WZ delivery notes) can
     // help read fields, but they do not establish that the supplier is known.
     const profileConfigured=profile?.kind==='supplier',supportedProfile=profileConfigured&&Boolean(specialised),genericAcceptedForConfiguredProfile=profileConfigured&&row.accepted===true,unconfiguredSupplier=!profileConfigured&&row.isInvoiceDocument!==false;
-    const vatRequired=row.documentType!=='DELIVERY NOTE',complete=Boolean((supportedProfile||genericAcceptedForConfiguredProfile)&&row.isInvoiceDocument!==false&&row.invoiceNumber&&row.date&&row.supplier&&row.total!==''&&row.total!==null&&row.total!==undefined&&Number.isFinite(Number(row.total))&&(!vatRequired||row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat)))&&(row.documentType!=='CORRECTION'||row.correctedTotal!==''&&row.correctedTotal!==null&&row.correctedTotal!==undefined&&Number.isFinite(Number(row.correctedTotal))&&row.correctedVat!==''&&row.correctedVat!==null&&row.correctedVat!==undefined&&Number.isFinite(Number(row.correctedVat))));
+    const vatRequired=row.documentType!=='DELIVERY NOTE',complete=Boolean((supportedProfile||genericAcceptedForConfiguredProfile)&&row.isInvoiceDocument!==false&&row.invoiceNumber&&row.date&&row.supplier&&row.total!==''&&row.total!==null&&row.total!==undefined&&Number.isFinite(Number(row.total))&&(!vatRequired||row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat)))&&(profile?.id!=='amazon'||String(row.itemName||'').trim())&&(row.documentType!=='CORRECTION'||row.correctedTotal!==''&&row.correctedTotal!==null&&row.correctedTotal!==undefined&&Number.isFinite(Number(row.correctedTotal))&&row.correctedVat!==''&&row.correctedVat!==null&&row.correctedVat!==undefined&&Number.isFinite(Number(row.correctedVat))));
     if(row.isInvoiceDocument===false){row.invoiceNumber='';row.originalInvoiceNumber='';row.date='';row.total='';row.subtotal='';row.vat='';}
     row.status=complete?'ACCEPTED':'REJECTED';row.accepted=row.status==='ACCEPTED';row.rejected=row.status==='REJECTED';
     row.unconfiguredSupplier=unconfiguredSupplier;
     row.supplierProfileConfigured=Boolean(profileConfigured);
-    row.rejectedReason=complete?'':row.isInvoiceDocument===false?(row.rejectedReason||'This document is a supplier statement or non-invoice document.'):unconfiguredSupplier?'Supplier profile is not set up. All invoices from this supplier are rejected until a supplier profile is configured.':row.rejectedReason||(!specialised?'Supplier/document format not recognised.':!row.invoiceNumber?'Invoice number not found.':!row.date?'Invoice date not found.':!row.supplier?'Supplier not identified.':row.documentType==='CORRECTION'&&(row.correctedTotal===''||row.correctedTotal===null||row.correctedTotal===undefined||row.correctedVat===''||row.correctedVat===null||row.correctedVat===undefined)?'Corrected invoice total or VAT could not be confirmed; correction was not applied.':row.total===''||row.total===null||row.total===undefined?'Printed total not found.':'VAT amount not found; one 5x OCR retry is required.');
+    row.rejectedReason=complete?'':row.isInvoiceDocument===false?(row.rejectedReason||'This document is a supplier statement or non-invoice document.'):unconfiguredSupplier?'Supplier not recognised or configured. This invoice is rejected until a supplier profile is configured.':row.rejectedReason||(!specialised?'Supplier/document format not recognised.':profile?.id==='amazon'&&!row.itemName?'Amazon item description could not be confirmed.':!row.invoiceNumber?'Invoice number not found.':!row.date?'Invoice date not found.':!row.supplier?'Supplier not identified.':row.documentType==='CORRECTION'&&(row.correctedTotal===''||row.correctedTotal===null||row.correctedTotal===undefined||row.correctedVat===''||row.correctedVat===null||row.correctedVat===undefined)?'Corrected invoice total or VAT could not be confirmed; correction was not applied.':row.total===''||row.total===null||row.total===undefined?'Printed total not found.':'VAT amount not found; one 5x OCR retry is required.');
     row.confidence=row.status;row.review=row.status==='REVIEW';
     return {...row,profileId:profile?.id||'generic'};
   }
@@ -2737,6 +2822,23 @@
     if(!lines.length){if(/\bE\s*\.?\s*P\s*\.?\s*A\s*\.?\s*FOODS?\s+LTD\b|\bEPA\s+FOODS\b/i.test(String(text||'')))return [];if(isEagleFoodsText(text)&&isEagleNonInvoicePage(text)&&!eagleInvoicePage([],text))return [];if(isIsaacWholesaleText(text)&&isaacSummaryPage([{text:String(text||'')}])&&!isaacInvoicePageText(text))return [];const row=parseInvoiceRobust(text,source,undefined,options);row.profileId=identifyInvoiceProfile(text)?.id||'generic';return row.profileId==='isaac-wholesale'&&!row.isInvoiceDocument?[]:disambiguateGeneratedShahidReferences([row]);}
     const pages=[...new Set(lines.map(line=>Number(line.page)||1))].sort((a,b)=>a-b);
     const pageLines=new Map(pages.map(page=>[page,lines.filter(line=>(Number(line.page)||1)===page).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0))]));
+    const amazonPages=pages.filter(page=>isAmazonInvoiceText(amazonPositionedText(pageLines.get(page))));
+    if(amazonPages.length){
+      const groups=[];
+      for(const page of amazonPages){
+        const items=pageLines.get(page)||[],number=amazonInvoiceId(items),startsNew=items.some(line=>/invoice\s+date\s*\/\s*delivery\s+date/i.test(String(line.text||''))),current=groups.at(-1);
+        if(!current||startsNew&&(!number||number!==current.invoiceNumber)||number&&current.invoiceNumber&&number!==current.invoiceNumber){groups.push({invoiceNumber:number,page,pages:[page]});continue;}
+        if(number&&!current.invoiceNumber)current.invoiceNumber=number;
+        if(number&&current.invoiceNumber===number||!number)current.pages.push(page);
+        else groups.push({invoiceNumber:number,page,pages:[page]});
+      }
+      const amazonRows=groups.map(group=>{
+        const groupLines=group.pages.flatMap(page=>pageLines.get(page)||[]),groupText=groupLines.map(line=>String(line.text||'').trim()).filter(Boolean).join('\n'),row=parseInvoiceRobust(groupText,source,groupLines,options);
+        row.page=group.page;row.sourcePages=group.pages;row.profileId='amazon';
+        return row;
+      }),otherLines=lines.filter(line=>!amazonPages.includes(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
+      return [...otherRows,...amazonRows].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
+    }
     const parkersPages=pages.filter(page=>isParkersText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
     if(parkersPages.length){
       const parkersRows=parkersPages.flatMap(page=>{
