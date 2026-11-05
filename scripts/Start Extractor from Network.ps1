@@ -224,9 +224,17 @@ function Get-LatestExtractorCommit {
     return $env:EXTRACTOR_TEST_COMMIT
   }
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  $uri = "https://github.com/$repositoryOwner/$repositoryName/commits/$repositoryBranch.atom"
-  $headers = @{ Accept = 'application/atom+xml'; 'User-Agent' = 'RW-Accountants-Extractor-Updater' }
-  $feed = Invoke-WebRequest -UseBasicParsing -Method Get -Uri $uri -Headers $headers -TimeoutSec 20
+  # Avoid a cached Atom response making one PC believe it is already current
+  # while another PC receives the latest branch head.
+  $cacheBuster = [guid]::NewGuid().ToString('N')
+  $uri = "https://github.com/$repositoryOwner/$repositoryName/commits/$repositoryBranch.atom?extractor-check=$cacheBuster"
+  $headers = @{
+    Accept = 'application/atom+xml'
+    'User-Agent' = 'RW-Accountants-Extractor-Updater'
+    'Cache-Control' = 'no-cache, no-store, max-age=0'
+    Pragma = 'no-cache'
+  }
+  $feed = Invoke-WebRequest -UseBasicParsing -Method Get -Uri $uri -Headers $headers -TimeoutSec 30
   return Get-ExtractorCommitFromFeed ([string]$feed.Content)
 }
 
@@ -517,8 +525,10 @@ $commitSha = ''
 try {
   $commitSha = Get-LatestExtractorCommit
 } catch {
-  Write-Warning "GitHub could not be reached, so Extractor will use the last complete version on the network. $($_.Exception.Message)"
-  $commitSha = ''
+  throw "Extractor could not verify the latest version on GitHub, so it will not start an older copy. Check this PC's internet access to github.com and try again. Details: $($_.Exception.Message)"
+}
+if ($commitSha -notmatch '^[a-f0-9]{40}$') {
+  throw 'Extractor could not verify a valid latest commit on GitHub, so it will not start an older copy. Check the network connection and try again.'
 }
 if ($commitSha) {
   Write-Progress -Activity 'Checking Extractor updates' -Status 'Checking GitHub for the latest application before preparing this PC’s local copy...' -PercentComplete 25

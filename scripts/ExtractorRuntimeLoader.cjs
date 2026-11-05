@@ -175,10 +175,8 @@ app.whenReady().then(async () => {
         const prepared = await prepareLocalApplication({ ...config, sharedApplication, lastLocalApplication: localApplication || config.lastLocalApplication });
         localApplication = prepared.localDirectory;
       } catch (error) {
-        const fallback = String(localApplication || config.lastLocalApplication || '');
-        if (!fallback || !fs.existsSync(path.join(fallback, 'main.cjs'))) throw error;
-        dialog.showMessageBoxSync({ type: 'warning', title: 'Using the last local version', message: 'Extractor could not check the shared folder, so it will open the last complete local version.', detail: error.message });
-        localApplication = fallback;
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`Extractor could not confirm and prepare the latest GitHub version, so it did not open an older local copy. Check this PC's internet and shared-folder access, then try again. ${detail}`);
       }
     }
     const localMain = path.join(localApplication, 'main.cjs');
