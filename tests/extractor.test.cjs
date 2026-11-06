@@ -107,7 +107,34 @@ test('PDF-folder suppliers use normal invoice profiles with dynamic label-relati
   const noVat=parse([...invoice.filter(item=>!item.text.startsWith('TOTAL VAT')&&!item.text.startsWith('453.30')),line('VAT Registration No. 987654321',720,470)]);
   assert.deepEqual([noVat.vat,noVat.status],['','REJECTED'],'a supplier VAT registration number cannot be substituted for invoice VAT');
   const email=P.parseInvoiceBatch('CosmoPro Your CosmoPro order has been received Order number 12345','renamed-order.pdf')[0];
-  assert.deepEqual([email.profileId,email.isInvoiceDocument,email.total,email.status],['cosmopro',false,'','REJECTED'],'order emails do not become invoice rows just because the supplier is configured');
+  assert.deepEqual([email.profileId,email.isInvoiceDocument,email.total,email.retryOcr,email.status],['cosmopro',false,'',false,'REJECTED'],'order emails remain visible as rejected non-invoices without triggering OCR retries');
+  
+});
+test('VAT-folder invoice parsing reads printed VAT due zeroes, tolerates purchase-order fields and skips order emails from OCR retries',()=>{
+  const siemens=P.parseInvoice('Siemens Financial Services Limited Tax Invoice Invoice Number 001/26/8882570 Invoice Date 15 January 2026 Amount Due in GBP 100.00 VAT due (0 % on 100.00) 0.00 Total due in GBP 100.00');
+  assert.deepEqual([siemens.profileId,siemens.invoiceNumber,siemens.date,siemens.vat,siemens.total,siemens.status],['siemens-finance','2570','2026-01-15',0,100,'ACCEPTED']);
+  const abbvie=P.parseInvoice('AbbVie Ltd Tax Invoice Invoice No. 8800446699 Invoice Date 15.01.2026 Sales Order 880012783 Total Net Price GBP 100.00 Total Invoice Amount GBP 120.00 Total VAT GBP 20.00');
+  assert.deepEqual([abbvie.profileId,abbvie.invoiceNumber,abbvie.date,abbvie.vat,abbvie.total,abbvie.status],['abbvie','6699','2026-01-15',20,120,'ACCEPTED']);
+  const lynton=P.parseInvoice('Lynton Lasers Ltd MULTISHIPMENT INVOICE SI26005912 Date 15/01/26 Net Total 100.00 VAT Content 20.00 Total GBP 120.00');
+  assert.deepEqual([lynton.profileId,lynton.invoiceNumber,lynton.originalInvoiceNumber,lynton.date,lynton.vat,lynton.total,lynton.status],['lynton','5912','SI26005912','2026-01-15',20,120,'ACCEPTED']);
+  const order=P.parseInvoice('Lynton Lasers Subject: Your Lynton order has been received! Thank you for your order. Order #10001. Total £120.00 (includes £20.00 VAT).');
+  assert.deepEqual([order.profileId,order.isInvoiceDocument,order.retryOcr,order.status],['lynton',false,false,'REJECTED']);
+  assert.deepEqual([order.vat,order.total],[20,120],'a non-invoice order message can retain readable amounts without being treated as an invoice');
+  const orderRows=P.parseInvoiceBatch('Lynton Lasers Your Lynton order has been received Order #10001 Total £120.00 (includes £20.00 VAT)','order-email.pdf');
+  assert.equal(orderRows[0].status,'REJECTED');assert.equal(orderRows[0].isInvoiceDocument,false);assert.deepEqual([orderRows[0].vat,orderRows[0].total],[20,120]);
+});
+test('Acre invoice summaries split across adjacent pages keep the printed VAT and total with the invoice',()=>{
+  const line=(page,text,x,y,width=String(text).length*8,height=24)=>({page,text,x,y,width,height,confidence:1});
+  const make=(scale=1,shiftX=0,shiftY=0)=>[
+    line(1,'ACRE AESTHETICS LIMITED',100,20,240),line(1,'Invoice Number',133,576),line(1,'1-0000001234',134,629),line(1,'Invoice Date',133,863),line(1,'1 5/1/2026',134,928),
+    line(1,'Net Amount (E)',1073,2200),line(1,'VAT Amount (E)',1387,2200),line(1,'Total (E)',1743,2200),line(1,'Registered in England and Wales',790,2522),
+    line(2,'83.33',1146,254),line(2,'16.67',1492,254),line(2,'100.00',1718,254),line(2,'Registered in England and Wales',790,2644),
+  ].map(item=>({...item,x:item.x*scale+shiftX,y:item.y*scale+shiftY,width:item.width*scale,height:item.height*scale}));
+  const parse=items=>P.parseInvoiceBatch(items.map(item=>item.text).join('\n'),'renamed-invoice.pdf',items)[0];
+  for(const items of [make(),make(1.6,410,175)]){
+    const row=parse(items);
+    assert.deepEqual([row.profileId,row.invoiceNumber,row.date,row.subtotal,row.vat,row.total,row.status,row.retryOcr],['acre-aesthetics','1234','2026-01-15',83.33,16.67,100,'ACCEPTED',false]);
+  }
 });
 test('Eagle Foods uses invoice pages only and statement rows only confirm existing invoice pages',()=>{
   const line=(page,text,x,y,width=String(text).length*9)=>({page,text,x,y,width,height:20,confidence:1});
@@ -1365,7 +1392,7 @@ test('Maspo LON continuation pages with a leading OCR digit stay in one invoice'
   const rows=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'multi-page-LON.pdf',lines);
   assert.equal(rows.length,1);assert.deepEqual([rows[0].invoiceNumber,rows[0].date,rows[0].supplier,rows[0].total,rows[0].vat,rows[0].status],['0369','2026-09-25','MASPO',2274.23,85.34,'ACCEPTED']);
 });
-test('Maspo account statements are rejected instead of becoming invoice rows',()=>{const row=P.parseInvoice('MASPO LTD Statement of the account Invoice No. 2607-SP/02/04286 Date of issue 2026-07-29 Total due 296,85 Unpaid 296,85');assert.equal(row.status,'REJECTED');assert.equal(row.total,'');assert.equal(row.invoiceNumber,'');assert.match(row.rejectedReason,/statement or non-invoice/i);});
+test('Maspo account statements preserve readable references but are marked as non-invoices and never retried',()=>{const row=P.parseInvoice('MASPO LTD Statement of the account Invoice No. 2601-SP/02/01234 Date of issue 2026-01-15 Total due 100,00 Unpaid 100,00');assert.equal(row.status,'REJECTED');assert.equal(row.total,'');assert.deepEqual([row.invoiceNumber,row.date,row.documentType,row.retryOcr],['1234','2026-01-15','NON-INVOICE',false]);assert.match(row.rejectedReason,/statement or non-invoice/i);});
 test('Maspo OCR variants and continuation pages use one supplier layout profile',()=>{const lines=[
   {page:1,text:'Invoice no.',x:700,y:260},{page:1,text:'2607-sp/02103737',x:980,y:260},{page:1,text:'Seller',x:170,y:400},{page:1,text:'MASPO LTD',x:174,y:447},{page:1,text:'Invoice date (taxpoint):',x:165,y:1034},{page:1,text:'29.07.2026',x:1060,y:1030},
   {page:2,text:'Invoice no. 2607-SP/02/03737',x:700,y:260},{page:2,text:'Total: 3 746,08 GBP',x:170,y:1646}

@@ -314,8 +314,8 @@
     if(!layout)return [];
     const valueAt=(row,index)=>index>=0?String(row[index]??'').trim():'';
     const numeric=value=>{
-      let raw=String(value??'').trim().replace(/[\u00A0\u202F]/g,' ');if(!raw||/^(?:-|—|n\/a)$/i.test(raw))return null;
-      const negative=/^\(.*\)$/.test(raw)||/^\s*-/.test(raw)||/\b(?:dr|debit)\b/i.test(raw);raw=raw.replace(/[()]/g,'').replace(/[£$€\s,]/g,'').replace(/[^\d.\-]/g,'');if(!raw||raw==='-'||raw==='.')return null;
+      let raw=String(value??'').trim().replace(/[\u00A0\u202F]/g,' ');if(!raw||/^(?:-|â€”|n\/a)$/i.test(raw))return null;
+      const negative=/^\(.*\)$/.test(raw)||/^\s*-/.test(raw)||/\b(?:dr|debit)\b/i.test(raw);raw=raw.replace(/[()]/g,'').replace(/[Â£$â‚¬\s,]/g,'').replace(/[^\d.\-]/g,'');if(!raw||raw==='-'||raw==='.')return null;
       const parsed=Number(raw);return Number.isFinite(parsed)?(negative?-1:1)*Math.abs(parsed):null;
     };
     const output=[];
@@ -484,7 +484,7 @@
       const c=header.centers,dateDetail=(c.date+c['payment type and details'])/2,detailOut=(c['payment type and details']+c['paid out'])/2,outIncome=(c['paid out']+c['paid in'])/2,incomeBalance=(c['paid in']+c.balance)/2;
       const afterHeader=header.headerY+Math.max(8,header.headerHeight*.45),items=header.items;
       const dateLines=items.filter(line=>line.y>afterHeader&&line.x<dateDetail).map(line=>({line,date:parseDatePrefix(line.text)})).filter(item=>item.date).sort((a,b)=>a.line.y-b.line.y);
-      const moneyCandidates=items.filter(line=>line.y>afterHeader&&line.x>=detailOut&&line.x<incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==0&&(item.value!==null||/^[\s(+-]*(?:[£$€]\s*)?\d[\d,]*(?:[.,]\d{0,2})?[)\s]*$/.test(item.line.text))).map(item=>({...item,kind:item.line.x<outIncome?'payment':'receipt',readable:item.value!==null})).sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
+      const moneyCandidates=items.filter(line=>line.y>afterHeader&&line.x>=detailOut&&line.x<incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==0&&(item.value!==null||/^[\s(+-]*(?:[Â£$â‚¬]\s*)?\d[\d,]*(?:[.,]\d{0,2})?[)\s]*$/.test(item.line.text))).map(item=>({...item,kind:item.line.x<outIncome?'payment':'receipt',readable:item.value!==null})).sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
       const balances=items.filter(line=>line.y>afterHeader&&line.x>=incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==null).sort((a,b)=>a.line.y-b.line.y);
       const typeMarkers=items.filter(line=>line.y>afterHeader&&line.x>=(c.date+c['payment type and details'])/2&&line.x<c['payment type and details']+Math.max(24,header.headerHeight)&&/^(?:CR|BP|SO)$/i.test(line.text.trim())).sort((a,b)=>a.y-b.y);
       const isBalanceForward=value=>{const normalized=String(value||'').toLowerCase().replace(/[^a-z]/g,'').replace(/baiance/g,'balance');return /balance(?:brought|carried)/.test(normalized);};
@@ -687,18 +687,18 @@
     const statementStart=flat.search(/statement\s+of\s+the\s+account/i);
     const deliveryStart=flat.search(/\bDELIVERY\s+/i),deliverySection=flat.slice(deliveryStart>=0?deliveryStart:0,statementStart>=0?statementStart:flat.length);
     const directTail=deliverySection.match(/(?:total\s+)?issued\s+baskets\s*:\s*([\s\S]{0,120}?)(?=ret(?:urned|umed)\s+baskets|$)/i)?.[1]||'';
-    const directPrintedMatch=flat.match(/\btotal\s+issued\s+baskets\s*:\s*(?:notes\s*:\s*)?((?:£|€|\$)?\s*\d[\d\s,.;]*[.,;]\s*\d{2})/i),directPrintedTotal=directPrintedMatch?invoiceAmount(directPrintedMatch[1]):null;
+    const directPrintedMatch=flat.match(/\btotal\s+issued\s+baskets\s*:\s*(?:notes\s*:\s*)?((?:Â£|â‚¬|\$)?\s*\d[\d\s,.;]*[.,;]\s*\d{2})/i),directPrintedTotal=directPrintedMatch?invoiceAmount(directPrintedMatch[1]):null;
     // WZ forms print the real delivery total on the same baseline as the
     // bold `Total` label. OCR preserves each line's position, so use that
     // layout signal before looking at the account statement below. This
     // avoids confusing an invoice balance or returned-basket amount with the
     // value delivered on this WZ document.
     const layoutCandidate=Array.isArray(ocrLines)?(ocrLines.filter(line=>/^(?:total|tota[i1l]|tout)$/i.test(String(line?.text||'').trim())).flatMap(label=>{const x=Number(label?.x)||0,labelRight=x+(Number(label?.width)||0),minGap=Math.max(8,Math.min(28,(Number(label?.width)||0)*0.2));return ocrLines.filter(line=>Number(line?.page)===Number(label?.page)&&Number(line?.x)>labelRight+minGap&&Math.abs(Number(line?.y)-Number(label?.y))<=35).map(line=>{const raw=String(line?.text||''),match=raw.match(/\b\d[\d,.;]*\b/);return match?{value:invoiceAmount(match[0]),raw}:null})}).find(item=>item?.value!==null)??null):null;
-    const layoutTotal=layoutCandidate?.value??null,layoutSuspect=Boolean(layoutCandidate&&(/[;]/.test(layoutCandidate.raw)||/[£€$]/.test(layoutCandidate.raw)||/[^\d\s,.;£€$]/.test(layoutCandidate.raw)||!/[,.]\s*\d{2}/.test(layoutCandidate.raw)));
+    const layoutTotal=layoutCandidate?.value??null,layoutSuspect=Boolean(layoutCandidate&&(/[;]/.test(layoutCandidate.raw)||/[Â£â‚¬$]/.test(layoutCandidate.raw)||/[^\d\s,.;Â£â‚¬$]/.test(layoutCandidate.raw)||!/[,.]\s*\d{2}/.test(layoutCandidate.raw)));
     // A continuation page can lose the `Total` label while retaining the
     // printed delivery total at the top right (for example 327,96).
     const summaryCandidates=Array.isArray(ocrLines)?ocrLines.filter(line=>Number(line?.y)<260&&Number(line?.x)>1450&&/[0-9][,.;]\s*\d{2}/.test(String(line?.text||''))).map(line=>{const pageLines=ocrLines.filter(other=>Number(other?.page)===Number(line?.page)),hasItemRows=pageLines.filter(other=>Number(other?.x)>1450&&Number(other?.y)>Number(line?.y)+20&&Number(other?.y)<650&&/[0-9][,.]\s*\d{2}/.test(String(other?.text||''))).length>=2;return hasItemRows?null:{value:invoiceAmount(String(line.text||'')),raw:String(line.text||'')}}).filter(item=>item&&item.value!==null):[];
-    const summaryCandidate=summaryCandidates[0]||null,summaryTotal=summaryCandidate?.value??null,summarySuspect=Boolean(summaryCandidate&&(/[;]/.test(summaryCandidate.raw)||/[^\d\s,.;£€$]/.test(summaryCandidate.raw)||!/[,.]\s*\d{2}/.test(summaryCandidate.raw)));
+    const summaryCandidate=summaryCandidates[0]||null,summaryTotal=summaryCandidate?.value??null,summarySuspect=Boolean(summaryCandidate&&(/[;]/.test(summaryCandidate.raw)||/[^\d\s,.;Â£â‚¬$]/.test(summaryCandidate.raw)||!/[,.]\s*\d{2}/.test(summaryCandidate.raw)));
     // When OCR drops the bold `Total` word, Polish WZ forms place the total
     // immediately above the `Issued baskets` label in the far-right amount
     // column. Accept that single printed summary value, while excluding
@@ -1072,7 +1072,7 @@
   }
   function isMarionTradingText(value){
     const text=String(value||'');
-    return /\b(?:MARION|MARLON|MANION|MARI0N|MAÅION)\s+TRAD(?:ING|IN[GI])\b/i.test(text)||/mariontrad(?:ing|jng)ltd\.co\.uk/i.test(text)||(/\bAWRS\s+NO\s*:\s*XYAW/i.test(text)&&/\bVAT\s+NO\s*:\s*GB\s*295\s*9266\s*44\b/i.test(text));
+    return /\b(?:MARION|MARLON|MANION|MARI0N|MAÃ…ION)\s+TRAD(?:ING|IN[GI])\b/i.test(text)||/mariontrad(?:ing|jng)ltd\.co\.uk/i.test(text)||(/\bAWRS\s+NO\s*:\s*XYAW/i.test(text)&&/\bVAT\s+NO\s*:\s*GB\s*295\s*9266\s*44\b/i.test(text));
   }
   function isMonolithText(value){
     const text=String(value||'');
@@ -1127,6 +1127,7 @@
     const lines=Array.isArray(pageLines)?pageLines:[],totalLabel=lines.filter(line=>/^\s*TOTAL\s*$/i.test(String(line.text||''))).sort((a,b)=>(Number(b.y)||0)-(Number(a.y)||0))[0];
     if(!totalLabel)return null;
     const goodsLabel=lines.filter(line=>/^\s*GOODS\s*$/i.test(String(line.text||''))).sort((a,b)=>Math.abs((Number(a.x)||0)-(Number(totalLabel.x)||0))-Math.abs((Number(b.x)||0)-(Number(totalLabel.x)||0)))[0];
+    totalLabels.push(/\btotal\b/i);
     const vatLabels=lines.filter(line=>/^\s*VAT\s*$/i.test(String(line.text||''))).sort((a,b)=>Math.abs((Number(a.x)||0)-(Number(totalLabel.x)||0))-Math.abs((Number(b.x)||0)-(Number(totalLabel.x)||0)));
     const vatLabel=vatLabels.find(line=>Math.abs((Number(line.x)||0)-(Number(totalLabel.x)||0))<=Math.max(90,(Number(totalLabel.width)||0)*1.4)&&(!goodsLabel||Number(line.y)>Number(goodsLabel.y)&&Number(line.y)<Number(totalLabel.y)));
     const anchors={goods:goodsLabel,vat:vatLabel,total:totalLabel},anchor=anchors[kind];
@@ -1181,7 +1182,8 @@
     const numeric=text.match(/\b\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\b/);return parseDate(numeric?.[0]||'');
   }
   function eaglePrintedAmount(value){
-    let raw=String(value??'').trim().replace(/[£$€]/g,'').replace(/\bGBP\b/ig,'').trim();
+    let raw=String(value??'').trim().replace(/[Â£$â‚¬]/g,'').replace(/\bGBP\b/ig,'').trim();
+
     if(/^\d{1,3}[.,]\d{3}[.,]\d{2}$/.test(raw))raw=raw.replace(/[.,](?=\d{3}[.,]\d{2}$)/,'');
     if(!/^[+-]?\s*\(?\s*\d[\d\s,]*[.,]\s*\d{2}\s*\)?$/.test(raw))return null;
     return invoiceAmount(raw);
@@ -1297,7 +1299,7 @@
     const columnFor=x=>{let best=columns[0],distance=Infinity;for(const column of columns){const candidate=Math.abs(x-column.x);if(candidate<distance){best=column;distance=candidate;}}return best.key;};
     const clusters=[];
     for(const line of items.filter(item=>(Number(item.y)||0)>headerY+rowTolerance*1.5).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0))){const y=Number(line.y)||0,last=clusters.at(-1);if(last&&Math.abs(y-last.y)<=rowTolerance){last.items.push(line);last.y=last.items.reduce((sum,item)=>sum+(Number(item.y)||0),0)/last.items.length;}else clusters.push({y,items:[line]});}
-    const customerLabel=items.find(line=>/^\s*customer\s*:?\s*$/i.test(String(line.text||''))),customerValue=customerLabel?items.filter(line=>line!==customerLabel&&Math.abs((Number(line.y)||0)-(Number(customerLabel.y)||0))<=Math.max(14,(Number(customerLabel.height)||16)*1.2)&&Number(line.x)>Number(customerLabel.x)).sort((a,b)=>Number(a.x)-Number(b.x))[0]:null,accountCode=String(customerValue?.text||'').match(/^\s*([A-Z]{2,6})\s*[-–]/i)?.[1]?.toUpperCase()||'';
+    const customerLabel=items.find(line=>/^\s*customer\s*:?\s*$/i.test(String(line.text||''))),customerValue=customerLabel?items.filter(line=>line!==customerLabel&&Math.abs((Number(line.y)||0)-(Number(customerLabel.y)||0))<=Math.max(14,(Number(customerLabel.height)||16)*1.2)&&Number(line.x)>Number(customerLabel.x)).sort((a,b)=>Number(a.x)-Number(b.x))[0]:null,accountCode=String(customerValue?.text||'').match(/^\s*([A-Z]{2,6})\s*[-â€“]/i)?.[1]?.toUpperCase()||'';
     const result=[];
     for(const cluster of clusters){const cells={};for(const line of cluster.items){const key=columnFor(Number(line.x)||0);cells[key]=cells[key]?`${cells[key]} ${line.text}`:String(line.text||'');}
       if(!/\bsales\s+invoice\b/i.test(cells.type||''))continue;
@@ -1431,7 +1433,7 @@
     return unique;
   }
   function peterboroughPrintedMoney(value){
-    let raw=String(value||'').trim().replace(/[£$€]/g,'').replace(/(?<=\d)\s*[•·●]\s*(?=\d{2}\s*$)/u,'.').trim();
+    let raw=String(value||'').trim().replace(/[Â£$â‚¬]/g,'').replace(/(?<=\d)\s*[â€¢Â·â—]\s*(?=\d{2}\s*$)/u,'.').trim();
     // A damaged decimal mark is accepted only in an otherwise complete,
     // printed two-decimal amount. Never join separated digits into pounds.
     if(!/^-?(?:(?:\d{1,3}(?:[ ,]\d{3})+)|\d+)[.,;]\s*\d{2}$/.test(raw))return null;
@@ -1485,13 +1487,13 @@
     return {invoiceNumber:number,originalInvoiceNumber:fullNumber,date,supplier:'Peterborough Bazaar Limited',subtotal:'',vat:vat??'',total:total??'',documentType:'INVOICE',isInvoiceDocument:true,currency:'GBP',source,accepted:complete,rejected:!complete,rejectedReason:reason,confidence:complete?'ACCEPTED':'REJECTED',retryOcr:!complete,review:false,layoutId:'peterborough-bazaar-footer-summary'};
   }
   function shahidMoney(value){
-    let raw=String(value||'').trim().replace(/[£$€]/g,'').replace(/^\s*[Ee]\s*/,'').replace(/\s+/g,' ');
+    let raw=String(value||'').trim().replace(/[Â£$â‚¬]/g,'').replace(/^\s*[Ee]\s*/,'').replace(/\s+/g,' ');
     raw=raw.replace(/^([lI|])\s*(?=,)/,'1').replace(/^([Oo])\s*(?=,)/,'0').replace(/\s+([,.;])/g,'$1').replace(/([,.;])\s+(?=\d)/g,'$1').replace(/([.,])\s*([Oo])(?=\d)/g,'$10');
     if(!/^-?(?:(?:\d{1,3}(?:[\s,]\d{3})+)|\d+)[.,]\s*\d{2}$/.test(raw))return null;
     return invoiceAmount(raw);
   }
   function shahidSuspiciousPoundPrefix(value){
-    // On these scans Windows OCR sometimes reads the printed "£1" as "21".
+    // On these scans Windows OCR sometimes reads the printed "Â£1" as "21".
     // This is ambiguous with a real 21-thousand amount, so require a focused
     // 5x reread rather than silently removing a digit.
     return /^\s*2\d{1,2}\s*,\s*\d{3}[.,]\s*\d{2}\s*$/.test(String(value||''));
@@ -1553,7 +1555,7 @@
     return {fullNumber,date:parseDate(dateText)};
   }
   function deensMoneyCandidates(value,pageLines=[]){
-    let raw=String(value||'').trim().replace(/\b(?:GBP|GBR)\b/gi,'').replace(/[£$€ÂÆæZzCcGgSs]/g,'').trim();
+    let raw=String(value||'').trim().replace(/\b(?:GBP|GBR)\b/gi,'').replace(/[Â£$â‚¬Ã‚Ã†Ã¦ZzCcGgSs]/g,'').trim();
     // Windows OCR commonly turns the printed pound sign into `5`. Preserve
     // both readings until another printed footer value confirms which one is
     // correct; an unresolved pair is rejected instead of guessed.
@@ -1638,12 +1640,12 @@
     return {fullNumber,numberDigits:digits,suffix,date,pageNumber:pageRef?.[1]?Number(pageRef[1]):0,pageCount:pageRef?.[2]?Number(pageRef[2]):0,numberLine:numberCandidate?.line};
   }
   function dairyPrintedMoney(value){
-    let raw=String(value||'').trim().replace(/[£$€]/g,'').replace(/[Oo]/g,'0').replace(/[Il|]/g,'1').replace(/(?<=\d)\s*[·•]\s*(?=\d{2}\s*$)/u,'.').replace(/;(?=\s*\d{2}\s*$)/,'.').replace(/\s+/g,' ').trim();
+    let raw=String(value||'').trim().replace(/[Â£$â‚¬]/g,'').replace(/[Oo]/g,'0').replace(/[Il|]/g,'1').replace(/(?<=\d)\s*[Â·â€¢]\s*(?=\d{2}\s*$)/u,'.').replace(/;(?=\s*\d{2}\s*$)/,'.').replace(/\s+/g,' ').trim();
     if(!/^-?(?:(?:\d{1,3}(?:[ ,]\d{3})+)|\d+)[.,]\s*\d{2}$/.test(raw))return null;
     return invoiceAmount(raw);
   }
   function dairyMoneyCandidates(value){
-    const text=String(value||'').replace(/[£$€]/g,' '),matches=[...text.matchAll(/-?\d[\d, ]*[.,;]\s*[\dOoIl]{2}/g)],values=[];
+    const text=String(value||'').replace(/[Â£$â‚¬]/g,' '),matches=[...text.matchAll(/-?\d[\d, ]*[.,;]\s*[\dOoIl]{2}/g)],values=[];
     for(const match of matches){const parsed=dairyPrintedMoney(match[0]);if(parsed!==null)values.push({value:parsed,index:match.index,raw:match[0]});}
     return values;
   }
@@ -1741,14 +1743,14 @@
     const text=String(flat||''),number=text.match(/order\s*(?:no|number)\s*[:#.-]?\s*(20\d{8})/i)?.[1]||'',dateText=text.match(/order\s*date\s*:?\s*(\d{1,2}[./-]\d{1,2}[./-]20\d{2})/i)?.[1]||'',rows=text.split(/\r?\n/),vatLine=rows.find(line=>/total\s+vat\s+amt/i.test(line)),totalLine=rows.find(line=>/^\s*total\s*:?\s*[-\d]/i.test(line)),vat=dairyMoneyCandidates(vatLine||'').at(-1)?.value??'',total=dairyMoneyCandidates(totalLine||'').at(-1)?.value??'',fullNumber=number,date=parseDate(dateText),complete=Boolean(fullNumber&&date&&vat!==''&&total!=='');
     return {invoiceNumber:fullNumber.slice(-4),originalInvoiceNumber:fullNumber,date,supplier:'Dairy Fresh Ltd',subtotal:'',vat,total,documentType:'INVOICE',isInvoiceDocument:true,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',rejectedReason:complete?'':!fullNumber?'Dairy Fresh order number could not be confirmed.':!date?'Dairy Fresh order date could not be confirmed.':total===''?'Printed Dairy Fresh Total could not be confirmed.':'Printed Dairy Fresh Total VAT Amt could not be confirmed; a focused 5x OCR retry is required.',retryOcr:!complete,review:false,layoutId:'dairy-fresh-footer-summary',profileId:'dairy-fresh'};
   }  function monolithHeader(text,ocrLines=[]){
-    const source=String(text||''),number=source.match(/\bAUTO\s+INVOICE\s*[-–—]?\s*A\s*([0-9]{5,8})\b/i),page=source.match(/\bPage\s*(\d+)\s+of\s+(\d+)\s*[-–—]?\s*Original\b/i);
+    const source=String(text||''),number=source.match(/\bAUTO\s+INVOICE\s*[-â€“â€”]?\s*A\s*([0-9]{5,8})\b/i),page=source.match(/\bPage\s*(\d+)\s+of\s+(\d+)\s*[-â€“â€”]?\s*Original\b/i);
     const lines=Array.isArray(ocrLines)?ocrLines:[],dateLabel=lines.filter(line=>/^\s*Date\s*:?\s*$/i.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0))[0];
     const dateCandidate=dateLabel?lines.filter(line=>(Number(line.page)||1)===(Number(dateLabel.page)||1)&&Math.abs((Number(line.y)||0)-(Number(dateLabel.y)||0))<=70).map(line=>({line,match:String(line.text||'').match(/^\s*[:#.-]?\s*(\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{4})\s*$/)})).filter(item=>item.match).sort((a,b)=>Math.abs((Number(a.line.y)||0)-(Number(dateLabel.y)||0))-Math.abs((Number(b.line.y)||0)-(Number(dateLabel.y)||0))||Number(a.line.x)-Number(b.line.x))[0]:null;
     const dateRaw=dateCandidate?.match[1]||source.match(/\bDate\s*:?\s*(\d{1,2}\s*[./-]\s*\d{1,2}\s*[-/.]\s*\d{4})\b/i)?.[1]||source.match(/\bPaid\s+by\s+(\d{1,2}\s*[./-]\s*\d{1,2}\s*[./-]\s*\d{4})\b/i)?.[1]||'';
     return {number:number?.[1]||source.match(/\bUK26FAC2A(\d{6})\b/i)?.[1]||'',pageNumber:page?Number(page[1]):0,pageCount:page?Number(page[2]):0,date:parseDate(dateRaw.replace(/\s/g,''))};
   }
   function monolithPrintedMoney(value){
-    let raw=String(value||'').trim().replace(/\b(?:GBR|GBP)\b/gi,'').replace(/[£$€]/g,'').trim();
+    let raw=String(value||'').trim().replace(/\b(?:GBR|GBP)\b/gi,'').replace(/[Â£$â‚¬]/g,'').trim();
     if(/^(?:[mM]?[Oo]{2,4}|[Oo]{1,2}[.,;][Oo]{2})$/i.test(raw))return 0;
     raw=raw.replace(/([.,;])\s*[Oo]{2}$/i,(_,separator)=>separator+'00').replace(/([.,;])[Oo](?=\d)/gi,(_,separator)=>separator+'0').replace(/;(?=\s*\d{2}$)/,'.');
     if(!/^-?(?:(?:\d{1,3}(?:[\s,]\d{3})+)|\d+)[.,]\s*\d{2}$/.test(raw.trim()))return null;
@@ -1796,7 +1798,7 @@
     let dateText='';
     if(dateLabel){
       dateText=String(dateLabel.text||'').match(/^\s*date\s*:?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})\s*$/i)?.[1]||'';
-      if(!dateText){const candidate=items.filter(line=>Number(line.page)===Number(dateLabel.page)&&Number(line.x)>Number(dateLabel.x)+50&&Math.abs((Number(line.y)||0)-(Number(dateLabel.y)||0))<=30).map(line=>({line,match:String(line.text||'').match(/^\s*[:#.•·]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})\s*$/)})).filter(item=>item.match).sort((a,b)=>Math.abs((Number(a.line.y)||0)-(Number(dateLabel.y)||0))-Math.abs((Number(b.line.y)||0)-(Number(dateLabel.y)||0))||Number(a.line.x)-Number(b.line.x));
+      if(!dateText){const candidate=items.filter(line=>Number(line.page)===Number(dateLabel.page)&&Number(line.x)>Number(dateLabel.x)+50&&Math.abs((Number(line.y)||0)-(Number(dateLabel.y)||0))<=30).map(line=>({line,match:String(line.text||'').match(/^\s*[:#.â€¢Â·]?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})\s*$/)})).filter(item=>item.match).sort((a,b)=>Math.abs((Number(a.line.y)||0)-(Number(dateLabel.y)||0))-Math.abs((Number(b.line.y)||0)-(Number(dateLabel.y)||0))||Number(a.line.x)-Number(b.line.x));
         dateText=candidate[0]?.match[1]||'';
       }
     }
@@ -1804,9 +1806,9 @@
     return {fullNumber,date:parseDate(dateText)};
   }
   function marionPrintedMoney(value){
-    const raw=String(value||'').trim().replace(/[£$€]/g,'').replace(/\s/g,'');
+    const raw=String(value||'').trim().replace(/[Â£$â‚¬]/g,'').replace(/\s/g,'');
     if(/^(?:0+(?:[.,]0{1,2})?|[Oo][.,]?[Oo]{0,2})$/i.test(raw))return 0;
-    if(!/^-?(?:(?:\d{1,3}(?:[, ]\d{3})+)|\d+)[.,]\d{2}$/.test(String(value||'').replace(/[£$€]/g,'').trim()))return null;
+    if(!/^-?(?:(?:\d{1,3}(?:[, ]\d{3})+)|\d+)[.,]\d{2}$/.test(String(value||'').replace(/[Â£$â‚¬]/g,'').trim()))return null;
     return invoiceAmount(value);
   }
   function marionFooterCell(pageLines,labelPattern){
@@ -1904,7 +1906,7 @@
     return values;
   }
   function receiptAnchoredMoneyTokens(value){
-    const raw=String(value||'').trim(),withoutCurrency=raw.replace(/^\s*[£€$EeFf]\s*/u,''),variants=[raw,withoutCurrency];
+    const raw=String(value||'').trim(),withoutCurrency=raw.replace(/^\s*[Â£â‚¬$EeFf]\s*/u,''),variants=[raw,withoutCurrency];
     // Only used beside a printed Total label. Windows OCR sometimes reads the
     // pound sign as E/F and breaks one amount across punctuation, e.g.
     // `E 44 (_)9` or `E59 . 2.3`. Repair those glyphs in this labelled cell,
@@ -1915,7 +1917,7 @@
     if(doubledSeparator)variants.push(`${doubledSeparator[1]}.${doubledSeparator[2]}${doubledSeparator[3]}`);
     const confusedEight=withoutCurrency.match(/^\s*(\d{1,3})[tT]\s*[.,]\s*(\d{2})\s*$/);
     if(confusedEight)variants.push(`${confusedEight[1]}8.${confusedEight[2]}`);
-    // In a printed, label-anchored amount, Windows OCR can turn `£100.32`
+    // In a printed, label-anchored amount, Windows OCR can turn `Â£100.32`
     // into `El oo -32`. Join only the whole-pound glyphs and preserve the
     // explicit two printed penny digits; this never runs on unlabelled text.
     const separated=withoutCurrency.match(/^\s*([\dOoIl](?:[\s,.'\u2019]*[\dOoIl])*)\s*[.,;-]\s*([\dOoIl]{2})\s*$/);
@@ -1949,7 +1951,7 @@
     const ordered=[...(Array.isArray(lines)?lines:[])].filter(line=>line&&String(line.text||'').trim()).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0)),isRegistration=line=>{const value=String(line?.text||'');if(/\bV(?:A|4)(?:T|I)\s*(?:NO\.?|NUMBER|REG(?:ISTRATION)?|TYPE|RATE)\b/i.test(value))return true;const x=Number(line?.x)||0,y=Number(line?.y)||0;return ordered.some(other=>{const otherText=String(other.text||''),otherX=Number(other.x)||0,otherY=Number(other.y)||0,digits=otherText.replace(/\D/g,'');if(other===line||Math.abs(otherY-y)>20||otherX<x||otherX-x>330)return false;if(/\bGB\s*\d(?:[\s\d]{7,})\b/i.test(otherText))return true;return /^\s*V(?:A|4)(?:T|I)\s*[:.]?\s*$/i.test(value)&&digits.length>=8;});},vatLines=ordered.filter(line=>/\bV(?:A|4)(?:T|I)\b/i.test(String(line.text||''))&&!isRegistration(line)),text=ordered.map(line=>String(line.text||'')).join(' ');
     const compact=value=>String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,''),isVatWord=value=>/\bV(?:A|4)(?:T|I)\b/i.test(String(value||'')),vatAmountLabel=line=>{const value=String(line?.text||''),key=compact(value),match=key.match(/^(?:VAT|VAI|V4T)([A-Z0-9]+)$/);return Boolean(match&&receiptLevenshtein(match[1],'AMOUNT')<=2)||/\bV(?:A|4)(?:T|I)\s+(?:AMOUNT|VALUE)\b/i.test(value);},summary=ordered.find(line=>{const value=String(line.text||''),key=compact(value),summaryLike=/SUMMARY/.test(key),nearbyHeaders=ordered.filter(other=>{const y=Number(other.y)||0,anchorY=Number(line.y)||0;return y>=anchorY&&y<=anchorY+120;}),vatHeader=nearbyHeaders.find(other=>/^(?:VAT|VAI|V4T)$/i.test(String(other.text||'').trim())),totalHeader=nearbyHeaders.find(other=>/^\s*T(?:O|0)TAL\s*$/i.test(String(other.text||''))&&Math.abs((Number(other.y)||0)-(Number(vatHeader?.y)||0))<=8);return /\bVAT\s*(?:ANALYSIS|ANALYSTS|RECEIPT\s+SUMMARY|SUMMARY)\b|\bTAX\s+SUMMARY\b/i.test(value)||(summaryLike&&(key.includes('VAT')||key.includes('VAI')||key.includes('RECE'))&&(nearbyHeaders.some(other=>/F[U HJ]EL\s+ONLY/i.test(String(other.text||'')))||Boolean(vatHeader&&totalHeader)));}),summaryY=Number(summary?.y)||0,vatSeeBelow=ordered.some(line=>/\bV(?:A|4)(?:T|I)\s*[:.]?\s*SEE\s+BELOW\b/i.test(String(line.text||''))),vatAmountColumnEvidence=vatLines.some(line=>{const value=String(line.text||''),key=compact(value),x=Number(line.x)||0,y=Number(line.y)||0;if(!isVatWord(value)||/^\s*V(?:A|4)(?:T|I)\s*[:.]?\s*$/i.test(value)||/\b(?:NO\.?|NUMBER|TYPE|RATE|ANALYSIS|SUMMARY)\b/i.test(value))return false;return ordered.some(other=>other!==line&&/^\s*NETT?\s*$/i.test(String(other.text||''))&&Math.abs((Number(other.y)||0)-y)<=12&&(Number(other.x)||0)<x)||key.includes('AMOUNT');}),vatRateTable=ordered.some(line=>/^\s*VAT\s+RATE\s*$/i.test(String(line.text||''))&&ordered.some(other=>/^\s*EXCL?\s*$/i.test(String(other.text||''))&&Math.abs((Number(other.y)||0)-(Number(line.y)||0))<=12)&&ordered.some(other=>/^\s*INCL?\s*$/i.test(String(other.text||''))&&Math.abs((Number(other.y)||0)-(Number(line.y)||0))<=12)),taxAmountLabel=ordered.some(line=>/\bTAX\s+GBP\b/i.test(String(line.text||''))),poundlandVatLabel=ordered.some(line=>/\bVAT\b/i.test(String(line.text||''))&&/(?:INCLUSIVE.*VAT|VAT.*INCLUSIVE|PAID)/i.test(String(line.text||''))),taxTableLabel=ordered.some(line=>compact(line.text)==='TAX')&&ordered.some(line=>/\bRATE\b/i.test(String(line.text||'')))&&vatLines.length>0,mentioned=Boolean(summary)||vatSeeBelow||vatAmountColumnEvidence||vatRateTable||taxAmountLabel||poundlandVatLabel||taxTableLabel||vatLines.some(line=>vatAmountLabel(line)||/^\s*V(?:A|4)(?:T|I)\s*[:.]?\s*$/i.test(String(line.text||'')));
     if(!mentioned)return {vat:0,vatMentioned:false,vatUnverified:false,vatRaw:''};
-    const cents=value=>receiptMoneyTokens(value).filter(token=>!/%/.test(String(value||''))).map(token=>Math.round(Math.abs(token.value)*100)),summaryCellCents=value=>{const values=cents(value);if(values.length)return values;const raw=String(value||'').trim(),match=raw.match(/^(\d{1,3})\s+[oO]{2}$/);if(match){const parsed=invoiceAmount(`${match[1]}.00`);return parsed===null?[]:[Math.round(parsed*100)];}const damaged=raw.match(/^[eE£]?\s*[cC]\s*[.,]\s*(\d{2})$/);if(damaged){const parsed=invoiceAmount(`9.${damaged[1]}`);return parsed===null?[]:[Math.round(parsed*100)];}const pennies=raw.match(/^[^\d]*[.,]\s*(\d{2})\s*$/);if(pennies){const parsed=invoiceAmount(`0.${pennies[1]}`);return parsed===null?[]:[Math.round(parsed*100)];}return [];},sum=values=>values.reduce((a,b)=>a+b,0)/100;
+    const cents=value=>receiptMoneyTokens(value).filter(token=>!/%/.test(String(value||''))).map(token=>Math.round(Math.abs(token.value)*100)),summaryCellCents=value=>{const values=cents(value);if(values.length)return values;const raw=String(value||'').trim(),match=raw.match(/^(\d{1,3})\s+[oO]{2}$/);if(match){const parsed=invoiceAmount(`${match[1]}.00`);return parsed===null?[]:[Math.round(parsed*100)];}const damaged=raw.match(/^[eEÂ£]?\s*[cC]\s*[.,]\s*(\d{2})$/);if(damaged){const parsed=invoiceAmount(`9.${damaged[1]}`);return parsed===null?[]:[Math.round(parsed*100)];}const pennies=raw.match(/^[^\d]*[.,]\s*(\d{2})\s*$/);if(pennies){const parsed=invoiceAmount(`0.${pennies[1]}`);return parsed===null?[]:[Math.round(parsed*100)];}return [];},sum=values=>values.reduce((a,b)=>a+b,0)/100;
     // Read VAT from the printed VAT column of a summary table. Many Newtoll,
     // MFG, Asda and Tesco layouts put the net, VAT and gross values on one row;
     // choosing a nearby number can silently select the net or gross column.
@@ -2131,7 +2133,7 @@
         // letter (for example `30.c.`), while the printed TOTAL row still
         // yields its two cents. Reuse only that directly observed cents pair;
         // never infer the amount from VAT or fuel calculations.
-        if(!tokens.length&&/\bAMOUNT\b/.test(text)&&confirmedCents.size===1){const partial=String(line.text||'').match(/^\s*[£€$]?\s*(\d{1,3})\s*[.,]\s*[cC]\.??\s*$/);if(partial){const value=Number(`${partial[1]}.${[...confirmedCents][0]}`);if(value>=2&&value<=maximum)candidates.push({value,score:rank*100+Math.abs(ly-y)+Math.max(0,x+300-lx)*0.04});}}
+        if(!tokens.length&&/\bAMOUNT\b/.test(text)&&confirmedCents.size===1){const partial=String(line.text||'').match(/^\s*[Â£â‚¬$]?\s*(\d{1,3})\s*[.,]\s*[cC]\.??\s*$/);if(partial){const value=Number(`${partial[1]}.${[...confirmedCents][0]}`);if(value>=2&&value<=maximum)candidates.push({value,score:rank*100+Math.abs(ly-y)+Math.max(0,x+300-lx)*0.04});}}
       }}
     if(!candidates.length)return '';
     const counts=receiptAmountCounts(lines,Math.min(...labels.map(line=>Number(line.y)||0)),maximum);candidates.sort((a,b)=>a.score-b.score);const best=candidates[0],sameBand=candidates.filter(item=>item.score<=best.score+20),distinct=[...new Set(sameBand.map(item=>Math.round(item.value*100)))];if(distinct.length===1)return best.value;
@@ -2211,7 +2213,7 @@
     if(total===''&&hasPrintedTotalLabel){
       const positioned=[];
       for(const anchor of printedReceiptTotals){const ax=Number(anchor.x)||0,ay=Number(anchor.y)||0,aw=Number(anchor.width)||0;
-        for(const line of ordered){const x=Number(line.x)||0,y=Number(line.y)||0,dy=Math.abs(y-ay);if(dy>20||/\b\d[\dOoIl]{0,3}[.,]?\d{0,2}\s*[Ll]\b|@\s*[£$]?\s*\d[.,]\d{3}\s*\/\s*[Ll]\b/i.test(String(line.text||'')))continue;
+        for(const line of ordered){const x=Number(line.x)||0,y=Number(line.y)||0,dy=Math.abs(y-ay);if(dy>20||/\b\d[\dOoIl]{0,3}[.,]?\d{0,2}\s*[Ll]\b|@\s*[Â£$]?\s*\d[.,]\d{3}\s*\/\s*[Ll]\b/i.test(String(line.text||'')))continue;
           if(line!==anchor&&x<ax+Math.max(45,Math.min(aw,100)))continue;
           for(const token of receiptMoneyTokens(line.text)){const value=Math.abs(token.value);if(value<2||value>maximum)continue;positioned.push({value,dy,dx:line===anchor?0:Math.max(0,x-(ax+aw)),anchorY:ay});}
         }
@@ -2241,7 +2243,7 @@
     // Totals; do not infer the total from the pump or net/VAT columns.
     if(total===''&&profile.id==='eg-on-the-move'){
       const labels=ordered.filter(line=>{const value=String(line.text||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/0/g,'O').replace(/1/g,'I');return value.length>=4&&value.length<=7&&receiptLevenshtein(value,'TOTALS')<=2;});
-      for(const label of labels){const y=Number(label.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=12&&(Number(line.x)||0)>=500).flatMap(line=>{const tokens=receiptMoneyTokens(line.text);if(tokens.length)return tokens.map(token=>Math.abs(token.value));const integer=String(line.text||'').match(/^\s*[£€]?\s*([\dOoIl]{1,4})\s*$/);if(!integer)return [];const value=invoiceAmount(integer[1].replace(/[Oo]/g,'0').replace(/[Il]/g,'1'));return value===null?[]:[Math.abs(value)];}).filter(value=>value>=2&&value<=200);if(values.length===1){total=values[0];break;}}
+      for(const label of labels){const y=Number(label.y)||0,values=ordered.filter(line=>Math.abs((Number(line.y)||0)-y)<=12&&(Number(line.x)||0)>=500).flatMap(line=>{const tokens=receiptMoneyTokens(line.text);if(tokens.length)return tokens.map(token=>Math.abs(token.value));const integer=String(line.text||'').match(/^\s*[Â£â‚¬]?\s*([\dOoIl]{1,4})\s*$/);if(!integer)return [];const value=invoiceAmount(integer[1].replace(/[Oo]/g,'0').replace(/[Il]/g,'1'));return value===null?[]:[Math.abs(value)];}).filter(value=>value>=2&&value<=200);if(values.length===1){total=values[0];break;}}
     }
     if(total===''&&profile.id==='faizan-e-madina'){
       const labels=ordered.filter(line=>/\bSHOP\s+SALES\b/i.test(String(line.text||''))||/^\s*(?:TOR[NM]|TOTAL)\.?\s*$/i.test(String(line.text||''))||receiptTotalLabel(line.text));
@@ -2425,7 +2427,7 @@
   }
   function isBestwayText(value){return /\bBESTWAY\b/i.test(String(value||''));}
   function bestwayMoneyValues(value){
-    let text=String(value||'').trim().replace(/[Â££$€]/g,'').replace(/^[Ee]\s*/,'').replace(/^[lI|](?=\s*[,\d.])/,'1').replace(/[Oo]/g,'0').replace(/\s+(?=,)/g,'');
+    let text=String(value||'').trim().replace(/[Ã‚Â£Â£$â‚¬]/g,'').replace(/^[Ee]\s*/,'').replace(/^[lI|](?=\s*[,\d.])/,'1').replace(/[Oo]/g,'0').replace(/\s+(?=,)/g,'');
     const matches=text.match(/-?(?:\d{1,3}(?:[ ,]\d{3})+|\d+)[.,]\s*\d{2}/g)||[];
     return matches.map(token=>invoiceAmount(token)).filter(number=>number!==null&&number>=0);
   }
@@ -2482,9 +2484,10 @@
       const total=bestwayPositionedValue(pageLines,/\btotal\s+due\b.*\b(?:inc|incl|lnc|in[cg]l?)\s*VAT\b/i,{minY:start,maxY:Number(totalDue.y)||Infinity,rowTolerance:Math.max(30,Number(totalDue.height)||0)});
       // Use the printed summary labels and their order instead of page-wide
       // coordinate assumptions: VAT is the last VAT row before Total Due.
-      const vatLabels=pageLines.filter(line=>{
+      totalLabels.push(/\btotal\b/i);
+    const vatLabels=pageLines.filter(line=>{
         const y=Number(line.y)||0,text=String(line.text||'');
-        return y>=start&&y<(Number(totalDue.y)||Infinity)&&/^\s*VAT(?:\s+(?:amount|value))?\s*:?\s*(?:[£$€Ee]?\s*[\d., ]*)?$/i.test(text);
+        return y>=start&&y<(Number(totalDue.y)||Infinity)&&/^\s*VAT(?:\s+(?:amount|value))?\s*:?\s*(?:[Â£$â‚¬Ee]?\s*[\d., ]*)?$/i.test(text);
       }).sort((a,b)=>(Number(b.y)||0)-(Number(a.y)||0));
       const vatLabel=vatLabels[0],vat=vatLabel?bestwayPositionedValue(pageLines,/^\s*VAT(?:\s+(?:amount|value))?\s*:?/i,{minY:Number(vatLabel.y)||start,maxY:Number(vatLabel.y)||start,rowTolerance:Math.max(30,Number(vatLabel.height)||0)}):{value:null,ambiguous:false};
       if(vat.value!==null||total.value!==null)return {page,vat,total};
@@ -2518,13 +2521,13 @@
     return '';
   }
   function freshwaysMoney(value){
-    let text=String(value||'').trim().replace(/[£$€]/g,'').replace(/^E\s*(?=[0-9Oo])/i,'').replace(/[Oo]/g,'0').replace(/[Il](?=\d|[.,])/g,'1').replace(/\s+/g,' ');
+    let text=String(value||'').trim().replace(/[Â£$â‚¬]/g,'').replace(/^E\s*(?=[0-9Oo])/i,'').replace(/[Oo]/g,'0').replace(/[Il](?=\d|[.,])/g,'1').replace(/\s+/g,' ');
     const match=text.match(/-?(?:\d{1,3}(?:[ ,]\d{3})+|\d+)[.,]\s*\d{2}/);return match?invoiceAmount(match[0]):null;
   }
   function freshwaysVatMoney(value){
     const raw=String(value||'').trim();
     // The first VAT character is the printed pound sign. Windows OCR can
-    // render £0.00 as 20.00, so ignore that character before parsing VAT.
+    // render Â£0.00 as 20.00, so ignore that character before parsing VAT.
     return raw?freshwaysMoney(raw.slice(1)):null;
   }
   function freshwaysInvoiceNumber(value){
@@ -2548,7 +2551,7 @@
     const vatMinY=Number(invoiceLabel?.y),vatMaxY=Number(invoiceTotalLabel?.y),hasFooterBounds=Number.isFinite(vatMinY)&&Number.isFinite(vatMaxY)&&vatMaxY>vatMinY;
     // Never search the whole page for VAT: OCR can mistake a VAT column/rate
     // or an unrelated number near the bottom-left of the page for the footer
-    // amount. Require either the known Invoice: → Invoice Total footer band,
+    // amount. Require either the known Invoice: â†’ Invoice Total footer band,
     // or (if the first footer label was missed) a VAT label immediately above
     // Invoice Total in the right-hand totals area.
     let vatRaw='',vat=null;
@@ -2565,7 +2568,7 @@
     if(vat===null&&invoiceLabel){const baseY=Number(invoiceLabel.y)||0,maxY=hasFooterBounds?vatMaxY:baseY+85,page=Number(invoiceLabel.page)||1,valueX=Number(invoiceLabel.x)+(Number(invoiceLabel.width)||120)+8,candidates=footerLines.filter(line=>(Number(line.page)||1)===page&&(Number(line.x)||0)>=valueX&&(Number(line.y)||0)>=baseY+30&&(Number(line.y)||0)<=maxY).sort((a,b)=>Math.abs((Number(a.y)||0)-(baseY+56))-Math.abs((Number(b.y)||0)-(baseY+56)));vat=freshwaysVatMoney(candidates[0]?.text);vatRaw=vat===null?'':candidates[0]?.text||'';}
     let totalRaw=freshwaysLabeledRaw(footerLines,/\bInvoice\s+Total\s*:?[\s]*/i),total=freshwaysMoney(totalRaw);
     if(total===null&&invoiceLabel){const baseY=Number(invoiceLabel.y)||0,page=Number(invoiceLabel.page)||1,valueX=Number(invoiceLabel.x)+(Number(invoiceLabel.width)||120)+8,candidates=footerLines.filter(line=>(Number(line.page)||1)===page&&(Number(line.x)||0)>=valueX&&(Number(line.y)||0)>=baseY+95&&(Number(line.y)||0)<=baseY+150).sort((a,b)=>Math.abs((Number(a.y)||0)-(baseY+120))-Math.abs((Number(b.y)||0)-(baseY+120)));total=freshwaysMoney(candidates[0]?.text);totalRaw=total===null?'':candidates[0]?.text||'';}
-    // On some Windows OCR builds the printed pound sign before £0.00 is read
+    // On some Windows OCR builds the printed pound sign before Â£0.00 is read
     // as a digit 2, producing the text "20.00". Do not post that as VAT; ask
     // the existing 5x retry to confirm the footer value instead.
     const vatCurrencyGlyphSuspect=vat===20&&/^2(?:0|O)[.,]0{2}$/i.test(String(vatRaw||'').replace(/\s+/g,'')),confirmedVat=vatCurrencyGlyphSuspect?null:vat;
@@ -2684,10 +2687,10 @@
     return '';
   }
   function amazonMoneyValue(value){
-    let text=String(value||'').trim().replace(/^([(-]?\s*)[£€$Ee]\s*/,'$1').replace(/^[^0-9OoQqIiLl|()\-]*/,'');
-    const match=text.match(/[(-]?\s*[0-9OoQqIiLl|](?:[0-9OoQqIiLl|]|[\s,.'’](?=[0-9OoQqIiLl|]))*\s*[.,]\s*[0-9OoQqIiLl|]{2}\)?/);
+    let text=String(value||'').trim().replace(/^([(-]?\s*)[Â£â‚¬$Ee]\s*/,'$1').replace(/^[^0-9OoQqIiLl|()\-]*/,'');
+    const match=text.match(/[(-]?\s*[0-9OoQqIiLl|](?:[0-9OoQqIiLl|]|[\s,.'â€™](?=[0-9OoQqIiLl|]))*\s*[.,]\s*[0-9OoQqIiLl|]{2}\)?/);
     if(!match)return null;
-    const normalized=match[0].replace(/[OoQq]/g,'0').replace(/[IiLl|]/g,'1').replace(/[’']/g,'').replace(/\s+/g,'').replace(/,(?=\d{2}$)/,'.');
+    const normalized=match[0].replace(/[OoQq]/g,'0').replace(/[IiLl|]/g,'1').replace(/[â€™']/g,'').replace(/\s+/g,'').replace(/,(?=\d{2}$)/,'.');
     return invoiceAmount(normalized);
   }
   function amazonDateValue(value){
@@ -2897,8 +2900,8 @@
   // statements and batch PDFs from several suppliers together.
   function anchoredInvoiceMoneyValues(value){
     const text=String(value||'').replace(/(?<=\d)[Oo](?=[.,]\s*\d{2}\b)/g,'0'),values=[];
-    for(const match of text.matchAll(/(?<![\d/])(?:[£€$]\s*)?\(?-?\d(?:[\d\s,.'’]*\d)?[.,]\s*\d{2}\)?/g)){
-      const raw=match[0].replace(/[’']/g,'').replace(/\s+/g,' ').trim(),amount=invoiceAmount(raw);
+    for(const match of text.matchAll(/(?<![\d/])(?:[Â£â‚¬$]\s*)?\(?-?\d(?:[\d\s,.'â€™]*\d)?[.,]\s*\d{2}\)?/g)){
+      const raw=match[0].replace(/[â€™']/g,'').replace(/\s+/g,' ').trim(),amount=invoiceAmount(raw);
       if(amount!==null&&Number.isFinite(amount)&&!values.some(item=>item.index===match.index))values.push({raw,value:amount,index:match.index});
     }
     return values;
@@ -2930,13 +2933,37 @@
   }
   function anchoredInvoiceFlatValue(text,labelPatterns,{exclude=/\b(?:VAT\s*(?:registration|reg\.?|number|no\.?|ID)|VAT\s*(?:rate|percentage))\b/i}={}){
     const flat=String(text||'').replace(/\s+/g,' ');
-    for(const pattern of labelPatterns){for(const match of flat.matchAll(new RegExp(pattern.source+'\\s*[:#-]?\\s*(?:in\\s+(?:GBP|EUR|USD)\\s*)?(?:[£€$]\\s*)?((?:\\d{1,3}(?:[ ,]\\d{3})+|\\d+)[.,]\\s*\\d{2})','gi'))){const before=flat.slice(Math.max(0,match.index-55),match.index+pattern.source.length);if(exclude.test(before))continue;const amount=invoiceAmount(match[1]);if(amount!==null)return {value:amount,raw:match[1],label:before.slice(-55)};}}
+    for(const pattern of labelPatterns){for(const match of flat.matchAll(new RegExp(pattern.source+'\\s*[:#-]?\\s*(?:in\\s+(?:GBP|EUR|USD)\\s*)?(?:[Â£â‚¬$]\\s*)?(?:(?:GBP|EUR|USD)\\s*)?((?:\\d{1,3}(?:[ ,]\\d{3})+|\\d+)[.,]\\s*\\d{2})','gi'))){const valueOffset=match[0].lastIndexOf(match[1]),labelContext=flat.slice(match.index,match.index+Math.max(0,valueOffset));if(exclude.test(labelContext))continue;const amount=invoiceAmount(match[1]);if(amount!==null)return {value:amount,raw:match[1],label:labelContext};}}
+    return null;
+  }
+  function anchoredInvoiceSplitSummary(lines){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()).map((line,index)=>({...line,_index:index,_page:Number(line.page)||1,_x:Number(line.x)||0,_y:Number(line.y)||0,_w:Number(line.width)||0,_h:Number(line.height)||0})),pages=new Map();
+    for(const item of items){if(!pages.has(item._page))pages.set(item._page,[]);pages.get(item._page).push(item);}
+    const pageNumbers=[...pages.keys()].sort((a,b)=>a-b),summaryLabels=[{key:'subtotal',pattern:/\b(?:net\s+amount|net\s+total|subtotal)\s*(?:\([^)]{0,20}\))?/i},{key:'vat',pattern:/\b(?:VAT\s+amount|total\s+VAT|VAT\s+total)\s*(?:\([^)]{0,20}\))?/i},{key:'total',pattern:/\btotal(?:\s+amount)?\s*(?:\([^)]{0,20}\))?/i}];
+    for(let pageIndex=0;pageIndex<pageNumbers.length-1;pageIndex++){
+      const pageNumber=pageNumbers[pageIndex],nextPageNumber=pageNumbers[pageIndex+1];if(nextPageNumber!==pageNumber+1)continue;
+      const page=pages.get(pageNumber),nextPage=pages.get(nextPageNumber),pageBottom=Math.max(...page.map(item=>item._y+item._h),1),nextPageBottom=Math.max(...nextPage.map(item=>item._y+item._h),1),pageWidth=Math.max(...page.map(item=>item._x+item._w),1),nextWidth=Math.max(...nextPage.map(item=>item._x+item._w),1),labels={subtotal:[],vat:[],total:[]};
+      for(const item of page){for(const descriptor of summaryLabels){if(descriptor.pattern.test(String(item.text||''))){labels[descriptor.key].push(item);break;}}}
+      const labelTolerance=Math.max(pageBottom*.025,...Object.values(labels).flat().map(item=>item._h*2),1);let labelGroup=null;
+      for(const netLine of labels.subtotal)for(const vatLine of labels.vat)for(const totalLine of labels.total){const yValues=[netLine._y,vatLine._y,totalLine._y],top=Math.min(...yValues),bottom=Math.max(...yValues);if(bottom-top>labelTolerance||bottom<pageBottom*.62)continue;const score=bottom/pageBottom-(bottom-top)/pageBottom;if(!labelGroup||score>labelGroup.score)labelGroup={net:{key:'subtotal',line:netLine},vat:{key:'vat',line:vatLine},total:{key:'total',line:totalLine},score};}
+      if(!labelGroup)continue;const {net,vat,total}=labelGroup;
+      const labelHeight=Math.max(net.line._h,vat.line._h,total.line._h,1);
+      if(!(net.line._x<vat.line._x&&vat.line._x<total.line._x))continue;
+      const moneyLines=[];for(const item of nextPage){if(item._y>nextPageBottom*.24)continue;for(const money of anchoredInvoiceMoneyValues(item.text))moneyLines.push({line:item,...money});}
+      const rowTolerance=Math.max(labelHeight*2,nextPageBottom*.018),rows=[];
+      for(const candidate of moneyLines){let row=rows.find(group=>Math.abs(group.y-candidate.line._y)<=rowTolerance);if(!row){row={y:candidate.line._y,values:[]};rows.push(row);}row.values.push(candidate);}
+      const labelXs=[net.line._x/pageWidth,vat.line._x/pageWidth,total.line._x/pageWidth];let best=null;
+      for(const row of rows){const deduped=[];for(const candidate of row.values.sort((a,b)=>a.line._x-b.line._x)){if(!deduped.some(item=>Math.abs(item.line._x-candidate.line._x)<=Math.max(candidate.line._h,1)))deduped.push(candidate);}if(deduped.length<3)continue;
+        for(let start=0;start<=deduped.length-3;start++){const values=deduped.slice(start,start+3),xPositions=values.map(item=>item.line._x/nextWidth);if(!(xPositions[0]<xPositions[1]&&xPositions[1]<xPositions[2]))continue;const xScore=xPositions.reduce((sum,x,index)=>sum+Math.abs(x-labelXs[index]),0),score=Math.abs(row.y/nextPageBottom-.09)+xScore;if(!best||score<best.score)best={score,values};}
+      }
+      if(best)return {subtotal:{value:best.values[0].value,label:net.line.text},vat:{value:best.values[1].value,label:vat.line.text},total:{value:best.values[2].value,label:total.line.text},pages:[pageNumber,nextPageNumber]};
+    }
     return null;
   }
   function anchoredInvoiceDate(text,lines){
-    const parseCandidate=value=>{const source=String(value||'').replace(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|dated|date)\b\s*[:#-]?/ig,' '),match=source.match(/\b(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s+\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4})\b/i);if(!match)return '';const raw=match[0],monthFirst=raw.match(/^([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s+(\d{4})$/i);return parseDate(monthFirst?`${monthFirst[2]} ${monthFirst[1]} ${monthFirst[3]}`:raw);};
+    const parseCandidate=value=>{const source=String(value||'').replace(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|dated|date)\b\s*[:#-]?/ig,' ').replace(/(\d)\s+(?=\d[\/.\-])/g,'$1'),match=source.match(/\b(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s+\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4})\b/i);if(!match)return '';const raw=match[0],monthFirst=raw.match(/^([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s+(\d{4})$/i);return parseDate(monthFirst?`${monthFirst[2]} ${monthFirst[1]} ${monthFirst[3]}`:raw);};
     const ordered=Array.isArray(lines)?lines.filter(line=>line&&String(line.text||'').trim()).slice().sort((a,b)=>(Number(a.page)||1)-(Number(b.page)||1)||(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0)):[];
-    for(const line of ordered){const raw=String(line.text||'').trim();if(/\b(?:due\s+date|payment\s+date|bill\s+issue\s+date|statement\s+date)\b/i.test(raw))continue;if(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|dated)\b/i.test(raw)||/^date\s*:?$/i.test(raw)){const direct=parseCandidate(raw);if(direct)return direct;const samePage=ordered.filter(candidate=>candidate!==line&&(Number(candidate.page)||1)===(Number(line.page)||1)).map(candidate=>({candidate,date:parseCandidate(candidate.text),dy:Math.abs((Number(candidate.y)||0)-(Number(line.y)||0)),dx:(Number(candidate.x)||0)-((Number(line.x)||0)+(Number(line.width)||0))})).filter(item=>item.date&&item.dy<=Math.max((Number(line.height)||20)*2.2,20)&&item.dx>=-8).sort((a,b)=>a.dy-b.dy||a.dx-b.dx);if(samePage.length)return samePage[0].date;}}
+    for(const line of ordered){const raw=String(line.text||'').trim();if(/\b(?:due\s+date|payment\s+date|bill\s+issue\s+date|statement\s+date)\b/i.test(raw))continue;if(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|dated)\b/i.test(raw)||/^date\s*:?$/i.test(raw)){const direct=parseCandidate(raw);if(direct)return direct;const samePage=ordered.filter(candidate=>candidate!==line&&(Number(candidate.page)||1)===(Number(line.page)||1)).map(candidate=>({candidate,date:parseCandidate(candidate.text),dy:Math.abs((Number(candidate.y)||0)-(Number(line.y)||0)),dx:(Number(candidate.x)||0)-((Number(line.x)||0)+(Number(line.width)||0))})).filter(item=>item.date&&item.dy<=Math.max((Number(line.height)||20)*3,20)&&(item.dx>=-8||Math.abs((Number(item.candidate.x)||0)-(Number(line.x)||0))<=Math.max((Number(line.height)||20)*2,28))).sort((a,b)=>a.dy-b.dy||a.dx-b.dx);if(samePage.length)return samePage[0].date;}}
     const labelled=String(text||'').match(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|dated)\b\s*[:#-]?\s*((?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s+\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}))/i);return parseCandidate(labelled?.[1]||'');
   }
   function anchoredInvoiceNumber(text,lines){
@@ -2945,10 +2972,23 @@
     return extractInvoiceNumber(text)||'';
   }
   function parseAnchoredInvoice(flat,source,ocrLines,profile){
-    const text=String(flat||''),generic=parseInvoiceGeneric(text,source,ocrLines),lines=Array.isArray(ocrLines)?ocrLines:[],nonInvoice=/\b(?:account\s+statement|statement\s+of\s+(?:account|the\s+account)|remittance\s+advice|payment\s+advice|order\s+confirmation|confirmation\s+of\s+your\s+order|(?:^|\s)(?:quote|quotation)(?:\s+(?:number|date|valid\s+until))|pro\s+forma|purchase\s+order|sales\s+order|receipt\s+&\s+feedback)\b/i.test(text),hasInvoiceLabel=/\b(?:tax\s+invoice|invoice|credit\s+note)\b/i.test(text),isInvoiceDocument=Boolean(profile.detect(text)&&hasInvoiceLabel&&!nonInvoice),number=anchoredInvoiceNumber(text,lines)||generic.invoiceNumber||'',date=anchoredInvoiceDate(text,lines)||generic.date,totalLabels=[/\b(?:total\s+invoice\s+amount|total\s+invoice|invoice\s+total|total\s+payable|grand\s+total|total\s+charges\s+for\s+(?:this\s+)?invoice|total\s+charges\s+for\s+bill)\b/i,/\b(?:amount\s+due\s+in\s+(?:GBP|EUR|USD)|total\s+due\s+in\s+(?:GBP|EUR|USD)|total\s+(?:due|payable|value|amount|GBP)|amount\s+payable|amount\s+due|balance\s+due|gross\s+(?:amount|total|value))\b/i,/^\s*(?:total|gross)\s*(?:\([^)]{0,12}\))?\s*(?:[£€$E]|GBP|EUR|USD)?\s*[:#-]?\s*$/i],vatLabels=[/\b(?:total\s+VAT|VAT\s+total|VAT\s+amount|VAT\s+value|total\s+tax|tax\s+amount|tax\s+value)\b/i,/\bVAT\s*(?:@\s*)?\d+(?:[.,]\d+)?\s*%/i,/^\s*VAT\s+(?:[£€$E]|GBP|EUR|USD)\s*[:#-]?\s*$/i,/^\s*VAT\s*(?:\([^)]{0,12}\))?\s*[:#-]?\s*$/i],totalFound=anchoredInvoiceRelativeValue(lines,totalLabels,{exclude:/\b(?:total\s+(?:outstanding|in\s+words|net\s+price|VAT)|statement\s+balance|opening\s+balance)\b/i})||anchoredInvoiceFlatValue(text,totalLabels,{exclude:/\b(?:total\s+(?:outstanding|in\s+words|net\s+price|VAT)|statement\s+balance|opening\s+balance)\b/i}),vatFound=anchoredInvoiceRelativeValue(lines,vatLabels)||anchoredInvoiceFlatValue(text,vatLabels),subtotalFound=anchoredInvoiceRelativeValue(lines,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[£€$E])\b/i])||anchoredInvoiceFlatValue(text,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[£€$E])\b/i]);
-    return {...generic,invoiceNumber:number,date,supplier:profile.name,total:isInvoiceDocument?(totalFound?.value??''):'',vat:isInvoiceDocument?(vatFound?.value??''):'',subtotal:isInvoiceDocument?(subtotalFound?.value??''):'',currency:/\bEUR\b|€/i.test(text)?'EUR':/\bUSD\b|\$/i.test(text)?'USD':'GBP',documentType:/\bcredit\s+(?:note|memo)\b/i.test(text)?'CREDIT NOTE':'INVOICE',isInvoiceDocument,accepted:false,rejected:true,rejectedReason:isInvoiceDocument?'':'This document is not a confirmed supplier invoice.'};
+    const text=String(flat||''),generic=parseInvoiceGeneric(text,source,ocrLines),lines=Array.isArray(ocrLines)?ocrLines:[];
+    const explicitInvoiceHeader=/\b(?:tax\s+invoice|invoice\s*(?:number|no\.?|nr\.?|#)|invoice\s+date)\b/i.test(text);
+    const lyntonReference=profile.id==='lynton'?String(text.match(/\bMULTI[-\s]?SHIPMENT\s+INVOICE\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{3,})/i)?.[1]||''):'';
+    const hardNonInvoice=/\b(?:account\s+statement|statement\s+of\s+(?:account|the\s+account)|remittance\s+advice|payment\s+advice|order\s+confirmation|confirmation\s+of\s+your\s+order|order\s+has\s+been\s+received|order\s+received|pro\s+forma|receipt\s+&\s+feedback)\b/i.test(text);
+    const orderOrQuoteDocument=/\b(?:purchase\s+order|sales\s+order|quote|quotation)\b/i.test(text)&&!explicitInvoiceHeader;
+    const nonInvoice=hardNonInvoice||orderOrQuoteDocument,hasInvoiceLabel=/\b(?:tax\s+invoice|invoice|credit\s+note)\b/i.test(text),isInvoiceDocument=Boolean(profile.detect(text)&&hasInvoiceLabel&&!nonInvoice),number=anchoredInvoiceNumber(text,lines)||generic.invoiceNumber||(lyntonReference?lyntonReference.slice(-4):''),date=anchoredInvoiceDate(text,lines)||generic.date;
+    const totalLabels=[/\b(?:total\s+invoice\s+amount|total\s+invoice|invoice\s+total|total\s+payable|grand\s+total|total\s+charges\s+for\s+(?:this\s+)?invoice|total\s+charges\s+for\s+bill)\b/i,/\b(?:amount\s+due\s+in\s+(?:GBP|EUR|USD)|total\s+due\s+in\s+(?:GBP|EUR|USD)|total\s+(?:due|payable|value|amount|GBP)|amount\s+payable|amount\s+due|balance\s+due|gross\s+(?:amount|total|value))\b/i,/^\s*(?:total|gross)\s*(?:\([^)]{0,12}\))?\s*(?:[Â£â‚¬$E]|GBP|EUR|USD)?\s*[:#-]?\s*$/i];
+    totalLabels.push(/\btotal\b/i);
+    const vatLabels=[/\bVAT\s+due\s*\([^)]{0,80}\)/i,/\b(?:total\s+VAT|VAT\s+total|VAT\s+amount|VAT\s+value|total\s+tax|tax\s+amount|tax\s+value)\b/i,/\bVAT\s*(?:@\s*)?\d+(?:[.,]\d+)?\s*%/i,/^\s*VAT\s+(?:[Â£â‚¬$E]|GBP|EUR|USD)\s*[:#-]?\s*$/i,/^\s*VAT\s*(?:\([^)]{0,12}\))?\s*[:#-]?\s*$/i];
+    const splitSummary=anchoredInvoiceSplitSummary(lines),totalFound=anchoredInvoiceRelativeValue(lines,totalLabels,{exclude:/\b(?:total\s+(?:outstanding|in\s+words|net\s+price|VAT)|statement\s+balance|opening\s+balance)\b/i})||anchoredInvoiceFlatValue(text,totalLabels,{exclude:/\b(?:total\s+(?:outstanding|in\s+words|net\s+price|VAT)|statement\s+balance|opening\s+balance)\b/i})||splitSummary?.total;
+    const vatContentFound=anchoredInvoiceRelativeValue(lines,[/\bVAT\s+content\b/i])||anchoredInvoiceFlatValue(text,[/\bVAT\s+content\b/i]);
+    const includedVat=text.match(/\b(?:includes?|including)\s+(?:(?:GBP|EUR|USD)\s*)?[^0-9]{0,2}((?:\d{1,3}(?:[ ,]\d{3})+|\d+)[.,]\s*\d{2})\s+VAT\b/i),vatIncludedFound=includedVat?{value:invoiceAmount(includedVat[1]),raw:includedVat[1]}:null;
+    const vatFound=anchoredInvoiceRelativeValue(lines,vatLabels)||anchoredInvoiceFlatValue(text,vatLabels)||vatContentFound||vatIncludedFound||splitSummary?.vat;
+    const subtotalFound=anchoredInvoiceRelativeValue(lines,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[Â£â‚¬$E])\b/i])||anchoredInvoiceFlatValue(text,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[Â£â‚¬$E])\b/i])||splitSummary?.subtotal;
+    const retryOcr=Boolean(isInvoiceDocument&&(!number||!date||!totalFound||!vatFound));generic.originalInvoiceNumber=lyntonReference||generic.originalInvoiceNumber||number;
+    return {...generic,invoiceNumber:number,date,supplier:profile.name,total:totalFound?.value??'',vat:vatFound?.value??'',subtotal:subtotalFound?.value??'',currency:/\bEUR\b|â‚¬/i.test(text)?'EUR':/\bUSD\b|\$/i.test(text)?'USD':'GBP',documentType:/\bcredit\s+(?:note|memo)\b/i.test(text)?'CREDIT NOTE':isInvoiceDocument?'INVOICE':'NON-INVOICE',isInvoiceDocument,accepted:false,rejected:true,retryOcr,rejectedReason:isInvoiceDocument?'':'This document is not a confirmed supplier invoice.'};
   }
-
   function anchoredInvoiceProfile(id,name,detect){const profile={id,name,kind:'supplier',status:'Under development',category:'Invoices',formatTag:'PDF only',detect};return {...profile,parse:(flat,source,lines)=>parseAnchoredInvoice(flat,source,lines,profile)};}
   const invoiceProfiles=[
     {id:'amazon',name:'Amazon',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isAmazonInvoiceText,parse:(flat,source,lines)=>parseAmazonInvoice(flat,source,lines)},
@@ -3053,8 +3093,8 @@
     // help read fields, but they do not establish that the supplier is known.
     const profileConfigured=profile?.kind==='supplier',supportedProfile=profileConfigured&&Boolean(specialised),genericAcceptedForConfiguredProfile=profileConfigured&&row.accepted===true,unconfiguredSupplier=!profileConfigured&&row.isInvoiceDocument!==false;
     const vatRequired=row.documentType!=='DELIVERY NOTE',complete=Boolean((supportedProfile||genericAcceptedForConfiguredProfile)&&row.isInvoiceDocument!==false&&row.invoiceNumber&&row.date&&row.supplier&&row.total!==''&&row.total!==null&&row.total!==undefined&&Number.isFinite(Number(row.total))&&(!vatRequired||row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat)))&&(profile?.id!=='amazon'||String(row.itemName||'').trim())&&(row.documentType!=='CORRECTION'||row.correctedTotal!==''&&row.correctedTotal!==null&&row.correctedTotal!==undefined&&Number.isFinite(Number(row.correctedTotal))&&row.correctedVat!==''&&row.correctedVat!==null&&row.correctedVat!==undefined&&Number.isFinite(Number(row.correctedVat))));
-    if(row.isInvoiceDocument===false){row.invoiceNumber='';row.originalInvoiceNumber='';row.date='';row.total='';row.subtotal='';row.vat='';}
-    row.status=complete?'ACCEPTED':'REJECTED';row.accepted=row.status==='ACCEPTED';row.rejected=row.status==='REJECTED';
+
+    row.status=complete?'ACCEPTED':'REJECTED';row.accepted=row.status==='ACCEPTED';row.rejected=row.status==='REJECTED';if(row.isInvoiceDocument===false){row.retryOcr=false;if(row.documentType!=='CREDIT NOTE')row.documentType='NON-INVOICE';}
     row.unconfiguredSupplier=unconfiguredSupplier;
     row.supplierProfileConfigured=Boolean(profileConfigured);
     row.rejectedReason=complete?'':row.isInvoiceDocument===false?(row.rejectedReason||'This document is a supplier statement or non-invoice document.'):unconfiguredSupplier?'Supplier not recognised or configured. This invoice is rejected until a supplier profile is configured.':row.rejectedReason||(!specialised?'Supplier/document format not recognised.':profile?.id==='amazon'&&!row.itemName?'Amazon item description could not be confirmed.':!row.invoiceNumber?'Invoice number not found.':!row.date?'Invoice date not found.':!row.supplier?'Supplier not identified.':row.documentType==='CORRECTION'&&(row.correctedTotal===''||row.correctedTotal===null||row.correctedTotal===undefined||row.correctedVat===''||row.correctedVat===null||row.correctedVat===undefined)?'Corrected invoice total or VAT could not be confirmed; correction was not applied.':row.total===''||row.total===null||row.total===undefined?'Printed total not found.':'VAT amount not found; one 5x OCR retry is required.');
@@ -3209,7 +3249,7 @@
     if(grossCents===null||vatCents===null)return {standardRate:'',zeroRate:''};
     if(vatCents===0)return {standardRate:'',zeroRate:grossCents/100};
     const standardCents=vatCents*5,netCents=grossCents-vatCents,zeroCents=netCents-standardCents;
-      // VAT printed to pennies can make VAT × 5 differ from the invoice net by
+      // VAT printed to pennies can make VAT Ã— 5 differ from the invoice net by
       // a couple of pence. Treat that as an all-standard-rate invoice instead
       // of emitting a spurious zero-rate amount. For a positive invoice, a
       // negative remainder can never be a genuine zero-rated purchase; credits
@@ -3218,7 +3258,7 @@
     return {standardRate:standardCents/100,zeroRate:zeroCents/100};
   }
   function invoiceRetryConflictReason(conflicts={}){
-    return Object.entries(conflicts).map(([field,values])=>`OCR passes disagree on ${field==='vat'?'VAT':'total'} (£${Number(values.firstPass).toFixed(2)} vs £${Number(values.retry).toFixed(2)}). Confirm the printed amount on the PDF.`).join(' ');
+    return Object.entries(conflicts).map(([field,values])=>`OCR passes disagree on ${field==='vat'?'VAT':'total'} (Â£${Number(values.firstPass).toFixed(2)} vs Â£${Number(values.retry).toFixed(2)}). Confirm the printed amount on the PDF.`).join(' ');
   }
   function matchEagleRetryCandidate(row,candidates){
     if(row?.profileId!=='eagle-foods'||!Number.isInteger(Number(row.page))||Number(row.page)<1)return null;
@@ -3244,7 +3284,7 @@
     for(const key of fields){
       if(preserveGeneratedReference&&(key==='invoiceNumber'||key==='originalInvoiceNumber'))continue;
       const value=candidate?.[key];if(value===''||value===null||value===undefined)continue;
-      // If the 5x scan was requested only because a Freshways £0.00 may have
+      // If the 5x scan was requested only because a Freshways Â£0.00 may have
       // become "20.00", keep already readable first-pass totals. The higher
       // resolution page can misread the pound sign on the invoice total too.
       if(row?.profileId==='freshways'&&row?.freshwaysVatOcrAmbiguous&&key==='total'&&merged.total!==''&&merged.total!==null&&merged.total!==undefined)continue;
