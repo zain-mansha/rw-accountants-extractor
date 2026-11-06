@@ -1890,7 +1890,7 @@
     {id:'metro-bank',name:'Metro Bank',category:'Bank statements',status:'Review',description:'Column-based statements and online transaction reports with separate money out, money in and balance columns'},
     {id:'hsbc-bank',name:'HSBC',category:'Bank statements',status:'Under development',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
     ...receiptProfiles.map(({id,name,category})=>({id,name,category,status:'Under development'})),
-    ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status,formatTag})=>({id,name,category:'Invoices',...(status?{status}:{}),...(formatTag?{formatTag}:{})}))
+    ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status,formatTag,category})=>({id,name,category:category||'Invoices',...(status?{status}:{}),...(formatTag?{formatTag}:{})}))
   ];}
   function receiptLevenshtein(a,b){const row=Array.from({length:b.length+1},(_,i)=>i);for(let i=1;i<=a.length;i++){let previous=row[0];row[0]=i;for(let j=1;j<=b.length;j++){const current=row[j];row[j]=Math.min(row[j]+1,row[j-1]+1,previous+(a[i-1]===b[j-1]?0:1));previous=current;}}return row[b.length];}
   function receiptTotalLabel(value){const letters=String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/0/g,'O').replace(/1/g,'I');return !['TOTALS','TODAY'].includes(letters)&&letters.length>=4&&letters.length<=6&&receiptLevenshtein(letters,'TOTAL')<=2;}
@@ -2895,10 +2895,65 @@
   // Keep supplier/document-specific parsing isolated here. Detection uses
   // document content, never just the file name, because users often rename
   // statements and batch PDFs from several suppliers together.
+  function anchoredInvoiceMoneyValues(value){
+    const text=String(value||'').replace(/(?<=\d)[Oo](?=[.,]\s*\d{2}\b)/g,'0'),values=[];
+    for(const match of text.matchAll(/(?<![\d/])(?:[£€$]\s*)?\(?-?\d(?:[\d\s,.'’]*\d)?[.,]\s*\d{2}\)?/g)){
+      const raw=match[0].replace(/[’']/g,'').replace(/\s+/g,' ').trim(),amount=invoiceAmount(raw);
+      if(amount!==null&&Number.isFinite(amount)&&!values.some(item=>item.index===match.index))values.push({raw,value:amount,index:match.index});
+    }
+    return values;
+  }
+  function anchoredInvoiceRelativeValue(lines,labelPatterns,{exclude=/\b(?:VAT\s*(?:registration|reg\.?|number|no\.?|ID)|VAT\s*(?:rate|percentage)|invoice\s+(?:number|no\.?|date)|due\s+date|account\s+number)\b/i}={}){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()).map((line,index)=>({...line,_index:index,_page:Number(line.page)||1,_x:Number(line.x)||0,_y:Number(line.y)||0,_w:Number(line.width)||0,_h:Number(line.height)||0})),pages=new Map();
+    for(const line of items){if(!pages.has(line._page))pages.set(line._page,[]);pages.get(line._page).push(line);}
+    const labels=[];
+    for(const pattern of labelPatterns){
+      for(const line of items){const text=String(line.text||'').trim();if(pattern.test(text))labels.push({line,pattern,priority:labelPatterns.indexOf(pattern)});}
+    }
+    let best=null;
+    for(const {line:label,pattern,priority} of labels){
+      const page=pages.get(label._page)||[],pageWidth=Math.max(...page.map(item=>item._x+item._w),1),pageHeight=Math.max(...page.map(item=>item._y+item._h),1),positiveHeights=page.map(item=>item._h).filter(value=>value>0).sort((a,b)=>a-b),lineHeight=positiveHeights[Math.floor(positiveHeights.length/2)]||label._h||20,height=Math.max(label._h,lineHeight,1),rowTolerance=Math.max(height*1.6,1),verticalTolerance=Math.max(height*4,1),labelRight=label._x+label._w;
+      const candidates=[];
+      const add=(candidate,score,source)=>{for(const money of anchoredInvoiceMoneyValues(candidate.text)){candidates.push({value:money.value,raw:money.raw,score,source,line:candidate});}};
+      const labelText=String(label.text||'').trim(),inline=labelText.replace(pattern,' ').trim();
+      if(inline)add(label,0,'inline');
+      for(const candidate of page){
+        if(candidate===label||/\b(?:VAT\s*(?:registration|reg\.?|number|no\.?|ID|rate|percentage)|invoice\s+(?:number|no\.?|date)|due\s+date|account\s+number)\b/i.test(String(candidate.text||''))||exclude.test(String(candidate.text||'')))continue;
+        const dy=Math.abs(candidate._y-label._y),dx=candidate._x-labelRight;
+        if(dy<=rowTolerance&&dx>=-height*.35){add(candidate,dy/height+Math.max(0,dx)/pageWidth*3+(dx<0?.25:0),'same-row');continue;}
+        if(dy<=verticalTolerance&&Math.abs(candidate._x-label._x)<=pageWidth*.2){add(candidate,dy/height+Math.abs(candidate._x-label._x)/pageWidth*3+.35,'next-line');}
+      }
+      const chosen=candidates.sort((a,b)=>a.score-b.score||a.line._index-b.line._index)[0];
+      if(chosen){const score=chosen.score+priority*0.22+Math.max(0,(pageHeight-label._y)/pageHeight)*0.0001;if(!best||score<best.score)best={value:chosen.value,raw:chosen.raw,label:labelText,score,priority};}
+    }
+    return best;
+  }
+  function anchoredInvoiceFlatValue(text,labelPatterns,{exclude=/\b(?:VAT\s*(?:registration|reg\.?|number|no\.?|ID)|VAT\s*(?:rate|percentage))\b/i}={}){
+    const flat=String(text||'').replace(/\s+/g,' ');
+    for(const pattern of labelPatterns){for(const match of flat.matchAll(new RegExp(pattern.source+'\\s*[:#-]?\\s*(?:in\\s+(?:GBP|EUR|USD)\\s*)?(?:[£€$]\\s*)?((?:\\d{1,3}(?:[ ,]\\d{3})+|\\d+)[.,]\\s*\\d{2})','gi'))){const before=flat.slice(Math.max(0,match.index-55),match.index+pattern.source.length);if(exclude.test(before))continue;const amount=invoiceAmount(match[1]);if(amount!==null)return {value:amount,raw:match[1],label:before.slice(-55)};}}
+    return null;
+  }
+  function anchoredInvoiceDate(text,lines){
+    const parseCandidate=value=>{const source=String(value||'').replace(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|dated|date)\b\s*[:#-]?/ig,' '),match=source.match(/\b(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s+\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4})\b/i);if(!match)return '';const raw=match[0],monthFirst=raw.match(/^([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s+(\d{4})$/i);return parseDate(monthFirst?`${monthFirst[2]} ${monthFirst[1]} ${monthFirst[3]}`:raw);};
+    const ordered=Array.isArray(lines)?lines.filter(line=>line&&String(line.text||'').trim()).slice().sort((a,b)=>(Number(a.page)||1)-(Number(b.page)||1)||(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0)):[];
+    for(const line of ordered){const raw=String(line.text||'').trim();if(/\b(?:due\s+date|payment\s+date|bill\s+issue\s+date|statement\s+date)\b/i.test(raw))continue;if(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|dated)\b/i.test(raw)||/^date\s*:?$/i.test(raw)){const direct=parseCandidate(raw);if(direct)return direct;const samePage=ordered.filter(candidate=>candidate!==line&&(Number(candidate.page)||1)===(Number(line.page)||1)).map(candidate=>({candidate,date:parseCandidate(candidate.text),dy:Math.abs((Number(candidate.y)||0)-(Number(line.y)||0)),dx:(Number(candidate.x)||0)-((Number(line.x)||0)+(Number(line.width)||0))})).filter(item=>item.date&&item.dy<=Math.max((Number(line.height)||20)*2.2,20)&&item.dx>=-8).sort((a,b)=>a.dy-b.dy||a.dx-b.dx);if(samePage.length)return samePage[0].date;}}
+    const labelled=String(text||'').match(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|dated)\b\s*[:#-]?\s*((?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s+\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}))/i);return parseCandidate(labelled?.[1]||'');
+  }
+  function anchoredInvoiceNumber(text,lines){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),patterns=[/\b(?:tax\s+)?invoice\s*(?:number|no\.?|nr\.?|#)\s*[:#.-]?\s*/i,/\binv\.?\s*(?:number|no\.?|nr\.?|#)\s*[:#.-]?\s*/i];
+    for(const pattern of patterns){const labels=items.filter(line=>pattern.test(String(line.text||''))).sort((a,b)=>(Number(a.page)||1)-(Number(b.page)||1)||(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0));for(const label of labels){const inline=cleanInvoiceNumber(String(label.text||'').replace(pattern,'').trim());if(inline)return inline;const page=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),right=(Number(label.x)||0)+(Number(label.width)||0),pageWidth=Math.max(...page.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),height=Math.max(Number(label.height)||0,1),candidates=[];for(const line of page){if(line===label||/\b(?:due\s+date|invoice\s+date|date\s+of\s+issue|page\s+no\.?|customer\s+enquiry|order\s+(?:no\.?|number)|purchase\s+order|account\s+(?:no\.?|number))\b/i.test(String(line.text||'')))continue;const raw=String(line.text||'').trim(),candidate=cleanInvoiceNumber(raw);if(!candidate||!/[0-9]/.test(candidate)||candidate.length<3||candidate.length>40)continue;const yGap=Math.abs((Number(line.y)||0)-(Number(label.y)||0)),xGap=(Number(line.x)||0)-right,row=yGap<=Math.max(height*1.6,16),nearBelow=(Number(line.y)||0)>=(Number(label.y)||0)&&yGap<=Math.max(height*6,48)&&Math.abs((Number(line.x)||0)-(Number(label.x)||0))<=pageWidth*.22;if(!row&&!nearBelow)continue;const pairedWithOtherField=page.some(other=>other!==line&&other!==label&&/\b(?:order\s+(?:no\.?|number)|purchase\s+order|customer\s+(?:no\.?|number)|account\s+(?:no\.?|number)|delivery\s+(?:no\.?|number)|reference\s+(?:no\.?|number))\b/i.test(String(other.text||''))&&(Number(line.y)||0)>=(Number(other.y)||0)-height&&(Number(line.y)||0)-(Number(other.y)||0)<=height*6&&Math.abs((Number(line.x)||0)-(Number(other.x)||0))<=pageWidth*.18);if(pairedWithOtherField)continue;const score=row?yGap/height+Math.max(0,xGap)/pageWidth*3+(xGap<0?.3:0):yGap/height*.45+Math.abs((Number(line.x)||0)-(Number(label.x)||0))/pageWidth*3+.2;candidates.push({candidate,score});}candidates.sort((a,b)=>a.score-b.score);if(candidates.length)return candidates[0].candidate;}}
+    return extractInvoiceNumber(text)||'';
+  }
+  function parseAnchoredInvoice(flat,source,ocrLines,profile){
+    const text=String(flat||''),generic=parseInvoiceGeneric(text,source,ocrLines),lines=Array.isArray(ocrLines)?ocrLines:[],nonInvoice=/\b(?:account\s+statement|statement\s+of\s+(?:account|the\s+account)|remittance\s+advice|payment\s+advice|order\s+confirmation|confirmation\s+of\s+your\s+order|(?:^|\s)(?:quote|quotation)(?:\s+(?:number|date|valid\s+until))|pro\s+forma|purchase\s+order|sales\s+order|receipt\s+&\s+feedback)\b/i.test(text),hasInvoiceLabel=/\b(?:tax\s+invoice|invoice|credit\s+note)\b/i.test(text),isInvoiceDocument=Boolean(profile.detect(text)&&hasInvoiceLabel&&!nonInvoice),number=anchoredInvoiceNumber(text,lines)||generic.invoiceNumber||'',date=anchoredInvoiceDate(text,lines)||generic.date,totalLabels=[/\b(?:total\s+invoice\s+amount|total\s+invoice|invoice\s+total|total\s+payable|grand\s+total|total\s+charges\s+for\s+(?:this\s+)?invoice|total\s+charges\s+for\s+bill)\b/i,/\b(?:amount\s+due\s+in\s+(?:GBP|EUR|USD)|total\s+due\s+in\s+(?:GBP|EUR|USD)|total\s+(?:due|payable|value|amount|GBP)|amount\s+payable|amount\s+due|balance\s+due|gross\s+(?:amount|total|value))\b/i,/^\s*(?:total|gross)\s*(?:\([^)]{0,12}\))?\s*(?:[£€$E]|GBP|EUR|USD)?\s*[:#-]?\s*$/i],vatLabels=[/\b(?:total\s+VAT|VAT\s+total|VAT\s+amount|VAT\s+value|total\s+tax|tax\s+amount|tax\s+value)\b/i,/\bVAT\s*(?:@\s*)?\d+(?:[.,]\d+)?\s*%/i,/^\s*VAT\s+(?:[£€$E]|GBP|EUR|USD)\s*[:#-]?\s*$/i,/^\s*VAT\s*(?:\([^)]{0,12}\))?\s*[:#-]?\s*$/i],totalFound=anchoredInvoiceRelativeValue(lines,totalLabels,{exclude:/\b(?:total\s+(?:outstanding|in\s+words|net\s+price|VAT)|statement\s+balance|opening\s+balance)\b/i})||anchoredInvoiceFlatValue(text,totalLabels,{exclude:/\b(?:total\s+(?:outstanding|in\s+words|net\s+price|VAT)|statement\s+balance|opening\s+balance)\b/i}),vatFound=anchoredInvoiceRelativeValue(lines,vatLabels)||anchoredInvoiceFlatValue(text,vatLabels),subtotalFound=anchoredInvoiceRelativeValue(lines,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[£€$E])\b/i])||anchoredInvoiceFlatValue(text,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[£€$E])\b/i]);
+    return {...generic,invoiceNumber:number,date,supplier:profile.name,total:isInvoiceDocument?(totalFound?.value??''):'',vat:isInvoiceDocument?(vatFound?.value??''):'',subtotal:isInvoiceDocument?(subtotalFound?.value??''):'',currency:/\bEUR\b|€/i.test(text)?'EUR':/\bUSD\b|\$/i.test(text)?'USD':'GBP',documentType:/\bcredit\s+(?:note|memo)\b/i.test(text)?'CREDIT NOTE':'INVOICE',isInvoiceDocument,accepted:false,rejected:true,rejectedReason:isInvoiceDocument?'':'This document is not a confirmed supplier invoice.'};
+  }
+
+  function anchoredInvoiceProfile(id,name,detect){const profile={id,name,kind:'supplier',status:'Under development',category:'Invoices',formatTag:'PDF only',detect};return {...profile,parse:(flat,source,lines)=>parseAnchoredInvoice(flat,source,lines,profile)};}
   const invoiceProfiles=[
     {id:'amazon',name:'Amazon',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isAmazonInvoiceText,parse:(flat,source,lines)=>parseAmazonInvoice(flat,source,lines)},
-    {id:'kin-global',name:'Kin Global Distribution Ltd',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isKinGlobalText,parse:(flat,source,lines)=>parseKinGlobalInvoice(flat,source,lines)},
-    {id:'km-distribution',name:'KM Distribution Centre Ltd',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isKmDistributionText,parse:(flat,source,lines)=>parseKmDistributionInvoice(flat,source,lines)},
+    {id:'kin-global',name:'Kin Global Distribution Ltd',kind:'supplier',status:'Under development',category:'PDF only',detect:isKinGlobalText,parse:(flat,source,lines)=>parseKinGlobalInvoice(flat,source,lines)},
+    {id:'km-distribution',name:'KM Distribution Centre Ltd',kind:'supplier',status:'Under development',category:'PDF only',detect:isKmDistributionText,parse:(flat,source,lines)=>parseKmDistributionInvoice(flat,source,lines)},
     {id:'freshways',name:'Freshways',kind:'supplier',detect:isFreshwaysText,parse:(flat,source,lines)=>parseFreshwaysInvoice(flat,source,lines)},
     {id:'bestway',name:'Bestway Wholesale',kind:'supplier',detect:isBestwayText,parse:(flat,source,lines)=>parseBestwayInvoice(flat,source,lines)},
     {id:'eagle-foods',name:'Eagle Foods Ltd',kind:'supplier',status:'Under development',detect:isEagleFoodsText,parse:(flat,source,lines)=>parseEagleFoodsInvoice(flat,source,lines)},
@@ -2913,6 +2968,52 @@
     {id:'dairy-fresh',name:'Dairy Fresh',kind:'supplier',status:'Under development',detect:isDairyFreshText,parse:(flat,source,lines)=>parseDairyFreshInvoice(flat,source,lines)},
     {id:'maspo',name:'Maspo',kind:'supplier',detect:flat=>/\bMASPO(?:\s+FOOD)?\s+LTD\b/i.test(flat)||maspoFooterInvoice(flat),parse:(flat,source,lines)=>parseMaspoInvoice(flat,source,lines)},
     {id:'polish-village-bread',name:'Polish Village Bread',kind:'supplier',detect:isPolishVillageBreadText,parse:(flat,source,lines,options)=>parseWzInvoice(flat,source,lines,options)},
+    anchoredInvoiceProfile('acre-aesthetics','Acre Aesthetics Limited',text=>/\bACRE\s+AESTHETICS\s+LIMITED\b|acre-aesthetics/i.test(text)),
+    anchoredInvoiceProfile('abbvie','AbbVie Ltd',text=>/\bABBVIE\s+(?:LTD|LIMITED)\b|\bABBVIE\s+HOUSE\b/i.test(text)),
+    anchoredInvoiceProfile('siemens-finance','Siemens Financial Services Limited',text=>/\bSIEMENS\s+FINANCIAL\s+SERVICES\s+LIMITED\b/i.test(text)),
+    anchoredInvoiceProfile('healthxchange','Healthxchange Pharmacy UK Limited',text=>/\bHEALTHXCHANGE\b|healthxchange\.com|\bPHARMA-E\s+LIMITED\b/i.test(text)),
+    anchoredInvoiceProfile('pabau','Pabau (Hambrand Technology Ltd)',text=>/\bPABAU\b|\bHAMBRAND\s+TECHNOLOGY\s+LTD\b/i.test(text)),
+    anchoredInvoiceProfile('bright-hr','BrightHR',text=>/\bBRIGHT\s*HR\b|\bBRHR\d{4,}\b/i.test(text)),
+    anchoredInvoiceProfile('qd-tech','QD Tech Limited',text=>/\bQD\s+TECH\s+LIMITED\b|\bQDT[- ]?\d{3,}\b/i.test(text)),
+    anchoredInvoiceProfile('hydrafacial','Hydrafacial UK Limited',text=>/\bHYDRAFACIAL\s+(?:UK\s+)?LIMITED\b|hydrafacial\.(?:com|co\.uk)/i.test(text)),
+    anchoredInvoiceProfile('reliable-medicare','Reliable Medicare Ltd',text=>/\bRELIABLE\s+MEDICARE\s+(?:LTD|LIMITED)\b|reliablemedicare/i.test(text)),
+    anchoredInvoiceProfile('sos-oxygen','SOS Oxygen',text=>/\bSOS\s+OXYGEN\b|sosoxygen\.co\.uk/i.test(text)),
+    anchoredInvoiceProfile('dr-stuttee','Dr Stuttee Health Clinic',text=>/\bDR\.?\s*STUTTEE\b|stuttee/i.test(text)),
+    anchoredInvoiceProfile('digital-aesthetics','Digital Aesthetics',text=>/\bDIGITAL\s*AESTHETICS\b|digitalaesthetics/i.test(text)),
+    anchoredInvoiceProfile('tweakments','The Tweakments Guide Limited',text=>/\bTWEAKMENTS\s+GUIDE\s+LIMITED\b|\bTHE\s+TWEAKMENTS\s+GUIDE\b/i.test(text)),
+    anchoredInvoiceProfile('bt','BT',text=>/\bBRITISH\s+TELECOMMUNICATIONS\b|\bBT\s+PLC\b|\bBT\s+GROUP\s+PLC\b|\bYOUR\s+VAT\s+INVOICE\s+NUMBER\b/i.test(text)&&/\b(?:broadband|telephone|bill issue date|total for this bill)\b/i.test(text)),
+    anchoredInvoiceProfile('eon-next','E.ON Next',text=>/\bE\.?ON\s+NEXT\b|\bELECTRICITY\s+NEXT\b|\bE\.ON\s+UK\s+LIMITED\b/i.test(text)),
+    anchoredInvoiceProfile('aestheticsource','Aesthetic Source Ltd',text=>/\bAESTHETIC\s*SOURCE\s+LTD\b|aestheticsource/i.test(text)),
+    anchoredInvoiceProfile('aec-holdings','AEC Holdings Limited',text=>/\bAEC\s+HOLDINGS\s+LIMITED\b/i.test(text)),
+    anchoredInvoiceProfile('ipl-services','IPL Services Ltd',text=>/\bIPL\s+SERVICES\s+LTD\b|\bBEAUTOLOGY\b/i.test(text)),
+    anchoredInvoiceProfile('mgb-sparky','MGB Sparky Ltd',text=>/\bMGB\s+SPARKY\s+LTD\b|\bMGB\s+SPARKY\b/i.test(text)),
+    anchoredInvoiceProfile('francisco-electrical','Francisco Electrical',text=>/\bFRANCISCO\s+ELECTRICAL\b|franciscolombal/i.test(text)),
+    anchoredInvoiceProfile('discount-displays','Discount Displays Ltd',text=>/\bDISCOUNT\s+DISPLAYS\s+(?:LIMITED|LTD)\b|\bGREEN\s*MAGIC\b|\bSIGN-HOLDERS\.CO\.UK\b|725\s*451\s*345/i.test(text)),
+    anchoredInvoiceProfile('google-cloud','Google Cloud EMEA Limited',text=>/\bGOOGLE\s+CLOUD\s+EMEA\s+LIMITED\b|\bGOOGLE\s+INVOICE\b/i.test(text)),
+    anchoredInvoiceProfile('hannah-mcclune','Hannah McClune Photography Ltd',text=>/\bHANNAH\s+MCCLUNE\s+PHOTOGRAPHY\s+LTD\b|hannahmcclune/i.test(text)),
+    anchoredInvoiceProfile('sofwave','Sofwave Medical UK Ltd',text=>/\bSOFWAVE\s+MEDICAL\s+UK\s+LTD\b|\bSOFWAVE\b/i.test(text)),
+    anchoredInvoiceProfile('medioracle','MediOracle Ltd',text=>/\bMEDIORACLE\b|endolift/i.test(text)),
+    anchoredInvoiceProfile('medisort','Medisort Ltd',text=>/\bMEDISORT\s+LTD\b|healthcare\s+waste\s+solutions/i.test(text)),
+    anchoredInvoiceProfile('laundrylite','LaundryLite',text=>/\bLAUNDRYLITE\b|laundrylite\.com/i.test(text)),
+    anchoredInvoiceProfile('lynton','Lynton',text=>/\bLYNTON\b|lyntonlasers/i.test(text)),
+    anchoredInvoiceProfile('medisave','Medisave (UK) Ltd',text=>/\bMEDISAVE\s*\(UK\)\s*LTD\b|\bMEDISAVE\s+HOUSE\b/i.test(text)),
+    anchoredInvoiceProfile('wix','Wix.com Ltd',text=>/\bWIX\.COM\s+LTD\b|\bWIX\s+INVOICE\b/i.test(text)),
+    anchoredInvoiceProfile('zp-services','Z&P Services Ltd',text=>/\bZ\s*&\s*P\s+SERVICES\s+LTD\b|\bzpservices/i.test(text)),
+    anchoredInvoiceProfile('klioh-studio','Klioh Studio Limited',text=>/\bKLIOH\s+STUDIO\s+LIMITED\b|kliohstudio\.com/i.test(text)),
+    anchoredInvoiceProfile('anthropic','Anthropic Ireland Limited',text=>/\bANTHROPIC\s+IRELAND\s*,?\s*LIMITED\b|\bIE4276970QH\b/i.test(text)),
+    anchoredInvoiceProfile('arabella-johnson','Arabella Johnson',text=>/\bARABELLA\s+JOHNSON\b/i.test(text)),
+    anchoredInvoiceProfile('light-hub','The Light Hub (Forward Distribution)',text=>/\bFORWARD\s+DISTRIBUTION\b|\bLIGHT\s+HUB\b|the-lighthub/i.test(text)),
+    anchoredInvoiceProfile('sylton','Sylton International',text=>/\bSYLTON\s+INTERNATIONAL\b|\bSTR-\d{3,}\b/i.test(text)),
+    anchoredInvoiceProfile('bpce','BPCE Equipment Solutions',text=>/\bBPCE\s+EQUIPMENT\s+SOLUTIONS\b/i.test(text)),
+    anchoredInvoiceProfile('mailchimp','Intuit Mailchimp',text=>/\bINTUIT\s+MAILCHIMP\b|\bMAILCHIMP\s+RECEIPT\b/i.test(text)),
+    anchoredInvoiceProfile('alumier','AlumierMD UK',text=>/\bALUMIER\s*MD\s+UK\b/i.test(text)),
+    anchoredInvoiceProfile('cosmopro','CosmoPro',text=>/\bCOSMO\s*PRO\b|cosmopro\.enquiry/i.test(text)),
+    anchoredInvoiceProfile('packgenie','PackGenie',text=>/\bPACKGENIE\b|packgenie\.co\.uk/i.test(text)),
+    anchoredInvoiceProfile('taskrabbit','Taskrabbit UK',text=>/\bTASKRABBIT\b|taskrabbit\.co\.uk/i.test(text)),
+    anchoredInvoiceProfile('takepayments','Takepayments',text=>/\bTAKEPAYMENTS\b|\bGLOBAL\s+PAYMENTS\s+COMPANY\b/i.test(text)),
+    anchoredInvoiceProfile('inmode','InMode UK',text=>/\bINMODE\s+UK\b|\bINMODE\b/i.test(text)),
+    anchoredInvoiceProfile('care-check','Care Check Ltd',text=>/\bCARE\s*CHECK\s+LTD\b|carecheck/i.test(text)),
+    anchoredInvoiceProfile('caliston','Caliston',text=>/\bCALISTON\b/i.test(text)),
     {id:'wz-delivery',name:'WZ delivery note',kind:'document format',detect:flat=>/\bDELIVERY\s+[0-9OIL\s]{3,}(?:\/|\s+[A-Z]{2,})/i.test(flat)||/\b(?:delivery\s+note|issued\s+baskets)\b/i.test(flat),parse:(flat,source,lines,options)=>parseWzInvoice(flat,source,lines,options)},
     {id:'generic',name:'General invoice',kind:'fallback',detect:()=>true,parse:(flat,source,lines)=>parseInvoiceGeneric(flat,source,lines)}
   ];
