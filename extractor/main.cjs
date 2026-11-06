@@ -229,9 +229,11 @@ ipcMain.handle('ocr-pdf',async(_event,payload)=>{
       const consume=line=>{const value=String(line||'').trim();if(!value)return;if(value.startsWith('PAGE:')){try{mainWindow?.webContents.send('ocr-progress',{requestId:payload?.requestId,filePath:resolved,...JSON.parse(value.slice(5))});}catch{}return;}try{const parsed=JSON.parse(value);if(typeof parsed?.ok==='boolean')parsedResult=parsed;}catch{}};
       child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;let index;while((index=buffer.indexOf('\n'))>=0){consume(buffer.slice(0,index));buffer=buffer.slice(index+1);}});
       child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-12000);});
-      let timedOut=false;const timer=setTimeout(()=>{timedOut=true;child.kill();},480000);
-      child.on('error',error=>{clearTimeout(timer);reject(error);});
-      child.on('close',code=>{clearTimeout(timer);consume(buffer);if(code!==0||!parsedResult?.ok){reject(new Error(parsedResult?.error||(timedOut?'Windows OCR timed out after 8 minutes. The retry was stopped; the original receipt rows remain available for review.':stderr||`Windows OCR failed${code===null?' (process stopped)':` (exit code ${code})`}.`)));return;}resolve(parsedResult);});
+      let timedOut=false,settled=false;const timeoutMs=pages.length&&scale>=4?120000:180000;let timer;
+      const finish=(callback,value)=>{if(settled)return;settled=true;if(timer)clearTimeout(timer);callback(value);};
+      timer=setTimeout(()=>{timedOut=true;try{child.kill();}catch{}finish(reject,new Error(`Windows OCR timed out after ${Math.round(timeoutMs/60000)} minutes. The affected invoice rows remain available for review.`));},timeoutMs);
+      child.on('error',error=>finish(reject,error));
+      child.on('close',code=>{consume(buffer);if(code!==0||!parsedResult?.ok){finish(reject,new Error(parsedResult?.error||(timedOut?'Windows OCR timed out; the affected invoice rows remain available for review.':stderr||`Windows OCR failed${code===null?' (process stopped)':` (exit code ${code})`}.`)));return;}finish(resolve,parsedResult);});
     });
   }catch(error){
     if(!password&&/(?:prompt\(\) is not supported|0x80048040)/i.test(String(error?.message||'')))throw new Error('This PDF is password-protected. Enter the password supplied with the bank statement and try again.');

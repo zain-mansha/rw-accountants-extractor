@@ -80,11 +80,19 @@
     return {text,pages:Math.max(1,(source.match(/\/Type\s*\/Page\b/g)||[]).length),hasText:text.trim().length>0,pageItems:positionedStreams};
   }
   function parseDate(value){
-    const s=String(value||'').trim();let m=s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);if(!m)m=s.match(/^(\d{4})[\/.\-](\d{1,2})[\/.\-](\d{1,2})$/);if(!m){const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12},words=s.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{4})$/i);if(words){const month=months[words[2].slice(0,3).toLowerCase()];if(month)m=[null,words[1],month,words[3]];}}if(!m)return '';let y,day,month;if(m[1].length===4){y=Number(m[1]);month=Number(m[2]);day=Number(m[3]);}else{day=Number(m[1]);month=Number(m[2]);y=Number(m[3])<100?2000+Number(m[3]):Number(m[3]);}if(!Number.isInteger(y)||y<1900||y>2100||!Number.isInteger(month)||month<1||month>12||!Number.isInteger(day)||day<1||day>31)return '';const parsed=new Date(Date.UTC(y,month-1,day));if(parsed.getUTCFullYear()!==y||parsed.getUTCMonth()!==month-1||parsed.getUTCDate()!==day)return '';return `${y}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-  }
-  function amount(value){let s=String(value??'').replace(/[\u00A3$\u20AC\s]/g,'').replace(/,/g,'');if(!s)return null;const negative=/^\(.*\)$/.test(s)||/-/.test(s)||/\b(?:DR|DEBIT)\b/i.test(s);s=s.replace(/[()]/g,'').replace(/[^\d.-]/g,'');const n=Number(s);return Number.isFinite(n)?(negative?-1:1)*Math.abs(n):null;}
-  function invoiceAmount(value){let s=String(value??'').trim();if(!s)return null;const negative=/^\(.*\)$/.test(s)||/-/.test(s)||/\b(?:DR|DEBIT)\b/i.test(s);s=s.replace(/[^\d\s,;.()\-]/g,'').replace(/[()]/g,'').replace(/\s+/g,' ').trim();if(/^-?\d{1,3}(?:[\s,]\d{3})+[.,;]\d{2}$/.test(s)){s=s.replace(/[\s,](?=\d{3}(?:[.,;]|$))/g,'').replace(/[;,]/,'.');}else if(/^-?\d+[.,;]\s*\d{2}$/.test(s)){s=s.replace(/[.,;]\s*/,'.');}else s=s.replace(/[\s,;]/g,'');const n=Number(s);return Number.isFinite(n)?(negative?-1:1)*Math.abs(n):null;}
-  function moneyTokens(line){return [...String(line).matchAll(/(?:[\u00A3$\u20AC]\s*)?\(?-?\d[\d,]*(?:\.\d{2})\)?(?:\s*(?:CR|DR))?/gi)].map(m=>({raw:m[0],value:amount(m[0]),index:m.index})).filter(x=>x.value!==null);}
+    let s=String(value||'').trim().replace(/\b([A-Za-z]{3,9})\.\s+/g,'$1 ').replace(/\s*([/.\-])\s*/g,'$1');
+    const months={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};let m=s.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})$/);if(!m)m=s.match(/^(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})$/);
+    if(!m){const dayFirst=s.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s*,?\s*(\d{4})$/i),monthFirst=s.match(/^([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})$/i);if(dayFirst){const month=months[dayFirst[2].slice(0,3).toLowerCase()];if(month)m=[null,dayFirst[1],month,dayFirst[3]];}else if(monthFirst){const month=months[monthFirst[1].slice(0,3).toLowerCase()];if(month)m=[null,monthFirst[2],month,monthFirst[3]];}}
+    if(!m)return '';let y,day,month;if(m[1].length===4){y=Number(m[1]);month=Number(m[2]);day=Number(m[3]);}else{day=Number(m[1]);month=Number(m[2]);y=Number(m[3])<100?2000+Number(m[3]):Number(m[3]);}if(!Number.isInteger(y)||y<1900||y>2100||!Number.isInteger(month)||month<1||month>12||!Number.isInteger(day)||day<1||day>31)return '';const parsed=new Date(Date.UTC(y,month-1,day));if(parsed.getUTCFullYear()!==y||parsed.getUTCMonth()!==month-1||parsed.getUTCDate()!==day)return '';return `${y}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+  }  function amount(value){let s=String(value??'').replace(/[\u00A3$\u20AC\s]/g,'').replace(/,/g,'');if(!s)return null;const negative=/^\(.*\)$/.test(s)||/-/.test(s)||/\b(?:DR|DEBIT)\b/i.test(s);s=s.replace(/[()]/g,'').replace(/[^\d.-]/g,'');const n=Number(s);return Number.isFinite(n)?(negative?-1:1)*Math.abs(n):null;}
+  function invoiceAmount(value){
+    let s=String(value??'').trim();if(!s)return null;const negative=/^\(.*\)$/.test(s)||/-/.test(s)||/\b(?:DR|DEBIT)\b/i.test(s);
+    // Repair common OCR confusions only inside amount-shaped currency tokens.
+    s=s.replace(/E\s*[Il|](?=\s*,\s*\d{3}[.,]\s*[\dOo]{2}\b)/gi,(_match,currency)=>`${currency}1`).replace(/([Â£â‚¬$E])\s*[Il|]O(?=[.,]\s*[\dOo]{2}\b)/gi,(_match,currency)=>`${currency}10`).replace(/(?<=\d)[Oo](?=[.,]\s*[\dOo]{2}\b)/g,'0').replace(/([.,;])\s*[Oo]{2}\b/g,'$1 00');
+    s=s.replace(/[^\d\s,;.()\-]/g,'').replace(/[()]/g,'').replace(/\s+/g,' ').trim();
+    const grouped=s.match(/^(-?\d{1,3}(?:[\s,]\d{3})+)[.,;]\s*(\d{2})$/);if(grouped)s=`${grouped[1].replace(/[\s,]/g,'')}.${grouped[2]}`;else{const decimal=s.match(/^(-?\d+)[.,;]\s*(\d{2})$/);if(decimal)s=`${decimal[1]}.${decimal[2]}`;else s=s.replace(/[\s,;]/g,'');}
+    const n=Number(s);return Number.isFinite(n)?(negative?-1:1)*Math.abs(n):null;
+  }  function moneyTokens(line){return [...String(line).matchAll(/(?:[\u00A3$\u20AC]\s*)?\(?-?\d[\d,]*(?:\.\d{2})\)?(?:\s*(?:CR|DR))?/gi)].map(m=>({raw:m[0],value:amount(m[0]),index:m.index})).filter(x=>x.value!==null);}
   function lines(text){return text.split(/\r?\n|(?=\b(?:\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}[\/-]\d{1,2}[\/-]\d{1,2})\b)/).map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean);}
   const metroTransactionTypes=['Inward Payment','BACS Payment Received','Cash Deposit','Card Purchase','Outward Faster Payment','Direct Debit','Standing Order','Cheque Issued','Account to Account Transfer','Credit Card Payment-Thank You','Cash Exchange Charges','Account Maintenance Fee','Transaction Charges'];
   function metroDescriptions(value){
@@ -1063,12 +1071,12 @@
     const money='[^0-9\\s]?\\s*\\(?\\s*(?:(?:\\d{1,3}(?:[\\s,]\\d{3})+)|\\d+)(?:[.,]\\s*\\d{2})?\\s*\\)?';
     const vatRaw=firstMatch(flat,[new RegExp('VAT\\s*@\\s*\\d+(?:[.,]\\d+)?%\\s*(?:\\([^)]*\\)\\s*)?('+money+')','i'),new RegExp('tax\\s+value\\b[^0-9]{0,40}('+money+')','i'),new RegExp('(?:VAT|tax)\\s*(?:amount|value)?\\s*[:#-]?\\s*('+money+')','i')]);
     const discountWindow=flat.match(/total\s+discount\b([\s\S]{0,100}?)amount\s+due/i)?.[1]||'',discountValues=[...discountWindow.matchAll(/\d[\d,.]*/g)].map(match=>invoiceAmount(match[0])).filter(value=>value!==null);
-    const totalRaw=firstMatch(flat,[new RegExp('\\b(?:total\\s+for\\s+this\\s+bill|order\\s+total|total\\s+paid|amount\\s+paid|total\\s*(?:due|payable|amount|value)?|amount\\s*due|grand\\s*total|balance\\s*due)\\s*[:#-]?\\s*('+money+')','i')]);
+    const totalRaw=firstMatch(flat,[new RegExp('\\b(?:total\\s+for\\s+this\\s+bill|order\\s+total|total\\s+paid|amount\\s+paid|pay\\s+amount|total\\s*(?:due|payable|amount|value)?|amount\\s*due|grand\\s*total|balance\\s*due)\\s*[:#-]?\\s*('+money+')','i')]);
     const subRaw=firstMatch(flat,[new RegExp('(?:sub\\s*total|net\\s*amount|excl(?:uding)?\\s*VAT)\\s*[:#-]?\\s*('+money+')','i')]);
     const dueWindow=firstMatch(flat,[/(?:amount\s+due|total\s+due)\s*[:#-]?\s*([\s\S]{0,180}?)(?=\bsales\s+person\b|\bbuyer\b|\bstatement\s+of\s+the\s+account\b)/i]);
     const dueValues=[...String(dueWindow).matchAll(/\b\d[\d,]*[.,]\d{2}\b/g)].map(m=>invoiceAmount(m[0])).filter(x=>x!==null&&x>0),netRaw=firstMatch(flat,[new RegExp('(?:net\\s+value|gross\\s+value)\\s*[:#-]?\\s*('+money+')','i')]);
     const netCandidate=invoiceAmount(netRaw),polishDocument=isPolishVillageBreadText(flat)||/\bFS\s*\d{3,}\s*\/\s*MAG\s*\/\s*2026\b/i.test(flat),printedTotalRowValues=[...flat.matchAll(/\btotal\s*:\s*([^=]{0,100})/gi)].flatMap(match=>[...match[1].matchAll(/\d[\d\s,]*[.,]\s*\d{2}/g)].map(value=>invoiceAmount(value[0])).filter(value=>value!==null)),printedTotalRow=printedTotalRowValues.at(-1),parsedTotal=invoiceAmount(totalRaw),rawTotal=dueValues.at(-1)??discountValues.at(-1)??(polishDocument&&parsedTotal===0?(printedTotalRow??parsedTotal):parsedTotal)??null,total=isStatement?null:rawTotal,vat=isStatement?null:invoiceAmount(vatRaw),subtotal=isStatement?null:(invoiceAmount(subRaw)??netCandidate??null);
-    const supplier=isPolishVillageBreadText(flat)?'Polish Village Bread LTD':firstMatch(flat,[/\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,5}\s+(?:Limited|LTD|PLC|LLP))\b/i,/seller\s*:\s*(?:customer\s*:\s*)?([A-Za-z][A-Za-z0-9 &.' ,-]{2,}?)(?=\s+\d{1,4}(?:[- ]|$)|\s+\d{3,}\b|\s+VAT\s*:|\s+invoice\b|$)/i,/(?:from|supplier|seller|sold\s*by)\s*[:#-]?\s*([A-Za-z][A-Za-z0-9 &.' ,-]{2,80})/i,/^(?!invoice\b)([A-Z][A-Za-z0-9 &.'-]{2,60}?)\s+(?:tax\s+)?invoice\b/i])||'';
+    const supplier=isPolishVillageBreadText(flat)?'Polish Village Bread LTD':firstMatch(flat,[/\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,5}\s+(?:Limited|LTD|PLC|LLP))\b/i,/seller\s*:\s*(?:customer\s*:\s*)?([A-Za-z][A-Za-z0-9 &.' ,-]{2,}?)(?=\s+\d{1,4}(?:[- ]|$)|\s+\d{3,}\b|\s+VAT\s*:|\s+invoice\b|$)/i,/\bIssuer\s*:?\s*([A-Z][A-Za-z0-9 &.'-]{2,80}?)(?=\s+Address\b)/i,/(?:from|supplier|seller|sold\s*by)\s*[:#-]?\s*([A-Za-z][A-Za-z0-9 &.' ,-]{2,80})/i,/^(?!invoice\b)([A-Z][A-Za-z0-9 &.'-]{2,60}?)\s+(?:tax\s+)?invoice\b/i])||'';
     const currency=/\bEUR\b|\u20ac/.test(flat)?'EUR':/\bUSD\b/.test(flat)?'USD':'GBP',complete=Boolean(evidence.isInvoice&&!isStatement&&number&&date&&supplier&&total!==null&&vat!==null&&Number.isFinite(Number(vat)));
     const retryOcr=evidence.isInvoice&&!isStatement&&Boolean(number||date)&&!complete;
     const reason=complete?'':!evidence.isInvoice||isStatement?'This document does not appear to be an invoice.':!number?'Invoice or document number not found.':!date?'Invoice date not found.':!supplier?'Supplier not identified.':total===null?'Printed total not found.':'VAT amount not found; one 5x OCR retry is required.';
@@ -1131,7 +1139,6 @@
     const lines=Array.isArray(pageLines)?pageLines:[],totalLabel=lines.filter(line=>/^\s*TOTAL\s*$/i.test(String(line.text||''))).sort((a,b)=>(Number(b.y)||0)-(Number(a.y)||0))[0];
     if(!totalLabel)return null;
     const goodsLabel=lines.filter(line=>/^\s*GOODS\s*$/i.test(String(line.text||''))).sort((a,b)=>Math.abs((Number(a.x)||0)-(Number(totalLabel.x)||0))-Math.abs((Number(b.x)||0)-(Number(totalLabel.x)||0)))[0];
-    totalLabels.push(/\btotal\b/i);
     const vatLabels=lines.filter(line=>/^\s*VAT\s*$/i.test(String(line.text||''))).sort((a,b)=>Math.abs((Number(a.x)||0)-(Number(totalLabel.x)||0))-Math.abs((Number(b.x)||0)-(Number(totalLabel.x)||0)));
     const vatLabel=vatLabels.find(line=>Math.abs((Number(line.x)||0)-(Number(totalLabel.x)||0))<=Math.max(90,(Number(totalLabel.width)||0)*1.4)&&(!goodsLabel||Number(line.y)>Number(goodsLabel.y)&&Number(line.y)<Number(totalLabel.y)));
     const anchors={goods:goodsLabel,vat:vatLabel,total:totalLabel},anchor=anchors[kind];
@@ -2488,7 +2495,6 @@
       const total=bestwayPositionedValue(pageLines,/\btotal\s+due\b.*\b(?:inc|incl|lnc|in[cg]l?)\s*VAT\b/i,{minY:start,maxY:Number(totalDue.y)||Infinity,rowTolerance:Math.max(30,Number(totalDue.height)||0)});
       // Use the printed summary labels and their order instead of page-wide
       // coordinate assumptions: VAT is the last VAT row before Total Due.
-      totalLabels.push(/\btotal\b/i);
     const vatLabels=pageLines.filter(line=>{
         const y=Number(line.y)||0,text=String(line.text||'');
         return y>=start&&y<(Number(totalDue.y)||Infinity)&&/^\s*VAT(?:\s+(?:amount|value))?\s*:?\s*(?:[Â£$â‚¬Ee]?\s*[\d., ]*)?$/i.test(text);
@@ -2906,12 +2912,65 @@
     // OCR can render the euro sign plus its first digit as "El" (for example
     // €18.00 -> "El 8.00"). Repair that token only where it directly prefixes
     // a printed amount; otherwise the leading digit would be lost.
-    const text=String(value||'').replace(/\bE\s*[lI|]\s*(?=\d)/g,'1').replace(/(?<=\d)[Oo](?=[.,]\s*\d{2}\b)/g,'0'),values=[];
+    const text=String(value||'').replace(/E\s*[Il|](?=\s*,\s*\d{3}[.,]\s*[\dOo]{2}\b)/gi,(_match,currency)=>`${currency}1`).replace(/E\s*[Il|]O(?=[.,]\s*[\dOo]{2}\b)/gi,(_match,currency)=>`${currency}10`).replace(/\bE\s*[lI|]\s*(?=\d)/g,'1').replace(/(?<=\d)[Oo](?=[.,]\s*[\dOo]{2}\b)/g,'0').replace(/([.,;])\s*[Oo]{2}\b/g,'$1 00'),values=[];
     for(const match of text.matchAll(/(?<![\d/])(?:[Â£â‚¬$]\s*)?\(?-?\d(?:[\d\s,.'â€™]*\d)?[.,]\s*\d{2}\)?/g)){
       const raw=match[0].replace(/[â€™']/g,'').replace(/\s+/g,' ').trim(),amount=invoiceAmount(raw);
       if(amount!==null&&Number.isFinite(amount)&&!values.some(item=>item.index===match.index))values.push({raw,value:amount,index:match.index});
     }
     return values;
+  }
+  function anchoredInvoiceAmountBelowLabel(pageLines,label,{maximumDistanceRatio=.05,horizontalDistanceRatio=.1}={}){
+    const pageHeight=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),pageWidth=Math.max(...pageLines.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),labelY=Number(label.y)||0,labelX=Number(label.x)||0,maxDistance=Math.max(pageHeight*maximumDistanceRatio,(Number(label.height)||16)*3,24),maxHorizontal=Math.max(pageWidth*horizontalDistanceRatio,(Number(label.height)||16)*3,24),candidates=[];
+    for(const line of pageLines){const y=Number(line.y)||0,x=Number(line.x)||0,distance=y-labelY;if(line===label||distance<=0||distance>maxDistance||Math.abs(x-labelX)>maxHorizontal)continue;const values=anchoredInvoiceMoneyValues(line.text),zeroOnly=/^\s*0[.,]0(?:0)?\s*$/.test(String(line.text||''));if(!values.length&&zeroOnly)candidates.push({value:0,distance,horizontal:Math.abs(x-labelX)});else for(const money of values)candidates.push({value:money.value,distance,horizontal:Math.abs(x-labelX)});}
+    candidates.sort((a,b)=>a.distance-b.distance||a.horizontal-b.horizontal);return candidates[0]?{value:candidates[0].value,distanceY:candidates[0].distance}:null;
+  }
+  function anchoredInvoiceAcreSummary(lines){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),pages=new Map();for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}
+    const pageNumbers=[...pages.keys()].sort((a,b)=>a-b),exactAmount=line=>{const values=anchoredInvoiceMoneyValues(line?.text);if(values.length)return values[0].value;return /^\s*0[.,]0(?:0)?\s*$/.test(String(line?.text||''))?0:null;};
+    for(const pageNumber of pageNumbers){
+      const pageLines=pages.get(pageNumber),vatLabels=pageLines.filter(line=>/^\s*VAT\s+Amount\s*\(E\)\s*$/i.test(String(line.text||''))),pageHeight=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1);
+      for(const vatLabel of vatLabels){
+        const y=Number(vatLabel.y)||0,h=Math.max(Number(vatLabel.height)||16,16),sameRowTolerance=Math.max(h*2,pageHeight*.012,24),totalLabel=pageLines.filter(line=>/^\s*Total\s*\(E\)\s*$/i.test(String(line.text||''))).sort((a,b)=>Math.abs((Number(a.y)||0)-y)-Math.abs((Number(b.y)||0)-y))[0];
+        if(!totalLabel||Math.abs((Number(totalLabel.y)||0)-y)>sameRowTolerance)continue;
+        const vatBelow=anchoredInvoiceAmountBelowLabel(pageLines,vatLabel),totalBelow=anchoredInvoiceAmountBelowLabel(pageLines,totalLabel),vat=vatBelow?.value??null,total=totalBelow?.value??null,partial=vat!==null||total!==null?{vat:vat===null?null:{value:vat},total:total===null?null:{value:total}}:null;
+        if(vat!==null&&total!==null)return {vat:{value:vat},total:{value:total}};
+        if(y<pageHeight*.62){if(partial)return partial;continue;}
+        const nextLines=pages.get(pageNumber+1);if(!nextLines){if(partial)return partial;continue;}const nextHeight=Math.max(...nextLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),nextWidth=Math.max(...nextLines.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),summaryLabels=pageLines.filter(line=>/^\s*(?:Net\s+Amount|VAT\s+Amount|Total)\s*\(E\)\s*$/i.test(String(line.text||''))&&Math.abs((Number(line.y)||0)-y)<=sameRowTolerance),netLabel=summaryLabels.find(line=>/^\s*Net\s+Amount/i.test(String(line.text||''))),labelHeight=Math.max(h,Number(totalLabel.height)||16,16),rowTolerance=Math.max(labelHeight*2,nextHeight*.015,24),candidates=[];
+        for(const line of nextLines){if((Number(line.y)||0)>nextHeight*.24)continue;const value=exactAmount(line);if(value===null)continue;candidates.push({line,value,x:Number(line.x)||0,y:Number(line.y)||0});}
+        const rows=[];for(const candidate of candidates){let row=rows.find(item=>Math.abs(item.y-candidate.y)<=rowTolerance);if(!row){row={y:candidate.y,values:[]};rows.push(row);}row.values.push(candidate);}
+        const findColumn=(row,label,used)=>{if(!label)return null;const labelX=Number(label.x)||0,choices=row.values.filter(item=>!used.has(item)&&Math.abs(item.x-labelX)<=nextWidth*.10).sort((a,b)=>Math.abs(a.x-labelX)-Math.abs(b.x-labelX));return choices[0]||null;};
+        rows.sort((a,b)=>a.y-b.y);for(const row of rows){const used=new Set(),vatValue=findColumn(row,vatLabel,used);if(vatValue)used.add(vatValue);const totalValue=findColumn(row,totalLabel,used);if(!vatValue&&!totalValue)continue;if(vatValue&&totalValue)return {vat:{value:vatValue.value},total:{value:totalValue.value}};if(netLabel){const netValue=findColumn(row,netLabel,used);if((vatValue||totalValue)&&netValue)return {vat:vatValue?{value:vatValue.value}:null,total:totalValue?{value:totalValue.value}:null};}}
+        if(partial)return partial;
+      }
+    }
+    return null;
+  }
+  function anchoredInvoiceSiemensVat(lines){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim());
+    for(const label of items.filter(line=>/\bVAT\s+due\s+on\b/i.test(String(line.text||'')))){
+      const page=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),labelX=(Number(label.x)||0)+(Number(label.width)||0),labelY=Number(label.y)||0,tolerance=Math.max((Number(label.height)||16)*1.6,24),zeroValues=page.filter(line=>line!==label&&Math.abs((Number(line.y)||0)-labelY)<=tolerance&&(Number(line.x)||0)>labelX&&/^\s*0[.,]0{1,2}\s*$/.test(String(line.text||'')));
+      if(zeroValues.length===1)return {value:0,label:'printed VAT due is 0.00'};
+    }
+    return null;
+  }
+  function anchoredInvoiceCareCheckNumber(lines){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim());
+    for(const page of new Set(items.map(line=>Number(line.page)||1))){
+      const pageLines=items.filter(line=>(Number(line.page)||1)===page),pageHeight=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),candidates=pageLines.filter(line=>/^[0-9]{6,8}$/.test(String(line.text||'').trim())&&(Number(line.y)||0)<=pageHeight*.12);
+      // Care Check prints its invoice reference by itself in the page header;
+      // its "Invoice to" heading is much lower and the reference has no label.
+      if(candidates.length===1)return String(candidates[0].text).trim();
+    }
+    return '';
+  }
+  function anchoredInvoiceSummaryValue(lines,labelPatterns,{exclude=/\b(?:VAT\s*(?:registration|reg\.?|number|no\.?|ID)|VAT\s*(?:rate|percentage)|invoice\s+(?:number|no\.?|date)|due\s+date|account\s+number)\b/i,minimumYRatio=.5,maximumValueDistanceRatio=.015}={}){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),pages=new Map();for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}const labels=[];
+    for(const [page,pageLines] of pages){const pageHeight=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1);for(const pattern of labelPatterns){const matches=pageLines.filter(line=>pattern.test(String(line.text||''))&&(Number(line.y)||0)>=pageHeight*minimumYRatio);if(matches.length){matches.sort((a,b)=>(Number(b.y)||0)-(Number(a.y)||0));labels.push({page,line:matches[0],pattern});}}}
+    labels.sort((a,b)=>b.page-a.page||(Number(b.line.y)||0)-(Number(a.line.y)||0));for(const selected of labels){const pageLines=items.filter(line=>(Number(line.page)||1)===selected.page),otherLabels=new Set(pageLines.filter(line=>line!==selected.line&&selected.pattern.test(String(line.text||''))));const context=pageLines.filter(line=>!otherLabels.has(line)),result=anchoredInvoiceRelativeValue(context,[selected.pattern],{exclude}),pageHeight=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1);if(result&&result.distanceY<=Math.max((Number(selected.line.height)||16)*2,pageHeight*maximumValueDistanceRatio,24))return result;}return null;
+  }
+  function anchoredInvoiceTextBesideLabel(lines,labelPatterns){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),labels=[];for(const pattern of labelPatterns)for(const line of items)if(pattern.test(String(line.text||'').trim()))labels.push({line,pattern});
+    for(const {line:label} of labels){const page=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),height=Math.max(Number(label.height)||0,12),left=(Number(label.x)||0)+(Number(label.width)||0),pageWidth=Math.max(...page.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),candidates=[];for(const line of page){if(line===label)continue;const raw=String(line.text||'').trim(),candidate=cleanInvoiceNumber(raw),dx=(Number(line.x)||0)-left,dy=Math.abs((Number(line.y)||0)-(Number(label.y)||0));if(!candidate||!/[0-9]/.test(candidate)||candidate.length>40||dx< -height*.25||dy>Math.max(height*1.7,22)||/\b(?:date|due|VAT|tax|page|account|customer|order)\b/i.test(raw))continue;candidates.push({candidate,score:dy/height+Math.max(0,dx)/pageWidth*2});}candidates.sort((a,b)=>a.score-b.score);if(candidates.length)return candidates[0].candidate;}return '';
   }
   function anchoredInvoiceRelativeValue(lines,labelPatterns,{exclude=/\b(?:VAT\s*(?:registration|reg\.?|number|no\.?|ID)|VAT\s*(?:rate|percentage)|invoice\s+(?:number|no\.?|date)|due\s+date|account\s+number)\b/i}={}){
     const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()).map((line,index)=>({...line,_index:index,_page:Number(line.page)||1,_x:Number(line.x)||0,_y:Number(line.y)||0,_w:Number(line.width)||0,_h:Number(line.height)||0})),pages=new Map();
@@ -2922,13 +2981,13 @@
     }
     let best=null;
     for(const {line:label,pattern,priority} of labels){
-      const page=pages.get(label._page)||[],pageWidth=Math.max(...page.map(item=>item._x+item._w),1),pageHeight=Math.max(...page.map(item=>item._y+item._h),1),positiveHeights=page.map(item=>item._h).filter(value=>value>0).sort((a,b)=>a-b),lineHeight=positiveHeights[Math.floor(positiveHeights.length/2)]||label._h||20,height=Math.max(label._h,lineHeight,1),rowTolerance=Math.max(height*1.6,1),verticalTolerance=Math.max(height*4,1),labelRight=label._x+label._w;
+      const page=pages.get(label._page)||[],pageWidth=Math.max(...page.map(item=>item._x+item._w),1),pageHeight=Math.max(...page.map(item=>item._y+item._h),1),positiveHeights=page.map(item=>item._h).filter(value=>value>0).sort((a,b)=>a-b),lineHeight=positiveHeights[Math.floor(positiveHeights.length/2)]||label._h||20,height=Math.max(label._h,lineHeight,1),rowTolerance=Math.max(height*1.6,1),verticalTolerance=Math.max(height*4,pageHeight*.05,1),labelRight=label._x+label._w;
       const candidates=[];
       const add=(candidate,score,source)=>{for(const money of anchoredInvoiceMoneyValues(candidate.text)){candidates.push({value:money.value,raw:money.raw,score,source,line:candidate});}};
       const labelText=String(label.text||'').trim(),inline=labelText.replace(pattern,' ').trim();
       // In a tax breakdown, "VAT (20% on £15.00)" contains the net base,
       // not the VAT value. Read the amount in the adjacent VAT column.
-      if(inline&&!/\b\d+(?:[.,]\d+)?\s*%\s*on\b/i.test(labelText))add(label,0,'inline');
+      if(inline&&!/\b\d+(?:[.,]\d+)?\s*%\s*on\b/i.test(labelText)&&!(/\bVAT\b/i.test(labelText)&&/\b\d+(?:[.,]\d+)?\s*%/i.test(labelText)))add(label,0,'inline');
       for(const candidate of page){
         if(candidate===label||/\b(?:VAT\s*(?:registration|reg\.?|number|no\.?|ID|rate|percentage)|invoice\s+(?:number|no\.?|date)|due\s+date|account\s+number)\b/i.test(String(candidate.text||''))||exclude.test(String(candidate.text||'')))continue;
         const dy=Math.abs(candidate._y-label._y),dx=candidate._x-labelRight;
@@ -2936,7 +2995,7 @@
         if(dy<=verticalTolerance&&Math.abs(candidate._x-label._x)<=pageWidth*.2){add(candidate,dy/height+Math.abs(candidate._x-label._x)/pageWidth*3+.35,'next-line');}
       }
       const chosen=candidates.sort((a,b)=>a.score-b.score||a.line._index-b.line._index)[0];
-      if(chosen){const score=chosen.score+priority*0.22+Math.max(0,(pageHeight-label._y)/pageHeight)*0.0001;if(!best||score<best.score)best={value:chosen.value,raw:chosen.raw,label:labelText,score,priority};}
+      if(chosen){const score=chosen.score+priority*0.22+Math.max(0,(pageHeight-label._y)/pageHeight)*0.0001;if(!best||score<best.score)best={value:chosen.value,raw:chosen.raw,label:labelText,score,priority,distanceY:Math.abs(chosen.line._y-label._y)};}
     }
     return best;
   }
@@ -2970,12 +3029,15 @@
     return null;
   }
   function anchoredInvoiceDate(text,lines){
-    const parseCandidate=value=>{const source=String(value||'').replace(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|dated|date)\b\s*[:#-]?/ig,' ').replace(/(\d)\s+(?=\d[\/.\-])/g,'$1'),match=source.match(/\b(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s+\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4})\b/i);if(!match)return '';const raw=match[0],monthFirst=raw.match(/^([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s+(\d{4})$/i);return parseDate(monthFirst?`${monthFirst[2]} ${monthFirst[1]} ${monthFirst[3]}`:raw);};
+    const normalize=value=>String(value||'').replace(/\b([A-Za-z]{3,9})\.\s*/g,'$1 ').replace(/\s*([/.\-])\s*/g,'$1').replace(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|demand\s+date|order\s+date|issue\s+date|issued|dated|date\s+paid|date)\b\s*[:#-]?/ig,' ').replace(/(\d)\s+(?=\d[/.\-])/g,'$1');
+    const parseCandidate=value=>{const source=normalize(value),match=source.match(/\b(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s*\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s*\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4})\b/i);if(!match)return '';const monthFirst=match[0].match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})$/i);return parseDate(monthFirst?`${monthFirst[2]} ${monthFirst[1]} ${monthFirst[3]}`:match[0]);};
     const ordered=Array.isArray(lines)?lines.filter(line=>line&&String(line.text||'').trim()).slice().sort((a,b)=>(Number(a.page)||1)-(Number(b.page)||1)||(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0)):[];
-    for(const line of ordered){const raw=String(line.text||'').trim();if(/\b(?:due\s+date|payment\s+date|statement\s+date)\b/i.test(raw))continue;if(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|bill\s+issue\s+date|date\s+paid|dated)\b/i.test(raw)||/^date\s*:?$/i.test(raw)){const direct=parseCandidate(raw);if(direct)return direct;const samePage=ordered.filter(candidate=>candidate!==line&&(Number(candidate.page)||1)===(Number(line.page)||1)).map(candidate=>({candidate,date:parseCandidate(candidate.text),dy:Math.abs((Number(candidate.y)||0)-(Number(line.y)||0)),dx:(Number(candidate.x)||0)-((Number(line.x)||0)+(Number(line.width)||0))})).filter(item=>item.date&&item.dy<=Math.max((Number(line.height)||20)*3,20)&&(item.dx>=-8||Math.abs((Number(item.candidate.x)||0)-(Number(line.x)||0))<=Math.max((Number(line.height)||20)*2,28))).sort((a,b)=>a.dy-b.dy||a.dx-b.dx);if(samePage.length)return samePage[0].date;}}
-    const labelled=String(text||'').match(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|bill\s+issue\s+date|date\s+paid|dated)\b\s*[:#-]?\s*((?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s+\d{4}|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s+\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}))/i);return parseCandidate(labelled?.[1]||'');
+    for(const line of ordered){const raw=String(line.text||'').trim();if(/\b(?:due\s+date|payment\s+date|statement\s+date)\b/i.test(raw))continue;if(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|demand\s+date|order\s+date|issue\s+date|date\s+paid|\bissued\b|dated)\b/i.test(raw)||/^date\s*:?$/i.test(raw)){const direct=parseCandidate(raw);if(direct)return direct;const samePage=ordered.filter(candidate=>candidate!==line&&(Number(candidate.page)||1)===(Number(line.page)||1)).map(candidate=>({candidate,date:parseCandidate(candidate.text),dy:Math.abs((Number(candidate.y)||0)-(Number(line.y)||0)),dx:(Number(candidate.x)||0)-((Number(line.x)||0)+(Number(line.width)||0)),xGap:Math.abs((Number(candidate.x)||0)-(Number(line.x)||0))})).filter(item=>item.date&&item.dy<=Math.max((Number(line.height)||20)*3,20)&&(item.dx>=-8||item.xGap<=Math.max((Number(line.height)||20)*2,80))).sort((a,b)=>a.dy-b.dy||a.dx-b.dx);if(samePage.length)return samePage[0].date;}}
+    const labelled=String(text||'').match(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|demand\s+date|order\s+date|issue\s+date|date\s+paid|issued|dated)\b\s*[:#-]?\s*((?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s*\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s*\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}))/i);if(labelled){const direct=parseCandidate(labelled[1]);if(direct)return direct;}
+    for(const line of ordered){const raw=String(line.text||'').trim();if(/\b(?:due\s+date|payment\s+date|statement\s+date|billing\s+period|period)\b/i.test(raw)||/\d{4}\s*[-–]\s*\d{4}/.test(raw))continue;const date=parseCandidate(raw);if(!date)continue;const page=Number(line.page)||1,h=Math.max(Number(line.height)||16,16),related=ordered.filter(other=>(Number(other.page)||1)===page&&other!==line&&Math.abs((Number(other.y)||0)-(Number(line.y)||0))<=h*3);if(related.some(other=>/\b(?:due\s+date|payment\s+date|statement\s+date|billing\s+period|period)\b/i.test(String(other.text||''))))continue;return date;}return '';
   }
   function anchoredInvoiceNumber(text,lines){
+    const directText=String(text||'').replace(/\s+/g,' '),explicit=directText.match(/\b(?:(?:tax|VAT)\s+)?invoice\s*(?:number|no\.?|nr\.?|#)\s*[:#.-]?\s*((?:INV[-/]?)?[A-Z0-9][A-Z0-9/-]*)\b/i),explicitValue=cleanInvoiceNumber(explicit?.[1]);if(explicitValue&&/[0-9]/.test(explicitValue))return explicitValue;const direct=directText.match(/\b(?:(?:tax|VAT)\s+)?invoice\s+((?:INV[-/]?)?[A-Z0-9][A-Z0-9/-]{2,})\b/i),directValue=cleanInvoiceNumber(direct?.[1]);if(directValue&&/[0-9]/.test(directValue))return directValue;
     const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),patterns=[/\b(?:(?:tax|VAT)\s+)?invoice\s*(?:number|no\.?|nr\.?|#)\s*[:#.-]?\s*/i,/\binv\.?\s*(?:number|no\.?|nr\.?|#)\s*[:#.-]?\s*/i,/\bbill\s+reference\s*[:#.-]?\s*/i,/\b(?:receipt|credit\s+note)\s*(?:number|no\.?|#)\s*[:#.-]?\s*/i];
     // Some bill layouts put the value below "Your VAT invoice number". Use
     // that label/value pair before considering unanchored numbers elsewhere.
@@ -2985,14 +3047,49 @@
       nearby.sort((a,b)=>a.score-b.score);if(nearby.length)return nearby[0].candidate;
     }
     for(const pattern of patterns){const labels=items.filter(line=>pattern.test(String(line.text||''))).sort((a,b)=>(Number(a.page)||1)-(Number(b.page)||1)||(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0));for(const label of labels){const inline=cleanInvoiceNumber(String(label.text||'').replace(pattern,'').trim());if(inline)return inline;const page=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),right=(Number(label.x)||0)+(Number(label.width)||0),pageWidth=Math.max(...page.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),height=Math.max(Number(label.height)||0,1),candidates=[];for(const line of page){if(line===label||/\b(?:due\s+date|invoice\s+date|date\s+of\s+issue|page\s+no\.?|customer\s+enquiry|order\s+(?:no\.?|number)|purchase\s+order|account\s+(?:no\.?|number))\b/i.test(String(line.text||'')))continue;const raw=String(line.text||'').trim(),candidate=cleanInvoiceNumber(raw);if(!candidate||!/[0-9]/.test(candidate)||candidate.length<3||candidate.length>40)continue;const yGap=Math.abs((Number(line.y)||0)-(Number(label.y)||0)),xGap=(Number(line.x)||0)-right,row=yGap<=Math.max(height*1.6,16),nearBelow=(Number(line.y)||0)>=(Number(label.y)||0)&&yGap<=Math.max(height*6,48)&&Math.abs((Number(line.x)||0)-(Number(label.x)||0))<=pageWidth*.22;if(!row&&!nearBelow)continue;const pairedWithOtherField=page.some(other=>other!==line&&other!==label&&/\b(?:order\s+(?:no\.?|number)|purchase\s+order|customer\s+(?:no\.?|number)|account\s+(?:no\.?|number)|delivery\s+(?:no\.?|number)|reference\s+(?:no\.?|number))\b/i.test(String(other.text||''))&&(Number(line.y)||0)>=(Number(other.y)||0)-height&&(Number(line.y)||0)-(Number(other.y)||0)<=height*6&&Math.abs((Number(line.x)||0)-(Number(other.x)||0))<=pageWidth*.18);if(pairedWithOtherField)continue;const score=row?yGap/height+Math.max(0,xGap)/pageWidth*3+(xGap<0?.3:0):yGap/height*.45+Math.abs((Number(line.x)||0)-(Number(label.x)||0))/pageWidth*3+.2;candidates.push({candidate,score});}candidates.sort((a,b)=>a.score-b.score);if(candidates.length)return candidates[0].candidate;}}
-    return extractInvoiceNumber(text)||'';
+    return anchoredInvoiceTextBesideLabel(items,[/^invoice$/i,/^invoice\s+number$/i,/^order\s+number$/i,/^invoice\s+date$/i])||extractInvoiceNumber(text)||'';
+  }
+  function anchoredTakepaymentsInvoiceNumber(text,lines){
+    const direct=String(text||'').replace(/\s+/g,' ').match(/\bInvoice\s*(?:Number|No\.?|#)\s*[:#-]?\s*(PZ[A-Z0-9-]{6,})\b/i);
+    if(direct)return direct[1];
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim());
+    for(const label of items.filter(line=>/^\s*Invoice\s*(?:Number|No\.?|#)\s*$/i.test(String(line.text||'')))){
+      const height=Math.max(Number(label.height)||16,16),page=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),right=(Number(label.x)||0)+(Number(label.width)||0),candidates=page.filter(line=>line!==label&&/^PZ[I1]?[A-Z0-9-]{6,}$/i.test(String(line.text||'').trim())&&(Number(line.x)||0)>=right-height&&(Math.abs((Number(line.y)||0)-(Number(label.y)||0))<=Math.max(height*1.8,24))).sort((a,b)=>Math.abs((Number(a.y)||0)-(Number(label.y)||0))-Math.abs((Number(b.y)||0)-(Number(label.y)||0))||(Number(a.x)||0)-(Number(b.x)||0));
+      if(candidates.length)return String(candidates[0].text).trim();
+    }
+    return '';
+  }
+  function anchoredHealthxchangeInvoiceNumber(text,lines){
+    const flat=String(text||'').replace(/\s+/g,' '),match=flat.match(/\bInvoice\s*(?:Number|No\.?|#)\s*:?\s*([A-Z]{0,3}\d{6,})\b/i);
+    if(match)return match[1];
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim());
+    for(const label of items.filter(line=>/^\s*Invoice\s*(?:Number|No\.?|#)\s*:?\s*$/i.test(String(line.text||'')))){
+      const page=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),height=Math.max(Number(label.height)||16,16),right=(Number(label.x)||0)+(Number(label.width)||0),candidates=page.filter(line=>line!==label&&/^[A-Z]{0,3}\d{6,}$/i.test(String(line.text||'').trim())&&(Number(line.x)||0)>=right-height&&Math.abs((Number(line.y)||0)-(Number(label.y)||0))<=Math.max(height*2.5,36)).sort((a,b)=>Math.abs((Number(a.y)||0)-(Number(label.y)||0))-Math.abs((Number(b.y)||0)-(Number(label.y)||0))||(Number(a.x)||0)-(Number(b.x)||0));
+      if(candidates.length)return String(candidates[0].text).trim();
+    }
+    return '';
+  }
+  function generatedInvoiceReference(profileId,date,text){
+    const normalized=`${profileId}|${date}|${String(text||'').normalize('NFKC').replace(/\s+/g,' ').trim().toUpperCase()}`;let hash=2166136261;
+    for(let index=0;index<normalized.length;index++)hash=Math.imul(hash^normalized.charCodeAt(index),16777619);
+    return `AUTO-${String(date||'').replace(/\D/g,'')}-${(hash>>>0).toString(36).toUpperCase().padStart(7,'0')}`;
+  }
+  function anchoredMedisortValues(text){
+    const flat=String(text||'').replace(/\s+/g,' '),summary=[...flat.matchAll(/\bNet\s+Value\b[\s\S]{0,160}?\bVAT\s*@(?:\s*\d+(?:[.,]\d+)?\s*%)?[\s\S]{0,100}?\bTotal\s+Value\b/gi)].at(-1);
+    if(!summary)return null;
+    const values=anchoredInvoiceMoneyValues(flat.slice(summary.index+summary[0].length)).slice(0,3).map(item=>item.value);
+    return values.length===3?{subtotal:{value:values[0]},vat:{value:values[1]},total:{value:values[2]}}:null;
+  }
+  function anchoredMedisortInvoiceNumber(text){
+    const flat=String(text||'').replace(/\s+/g,' '),match=flat.match(/\bInvoice\s+Number\b[\s\S]{0,900}?\b(\d{6,8})\s+(\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4})\s+\d{5,8}\s+\d+\s+of\s+\d+\b/i);
+    return match?match[1]:'';
   }
   function invoiceLikeDocumentEvidence(text,lines){
-    const pages=new Map(),items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim());
-    for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(String(line.text||''));}
-    if(!pages.size)pages.set(1,[String(text||'')]);
+    const normalizeCueText=value=>String(value||'').replace(/[Þþ]/g,'fi').replace(/ﬁ/g,'fi').replace(/ﬂ/g,'fl'),pages=new Map(),items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim());
+    for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(normalizeCueText(line.text));}
+    if(!pages.size)pages.set(1,[normalizeCueText(text)]);
     const nonInvoiceCue=/\b(?:account\s+statement|statement\s+of\s+(?:account|the\s+account)|remittance\s+advice|payment\s+advice|order\s+confirmation|confirmation\s+of\s+your\s+order|order\s+has\s+been\s+received|order\s+received|pro\s+forma|receipt\s*&\s*feedback|purchase\s+order|sales\s+order|quotation|quote\s+(?:number|no\.?|#|for))\b/i;
-    const invoiceCue=/\b(?:tax\s+invoice|VAT\s+invoice|invoice\s*(?:number|no\.?|nr\.?|#|date|to\b|for\b)|credit\s+(?:note|memo))\b/i;
+    const invoiceCue=/\b(?:tax\s+invoice|VAT\s+invoice|invoice\b|credit\s+(?:note|memo))\b/i;
     const billCue=/\b(?:bill\b|bill\s+issue\s+date|bill\s+(?:number|no\.?|#|reference|ref)|total\s+for\s+this\s+bill|monthly\s+(?:business\s+)?bill|utility\s+bill)\b/i;
     const receiptCue=/\b(?:receipt\b|amount\s+paid|date\s+paid)\b/i;
     const positivePages=[],negativePages=[];
@@ -3003,31 +3100,94 @@
       if(!independentPositive&&!strongInvoicePage)return {isInvoice:false,kind:'NON-INVOICE'};
     }
     if(positivePages.length){const content=positivePages.map(page=>(pages.get(page)||[]).join(' ')).join(' '),hasInvoice=invoiceCue.test(content);return {isInvoice:true,kind:hasInvoice?(/\bcredit\s+(?:note|memo)\b/i.test(content)?'CREDIT NOTE':'INVOICE'):billCue.test(content)?'BILL':'RECEIPT'};}
-    const flat=String(text||items.map(line=>line.text||'').join(' '));
+    const flat=normalizeCueText(text||items.map(line=>line.text||'').join(' '));
     if(/\b(?:tax\s+)?invoice\b|\bcredit\s+(?:note|memo)\b|\bbill\b|\breceipt\b/i.test(flat)&&!nonInvoiceCue.test(flat))return {isInvoice:true,kind:/\bcredit\s+(?:note|memo)\b/i.test(flat)?'CREDIT NOTE':/\bbill\b/i.test(flat)?'BILL':/\breceipt\b/i.test(flat)?'RECEIPT':'INVOICE'};
     return {isInvoice:false,kind:'NON-INVOICE'};
   }
+  function anchoredInvoiceLastMoneyBeforeLabel(lines,stopPattern){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),pages=new Map();for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}let best=null;
+    for(const [page,pageLines] of pages){const stop=pageLines.filter(line=>stopPattern.test(String(line.text||''))).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0))[0];if(!stop)continue;const width=Math.max(...pageLines.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),candidates=[];for(const line of pageLines){if((Number(line.y)||0)>=(Number(stop.y)||0)||((Number(line.x)||0)<width*.58))continue;for(const money of anchoredInvoiceMoneyValues(line.text))candidates.push({value:money.value,y:Number(line.y)||0,x:Number(line.x)||0,page});}candidates.sort((a,b)=>b.y-a.y||b.x-a.x);if(candidates[0]&&(!best||candidates[0].page>best.page||candidates[0].page===best.page&&candidates[0].y>best.y))best=candidates[0];}return best?{value:best.value}:null;
+  }
   function parseAnchoredInvoice(flat,source,ocrLines,profile){
     const text=String(flat||''),generic=parseInvoiceGeneric(text,source,ocrLines),lines=Array.isArray(ocrLines)?ocrLines:[];
-    const documentEvidence=invoiceLikeDocumentEvidence(text,lines);
-    const lyntonReference=profile.id==='lynton'?String(text.match(/\bMULTI[-\s]?SHIPMENT\s+INVOICE\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{3,})/i)?.[1]||''):'';
-    const hasInvoiceLabel=documentEvidence.isInvoice,isInvoiceDocument=Boolean(profile.detect(text)&&hasInvoiceLabel),number=anchoredInvoiceNumber(text,lines)||generic.invoiceNumber||(lyntonReference?lyntonReference.slice(-4):''),date=anchoredInvoiceDate(text,lines)||generic.date;
+    let documentEvidence=invoiceLikeDocumentEvidence(text,lines);
+    const exportInvoice=profile.id==='sofwave'&&/\bExport\s+Invoice\b/i.test(text);
+    if(exportInvoice)documentEvidence={isInvoice:true,kind:'INVOICE'};
+    const orderReceipt=profile.id==='inmode'&&/\bORDER\s+GB\d+\b/i.test(text)&&/\bTotal\s+incl\.\s*VAT\b/i.test(text);
+    if(orderReceipt)documentEvidence={isInvoice:true,kind:'INVOICE'};
+    const lyntonReference=profile.id==='lynton'?String(text.match(/\bMULTI[-\s]?SHIPMENT\s+INVOICE\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{3,})/i)?.[1]||''):'',takepaymentsReference=profile.id==='takepayments'?anchoredTakepaymentsInvoiceNumber(text,lines):'',medisortReference=profile.id==='medisort'?anchoredMedisortInvoiceNumber(text):'',healthxchangeReference=profile.id==='healthxchange'?anchoredHealthxchangeInvoiceNumber(text,lines):'',sofwaveReference=profile.id==='sofwave'?String(text.match(/\bDocument\s+Number\s*:?\s*([A-Z0-9/-]{6,})/i)?.[1]||''):'';
+    const hasInvoiceLabel=documentEvidence.isInvoice,isInvoiceDocument=Boolean(profile.detect(text)&&hasInvoiceLabel),number=takepaymentsReference||medisortReference||healthxchangeReference||sofwaveReference||anchoredInvoiceNumber(text,lines)||generic.invoiceNumber||(profile.id==='care-check'?anchoredInvoiceCareCheckNumber(lines):'')||(lyntonReference?lyntonReference.slice(-4):''),date=anchoredInvoiceDate(text,lines)||generic.date;
     const totalLabels=[/\b(?:total\s+for\s+this\s+bill|the\s+total\s+owed\s+on\s+this\s+account\s+is|total\s+invoice\s+amount|total\s+invoice|invoice\s+total|total\s+payable|grand\s+total|total\s+charges\s+for\s+(?:this\s+)?invoice|total\s+charges\s+for\s+bill)\b/i,/\b(?:amount\s+due\s+in\s+(?:GBP|EUR|USD)|total\s+due\s+in\s+(?:GBP|EUR|USD)|total\s+(?:due|payable|value|amount|GBP)|amount\s+payable|amount\s+due|balance\s+due|gross\s+(?:amount|total|value))\b/i,/^\s*(?:total|gross)\s*(?:\([^)]{0,12}\))?\s*(?:[Ã‚Â£Ã¢â€šÂ¬$E]|GBP|EUR|USD)?\s*[:#-]?\s*$/i];
     totalLabels.push(/\btotal\b/i);
-    const vatLabels=[/\bVAT\s*-\s*(?:United\s+Kingdom|UK)\b/i,/\bVAT\s+due\s*\([^)]{0,80}\)/i,/\b(?:total\s+VAT|VAT\s+total|VAT\s+amount|VAT\s+value|total\s+tax|tax\s+amount|tax\s+value)\b/i,/\bVAT\s*(?:@\s*)?\d+(?:[.,]\d+)?\s*%/i,/^\s*VAT\s+(?:[Â£â‚¬$E]|GBP|EUR|USD)\s*[:#-]?\s*$/i,/^\s*VAT\s*(?:\([^)]{0,12}\))?\s*[:#-]?\s*$/i];
-    const totalExclude=/\b(?:total\s+(?:outstanding|in\s+words|net\s+price|VAT)|statement\s+balance|opening\s+balance)\b/i,btBillTotal=profile.id==='bt'?(anchoredInvoiceRelativeValue(lines,[/\btotal\s+for\s+this\s+bill\b/i],{exclude:totalExclude})||anchoredInvoiceFlatValue(text,[/\btotal\s+for\s+this\s+bill\b/i],{exclude:totalExclude})):null,splitSummary=anchoredInvoiceSplitSummary(lines),totalFound=btBillTotal||anchoredInvoiceRelativeValue(lines,totalLabels,{exclude:totalExclude})||anchoredInvoiceFlatValue(text,totalLabels,{exclude:totalExclude})||splitSummary?.total;
-    const vatContentFound=anchoredInvoiceRelativeValue(lines,[/\bVAT\s+content\b/i])||anchoredInvoiceFlatValue(text,[/\bVAT\s+content\b/i]);
-    const includedVat=text.match(/\b(?:includes?|including)\s+(?:(?:GBP|EUR|USD)\s*)?[^0-9]{0,2}((?:\d{1,3}(?:[ ,]\d{3})+|\d+)[.,]\s*\d{2})\s+VAT\b/i),vatIncludedFound=includedVat?{value:invoiceAmount(includedVat[1]),raw:includedVat[1]}:null;
-    const vatFound=anchoredInvoiceRelativeValue(lines,vatLabels)||anchoredInvoiceFlatValue(text,vatLabels)||vatContentFound||vatIncludedFound||splitSummary?.vat;
-    const subtotalFound=anchoredInvoiceRelativeValue(lines,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[Â£â‚¬$E])\b/i])||anchoredInvoiceFlatValue(text,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[Â£â‚¬$E])\b/i])||splitSummary?.subtotal;
-    const retryOcr=Boolean(isInvoiceDocument&&(!number||!date||!totalFound||!vatFound));generic.originalInvoiceNumber=lyntonReference||generic.originalInvoiceNumber||number;
-    return {...generic,invoiceNumber:number,date,supplier:profile.name,total:totalFound?.value??generic.total??'',vat:vatFound?.value??generic.vat??'',subtotal:subtotalFound?.value??generic.subtotal??'',currency:/\bEUR\b|â‚¬/i.test(text)?'EUR':/\bUSD\b|\$/i.test(text)?'USD':'GBP',documentType:documentEvidence.kind,isInvoiceDocument,accepted:false,rejected:true,retryOcr,rejectedReason:isInvoiceDocument?'':'This document does not appear to be an invoice.'};
-  }
-  function anchoredInvoiceProfile(id,name,detect){const profile={id,name,kind:'supplier',status:'Under development',category:'Invoices',formatTag:'PDF only',detect};return {...profile,parse:(flat,source,lines)=>parseAnchoredInvoice(flat,source,lines,profile)};}
+    const vatLabels=[/\bVAT\s*-\s*(?:United\s+Kingdom|UK)\b/i,/\bVAT\s+due\s*\([^)]{0,80}\)/i,/\b(?:total\s+VAT|VAT\s+total|VAT\s+amount|VAT\s+value|total\s+tax|tax\s+amount|tax\s+value)\b/i,/\bVAT\s*(?:@\s*)?\d+(?:[.,]\d+)?\s*%/i,/^\s*VAT\s+(?:[Ã‚Â£Ã¢â€šÂ¬$E]|GBP|EUR|USD)\s*[:#-]?\s*$/i,/^\s*VAT\s*(?:\([^)]{0,12}\))?\s*[:#-]?\s*$/i];
+    const totalExclude=/\b(?:total\s+(?:outstanding|in\s+words|net\s+price|VAT)|statement\s+balance|opening\s+balance)\b/i,btBillTotal=profile.id==='bt'?(anchoredInvoiceRelativeValue(lines,[/\btotal\s+for\s+this\s+bill\b/i],{exclude:totalExclude})||anchoredInvoiceFlatValue(text,[/\btotal\s+for\s+this\s+bill\b/i],{exclude:totalExclude})):null,splitSummary=anchoredInvoiceSplitSummary(lines);
+    let totalFound=btBillTotal||anchoredInvoiceRelativeValue(lines,totalLabels,{exclude:totalExclude})||anchoredInvoiceFlatValue(text,totalLabels,{exclude:totalExclude})||splitSummary?.total,supplierOcrConflictReason='';
+    if(profile.id==='dr-stuttee'){
+      const printedAmount=text.match(/\bAMOUNT\b[\s\S]{0,120}?((?:[\u00A3$\u20ACE]\s*)?(?:(?:\d{1,3}(?:[ ,]\d{3})+)|\d+)[.,]\s*\d{2})/i),amountAfterLabel=printedAmount?{value:invoiceAmount(printedAmount[1]),raw:printedAmount[1]}:null;
+      totalFound=anchoredInvoiceRelativeValue(lines,[/^\s*AMOUNT\s*$/i],{exclude:/\b(?:VAT|account|sort\s+code|bank)\b/i})||amountAfterLabel||anchoredInvoiceFlatValue(text,[/\bAMOUNT\b/i])||totalFound;
+      const amountWindow=text.match(/\bAMOUNT\b([\s\S]{0,120}?)(?=\bPAYMENT\s+DUE\b)/i)?.[1]||'',dueWindow=text.match(/\bPAYMENT\s+DUE\b([\s\S]{0,120}?)(?=\b(?:Bank\s+Address|MESSAGE|Page\s+\d)\b|$)/i)?.[1]||'',dueDateMatch=dueWindow.match(/\b(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s*\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s*\d{4}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4})\b/i),dueAmountText=dueDateMatch?dueWindow.slice(dueDateMatch.index+dueDateMatch[0].length):dueWindow,invoiceAmountValues=anchoredInvoiceMoneyValues(amountWindow),dueAmountValues=anchoredInvoiceMoneyValues(dueAmountText),printedInvoiceAmount=invoiceAmountValues.at(-1)?.value,dueAmount=dueAmountValues.at(-1)?.value;
+      if(Number.isFinite(printedInvoiceAmount)&&Number.isFinite(dueAmount)&&Math.round(printedInvoiceAmount*100)!==Math.round(dueAmount*100)){supplierOcrConflictReason='The printed AMOUNT and PAYMENT DUE figures were read differently; total left blank for manual confirmation.';totalFound=null;}
+    }
+    const vatContentFound=anchoredInvoiceRelativeValue(lines,[/\bVAT\s+content\b/i])||anchoredInvoiceFlatValue(text,[/\bVAT\s+content\b/i]),includedVat=text.match(/\b(?:includes?|including)\s+(?:(?:GBP|EUR|USD)\s*)?[^0-9]{0,2}((?:\d{1,3}(?:[ ,]\d{3})+|\d+)[.,]\s*\d{2})\s+VAT\b/i),vatIncludedFound=includedVat?{value:invoiceAmount(includedVat[1]),raw:includedVat[1]}:null;
+    let vatFound=anchoredInvoiceRelativeValue(lines,vatLabels)||anchoredInvoiceFlatValue(text,vatLabels)||vatContentFound||vatIncludedFound||splitSummary?.vat;
+    const summary=(totalPatterns,vatPatterns,{minimumYRatio=.45,maximumValueDistanceRatio=.015}={})=>({total:anchoredInvoiceSummaryValue(lines,totalPatterns,{minimumYRatio,maximumValueDistanceRatio}),vat:anchoredInvoiceSummaryValue(lines,vatPatterns,{minimumYRatio,maximumValueDistanceRatio})});
+    const profileSummaries={
+      'acre-aesthetics':summary([/^\s*Total\s*\(E\)\s*$/i],[/^\s*VAT\s+Amount\s*\(E\)\s*$/i],{minimumYRatio:.5,maximumValueDistanceRatio:.04}),
+      pabau:summary([/^\s*Paid\s+Amount\s*:?\s*$/i],[/^\s*VAT\s*:?\s*$/i],{minimumYRatio:.4}),
+      'hannah-mcclune':summary([/^\s*Total\s*:?\s*$/i],[/^\s*VAT\s*\(\s*20\s*%\s*\)\s*$/i],{minimumYRatio:0}),
+      'aec-holdings':summary([/^\s*TOTAL\s+DUE\s*:?\s*$/i],[/^\s*VAT\s*:?\s*$/i],{minimumYRatio:.35}),
+      inmode:summary([/^\s*Total\s+incl\.?\s*VAT\s*$/i],[/^\s*VAT\s*\(\s*GB\s+VAT\s*\)\s*$/i],{minimumYRatio:.35}),
+      'mailchimp':summary([], [/^\s*Tax\s*:?\s*$/i],{minimumYRatio:.4}),
+      medisort:summary([/^\s*Total\s+Value\s*$/i],[/^\s*VAT\s*@\s*$/i],{minimumYRatio:.5}),
+      'mgb-sparky':summary([/^\s*TOTAL\s*$/i],[/^\s*VAT\s+TOTAL\s*$/i],{minimumYRatio:.35}),
+      takepayments:summary([/^\s*Total\s+GBP\s*$/i],[/^\s*(?:20%\s+)?VAT\s*$/i],{minimumYRatio:.25}),
+      'reliable-medicare':summary([/^\s*Grand\s+Total\s*\(\s*Incl\.?\s*Tax\s*\)\s*:?\s*$/i],[/^\s*Tax\s*:?\s*$/i],{minimumYRatio:.45}),
+      'sos-oxygen':summary([/^\s*TOTAL\s*$/i],[/^\s*VAT\s+TOTAL\s*$/i],{minimumYRatio:.25}),
+      'zp-services':summary([/^\s*TOTAL\s*$/i],[/^\s*VAT\s*\(\s*20\s*%\s*\)\s*$/i],{minimumYRatio:.08}),
+      wix:summary([/^\s*Total\s*$/i],[/^\s*VAT\s*\(\s*20\s*%\s*\)\s*$/i],{minimumYRatio:.35}),
+      'light-hub':summary([/^\s*Total\s+incl\.?\s+VAT\s*$/i],[/^\s*VAT\s*\(\s*GB\s+VAT\s*\)\s*$/i],{minimumYRatio:.35})
+    };
+    const exact=profileSummaries[profile.id];
+    const medisortSummary=profile.id==='medisort'?anchoredMedisortValues(text):null;
+    if(profile.id==='medisort'&&medisortSummary){totalFound=medisortSummary.total;vatFound=medisortSummary.vat;}
+    if(profile.id==='takepayments'){
+      const flatVat=anchoredInvoiceFlatValue(text,[/\b20%\s*VAT\b/i]),flatTotal=anchoredInvoiceFlatValue(text,[/\bTotal\s+GBP\s+Incl\.?\s+VAT\b/i]);
+      vatFound=exact?.vat||flatVat||vatFound;totalFound=exact?.total||flatTotal||totalFound;
+    }
+    if(profile.id==='siemens-finance'){
+      const exactSiemensTotal=anchoredInvoiceSummaryValue(lines,[/^\s*Total\s+due\s+in\s+GBP\s*$/i],{minimumYRatio:.35})||anchoredInvoiceFlatValue(text,[/\bTotal\s+due\s+in\s+GBP\b/i],{exclude:/\b(?:opening|statement)\s+balance\b/i});
+      if(exactSiemensTotal)totalFound=exactSiemensTotal;
+    }
+    if(profile.id==='mgb-sparky'){
+      const printedMgbTotal=anchoredInvoiceFlatValue(text,[/(?<!VAT\s)\bTOTAL\b(?!\s+DUE)/i],{exclude:/\bVAT\s+TOTAL\b/i});
+      if(printedMgbTotal)totalFound=printedMgbTotal;
+    }
+    if(profile.id==='francisco-electrical'){
+      const printedAmount=anchoredInvoiceFlatValue(text,[/\bAmount\s*,?\s*GBP\b/i]);
+      if(printedAmount)totalFound=printedAmount;
+    }
+    if(profile.id==='siemens-finance')vatFound=anchoredInvoiceSiemensVat(lines)||vatFound;
+    if(profile.id==='acre-aesthetics'){const acreSummary=anchoredInvoiceAcreSummary(lines);totalFound=acreSummary?.total||null;vatFound=acreSummary?.vat||null;}
+    else{if(exact?.total)totalFound=exact.total;if(exact?.vat)vatFound=exact.vat;}
+    if(profile.id==='mailchimp')totalFound=anchoredInvoiceLastMoneyBeforeLabel(lines,/\bPaid\s+via\b/i)||totalFound;
+    if(profile.id==='sofwave')vatFound=null;
+    if(profile.id==='wix'&&/VAT\s+to\s+be\s+accounted\s+for\s+by\s+(?:the\s+)?recipient/i.test(text))vatFound={value:0,label:'VAT is accounted for by the recipient'};
+    if(profile.id==='sylton'&&/\bTax\s+to\s+be\s+paid\s+on\s+reverse\s+charge\s+basis\b/i.test(text))vatFound={value:0,label:'reverse charge; no VAT charged'};
+    const noVatShownProfiles=new Set(['arabella-johnson','dr-stuttee','francisco-electrical','laundrylite']);
+    if(noVatShownProfiles.has(profile.id)&&isInvoiceDocument&&!/\bVAT\b/i.test(text))vatFound={value:0,label:'No VAT is shown on the invoice'};
+    const exactVatProfiles=new Set(['acre-aesthetics','pabau','hannah-mcclune','aec-holdings','inmode','mailchimp','medisort','mgb-sparky','takepayments','reliable-medicare','sos-oxygen','zp-services','wix','light-hub','sofwave','sylton','siemens-finance','dr-stuttee']);
+    const exactTotalProfiles=new Set(['acre-aesthetics','pabau','hannah-mcclune','aec-holdings','inmode','mailchimp','medisort','mgb-sparky','takepayments','reliable-medicare','sos-oxygen','zp-services','wix','light-hub','dr-stuttee','siemens-finance']);
+    const subtotalFound=anchoredInvoiceRelativeValue(lines,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[Ã‚Â£Ã¢â€šÂ¬$E])\b/i])||anchoredInvoiceFlatValue(text,[/\b(?:subtotal|net\s+total|total\s+net|net\s+amount|net\s+value|net\s+[Ã‚Â£Ã¢â€šÂ¬$E])\b/i])||splitSummary?.subtotal;
+    let resolvedNumber=number||(['medisort','sos-oxygen','inmode','hannah-mcclune'].includes(profile.id)?anchoredInvoiceTextBesideLabel(lines,[/^invoice$/i,/^invoice\s+number$/i,/^order\s+number$/i]):''),invoiceNumberGenerated=false,invoiceNumberGeneratedReason='';
+    if(!resolvedNumber&&['arabella-johnson','laundrylite'].includes(profile.id)&&isInvoiceDocument&&date&&totalFound&&vatFound){resolvedNumber=generatedInvoiceReference(profile.id,date,text);invoiceNumberGenerated=true;invoiceNumberGeneratedReason=`The invoice does not print an invoice number; generated the internal reference ${resolvedNumber}.`;}
+    const retryOcr=Boolean(isInvoiceDocument&&(profile.id==='dr-stuttee'||!resolvedNumber||!date||!totalFound||!vatFound));generic.originalInvoiceNumber=lyntonReference||takepaymentsReference||medisortReference||healthxchangeReference||sofwaveReference||generic.originalInvoiceNumber||resolvedNumber||number;
+    const resolvedKind=exportInvoice?'INVOICE':documentEvidence.kind;
+    return {...generic,invoiceNumber:resolvedNumber||number,invoiceNumberGenerated,invoiceNumberGeneratedReason,date,supplier:profile.name,total:totalFound?.value??(exactTotalProfiles.has(profile.id)?'':generic.total??''),vat:vatFound?.value??(exactVatProfiles.has(profile.id)?'':generic.vat??''),subtotal:subtotalFound?.value??generic.subtotal??'',currency:/\bEUR\b|Ã¢â€šÂ¬/i.test(text)?'EUR':/\bUSD\b|\$/i.test(text)?'USD':'GBP',documentType:resolvedKind,isInvoiceDocument,accepted:false,rejected:true,retryOcr,ocrConflictReason:supplierOcrConflictReason,rejectedReason:supplierOcrConflictReason||(isInvoiceDocument?'':'This document does not appear to be an invoice.')};
+  }  function anchoredInvoiceProfile(id,name,detect){const profile={id,name,kind:'supplier',status:'Under development',category:'Invoices',detect};return {...profile,parse:(flat,source,lines)=>parseAnchoredInvoice(flat,source,lines,profile)};}
   const invoiceProfiles=[
     {id:'amazon',name:'Amazon',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isAmazonInvoiceText,parse:(flat,source,lines)=>parseAmazonInvoice(flat,source,lines)},
-    {id:'kin-global',name:'Kin Global Distribution Ltd',kind:'supplier',status:'Under development',category:'PDF only',detect:isKinGlobalText,parse:(flat,source,lines)=>parseKinGlobalInvoice(flat,source,lines)},
-    {id:'km-distribution',name:'KM Distribution Centre Ltd',kind:'supplier',status:'Under development',category:'PDF only',detect:isKmDistributionText,parse:(flat,source,lines)=>parseKmDistributionInvoice(flat,source,lines)},
+    {id:'kin-global',name:'Kin Global Distribution Ltd',kind:'supplier',status:'Under development',category:'Invoices',formatTag:'PDF only',detect:isKinGlobalText,parse:(flat,source,lines)=>parseKinGlobalInvoice(flat,source,lines)},
+    {id:'km-distribution',name:'KM Distribution Centre Ltd',kind:'supplier',status:'Under development',category:'Invoices',formatTag:'PDF only',detect:isKmDistributionText,parse:(flat,source,lines)=>parseKmDistributionInvoice(flat,source,lines)},
     {id:'freshways',name:'Freshways',kind:'supplier',detect:isFreshwaysText,parse:(flat,source,lines)=>parseFreshwaysInvoice(flat,source,lines)},
     {id:'bestway',name:'Bestway Wholesale',kind:'supplier',detect:isBestwayText,parse:(flat,source,lines)=>parseBestwayInvoice(flat,source,lines)},
     {id:'eagle-foods',name:'Eagle Foods Ltd',kind:'supplier',status:'Under development',detect:isEagleFoodsText,parse:(flat,source,lines)=>parseEagleFoodsInvoice(flat,source,lines)},
@@ -3119,13 +3279,13 @@
     // explicit zero for this supplier only, so its exports never contain N/A.
     if(profile?.id==='polish-village-bread'&&row.isInvoiceDocument!==false)row.vat=0;
     row.originalInvoiceNumber=originalInvoiceNumber;
-    row.invoiceNumber=profile?.id==='amazon'?String(originalInvoiceNumber||'').replace(/[^A-Z0-9]/gi,'').toUpperCase():['kin-global','km-distribution'].includes(profile?.id)?kinKmInvoiceNumber(originalInvoiceNumber):profile?.id==='maspo'?normalizeMaspoInvoiceNumber(originalInvoiceNumber):profile?.id==='liberty-frozen-foods'?originalInvoiceNumber:normalizeInvoiceNumber(originalInvoiceNumber);
+    row.invoiceNumber=row.invoiceNumberGenerated?String(row.invoiceNumber||originalInvoiceNumber):profile?.id==='amazon'?String(originalInvoiceNumber||'').replace(/[^A-Z0-9]/gi,'').toUpperCase():['kin-global','km-distribution'].includes(profile?.id)?kinKmInvoiceNumber(originalInvoiceNumber):profile?.id==='maspo'?normalizeMaspoInvoiceNumber(originalInvoiceNumber):profile?.id==='liberty-frozen-foods'?originalInvoiceNumber:normalizeInvoiceNumber(originalInvoiceNumber);
     if(row.subtotal===null||row.subtotal===undefined)row.subtotal='';
     if(row.vat===null||row.vat===undefined)row.vat='';
     // An unconfigured supplier can have its printed values extracted for review,
     // but it remains rejected until a supplier profile has been added.
     const profileConfigured=profile?.kind==='supplier',supportedProfile=profileConfigured&&Boolean(specialised),genericAcceptedForConfiguredProfile=profileConfigured&&row.accepted===true,unconfiguredSupplier=!profileConfigured&&row.isInvoiceDocument!==false;
-    const vatRequired=row.documentType!=='DELIVERY NOTE',complete=Boolean((supportedProfile||genericAcceptedForConfiguredProfile)&&row.isInvoiceDocument!==false&&row.invoiceNumber&&row.date&&row.supplier&&row.total!==''&&row.total!==null&&row.total!==undefined&&Number.isFinite(Number(row.total))&&(!vatRequired||row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat)))&&(profile?.id!=='amazon'||String(row.itemName||'').trim())&&(row.documentType!=='CORRECTION'||row.correctedTotal!==''&&row.correctedTotal!==null&&row.correctedTotal!==undefined&&Number.isFinite(Number(row.correctedTotal))&&row.correctedVat!==''&&row.correctedVat!==null&&row.correctedVat!==undefined&&Number.isFinite(Number(row.correctedVat))));
+    const vatRequired=row.documentType!=='DELIVERY NOTE',complete=Boolean((supportedProfile||genericAcceptedForConfiguredProfile)&&row.isInvoiceDocument!==false&&!row.ocrConflictReason&&row.invoiceNumber&&row.date&&row.supplier&&row.total!==''&&row.total!==null&&row.total!==undefined&&Number.isFinite(Number(row.total))&&(!vatRequired||row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat)))&&(profile?.id!=='amazon'||String(row.itemName||'').trim())&&(row.documentType!=='CORRECTION'||row.correctedTotal!==''&&row.correctedTotal!==null&&row.correctedTotal!==undefined&&Number.isFinite(Number(row.correctedTotal))&&row.correctedVat!==''&&row.correctedVat!==null&&row.correctedVat!==undefined&&Number.isFinite(Number(row.correctedVat))));
 
     row.status=complete?'ACCEPTED':'REJECTED';row.accepted=row.status==='ACCEPTED';row.rejected=row.status==='REJECTED';if(row.isInvoiceDocument===false){row.retryOcr=false;if(row.documentType!=='CREDIT NOTE')row.documentType='NON-INVOICE';}
     row.unconfiguredSupplier=unconfiguredSupplier;
@@ -3313,7 +3473,7 @@
     return Boolean(complete&&!row?.freshwaysVatOcrAmbiguous&&!row?.eagleSummaryConflict&&!row?.eagleSummaryAmbiguousReference&&!Object.keys(row?.ocrAmountConflicts||{}).length&&(row?.profileId==='bestway'||kinFooterRetry||candidate?.accepted||row?.freshwaysVatOcrRetryResolved||eaglePageMatch));
   }
   function mergeInvoiceRetryCandidate(row,candidate,{preserveGeneratedReference=false}={}){
-    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','date','supplier','subtotal','vat','vatUnverified','vatMentioned','total','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured'];
+    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','date','supplier','subtotal','vat','vatUnverified','vatMentioned','total','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured','ocrConflictReason'];
     for(const key of fields){
       if(preserveGeneratedReference&&(key==='invoiceNumber'||key==='originalInvoiceNumber'))continue;
       const value=candidate?.[key];if(value===''||value===null||value===undefined)continue;
@@ -3346,6 +3506,7 @@
     if(missingRetryTotal&&(row?.profileId==='liberty-frozen-foods'||candidate?.profileId==='liberty-frozen-foods')){merged.total='';merged.accepted=false;}
     if(Object.keys(conflicts).length){merged.ocrAmountConflicts=conflicts;merged.ocrConflictReason=invoiceRetryConflictReason(conflicts);if(row?.profileId==='freshways'&&conflicts.vat)merged.rejectedReason=merged.ocrConflictReason;}
     else{delete merged.ocrAmountConflicts;delete merged.ocrConflictReason;}
+    if(candidate?.ocrConflictReason){merged.ocrConflictReason=candidate.ocrConflictReason;merged.total='';merged.accepted=false;merged.rejectedReason=candidate.ocrConflictReason;}
     return merged;
   }
   return {extractText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
