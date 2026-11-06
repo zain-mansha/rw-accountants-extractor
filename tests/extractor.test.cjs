@@ -1096,6 +1096,41 @@ test('Marion Trading scanned sample matches the printed invoice values', {skip:p
     ['10455944','5944','2026-09-06','Marion Trading',0,2130.14,'ACCEPTED']
   ]);
 });
+test('invoice-to wording stays invoice-like when payment instructions say to quote the invoice number',()=>{const row=P.parseInvoice('CARE CHECK LTD INVOICE TO Customer Invoice date: 26/10/2026 SUBTOTAL £56.67 VAT TOTAL £3.13 TOTAL DUE £59.80 Please always quote your invoice number when paying.');assert.equal(row.isInvoiceDocument,true);assert.equal(row.documentType,'INVOICE');assert.deepEqual([row.date,row.vat,row.total,row.status],['2026-10-26',3.13,59.8,'REJECTED']);assert.match(row.rejectedReason,/invoice number not found/i);});
+test('a genuine invoice page is not suppressed by a separate payment-advice page',()=>{const lines=[
+  {page:1,text:'Payment Advice',x:70,y:60,width:150,height:20},
+  {page:2,text:'Digital Aesthetics TAX INVOICE',x:80,y:55,width:260,height:24},
+  {page:2,text:'Invoice Number: INV-2534',x:90,y:100,width:210,height:20},
+  {page:2,text:'Invoice Date: 10/07/2026',x:90,y:140,width:210,height:20},
+  {page:2,text:'VAT amount: £20.00',x:700,y:300,width:170,height:20},
+  {page:2,text:'Total GBP: £120.00',x:700,y:340,width:170,height:20}
+],rows=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'two-page-advice-and-invoice.pdf',lines),row=rows[0];assert.equal(rows.length,1);assert.equal(row.documentType,'INVOICE');assert.equal(row.isInvoiceDocument,true);assert.deepEqual([row.invoiceNumber,row.date,row.vat,row.total,row.status],['2534','2026-07-10',20,120,'ACCEPTED']);});
+test('non-invoice order confirmations retain printed totals and VAT but remain rejected',()=>{const row=P.parseInvoice('LYNTON ORDER CONFIRMATION Date: 06 August 2026 Order 991234 Subtotal £735.00 VAT £147.00 Total £882.00 This is an order confirmation; the invoice will follow.');assert.equal(row.isInvoiceDocument,false);assert.equal(row.documentType,'NON-INVOICE');assert.deepEqual([row.vat,row.total,row.status],[147,882,'REJECTED']);});
+test('standalone receipt headings are retained as receipt-like supplier documents',()=>{const row=P.parseInvoice('Klioh Studio Limited Receipt [#1449-5806] Date paid 15 October 2026 Subtotal £487.50 VAT £97.50 Amount paid £585.00');assert.equal(row.isInvoiceDocument,true);assert.equal(row.documentType,'RECEIPT');assert.deepEqual([row.invoiceNumber,row.date,row.vat,row.total,row.status],['5806','2026-10-15',97.5,585,'ACCEPTED']);});
+test('BT bill reads its VAT invoice identifier and total from their labelled page content',()=>{const lines=[
+  {page:1,text:'British Telecommunications plc',x:100,y:40,width:300,height:20},
+  {page:1,text:'Bill issue date',x:780,y:80,width:140,height:20},
+  {page:1,text:'24 October 2026',x:780,y:105,width:170,height:20},
+  {page:1,text:'Total VAT',x:100,y:720,width:120,height:20},
+  {page:1,text:'£18.37',x:700,y:720,width:70,height:20},
+  {page:1,text:'Total for this bill',x:100,y:760,width:170,height:20},
+  {page:1,text:'£110.21',x:700,y:760,width:80,height:20},
+  {page:3,text:'British Telecommunications plc',x:100,y:40,width:300,height:20},
+  {page:3,text:'Your VAT invoice number',x:780,y:200,width:200,height:20},
+  {page:3,text:'GP010463690491',x:781,y:235,width:180,height:20},
+  {page:3,text:'BT VAT registration number',x:780,y:270,width:200,height:20}
+],rows=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'bt-bill.pdf',lines),row=rows[0];assert.equal(rows.length,1);assert.deepEqual([row.invoiceNumber,row.date,row.vat,row.total,row.status],['0491','2026-10-24',18.37,110.21,'ACCEPTED']);});
+test('VAT percentage on Anthropic invoice is not mistaken for VAT value or total first digit',()=>{const lines=[
+  {page:1,text:'Anthropic Ireland Limited',x:80,y:40,width:260,height:20},
+  {page:1,text:'Invoice number 9BF0758D-5354735',x:80,y:90,width:260,height:20},
+  {page:1,text:'Date of issue 07 September 2026',x:80,y:125,width:260,height:20},
+  {page:1,text:'Subtotal',x:620,y:360,width:100,height:20},
+  {page:1,text:'El 5.00',x:950,y:360,width:70,height:20},
+  {page:1,text:'VAT - United Kingdom (20% on €15.00)',x:620,y:390,width:280,height:20},
+  {page:1,text:'€3.00',x:950,y:390,width:70,height:20},
+  {page:1,text:'Total',x:620,y:420,width:100,height:20},
+  {page:1,text:'El 8.00',x:950,y:420,width:70,height:20}
+],row=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'anthropic.pdf',lines)[0];assert.deepEqual([row.invoiceNumber,row.date,row.subtotal,row.vat,row.total,row.status],['4735','2026-09-07',15,3,18,'ACCEPTED']);});
 test('invoice numbers use the final four digits and generic suppliers stay rejected until profiled',()=>{const invoice=P.parseInvoice('ACME MOTORS LTD Invoice no. 2026/1042 Invoice date 11/11/2026 Subtotal £100.00 VAT £20.00 Total due £120.00');assert.deepEqual([invoice.invoiceNumber,invoice.status,invoice.accepted,invoice.rejected,invoice.supplier,invoice.unconfiguredSupplier],['1042','REJECTED',false,true,'ACME MOTORS LTD',true]);assert.match(invoice.rejectedReason,/supplier profile is not set up/i);const maspo=P.parseInvoice('MASPO LTD Invoice no. 2607-SP/02/04286 Invoice date (taxpoint): 29.07.2026 Total: 296,85 GBP');assert.equal(maspo.invoiceNumber,'4286');const statement=P.parseInvoice('Supplier statement Account statement Invoice No: FS 12345/2026 Date 11/11/2026 Balance due 500.00');assert.equal(statement.status,'REJECTED');assert.equal(statement.total,'');assert.match(statement.rejectedReason,/not appear to be an invoice/i);});
 test('unknown supplier invoices are retained as a rejected supplier list',()=>{const lines=[
   {page:1,text:'ACME MOTORS LTD',x:80,y:40},{page:1,text:'Invoice no. 2026/1042',x:80,y:80},{page:1,text:'Invoice date: 11/11/2026',x:80,y:120},{page:1,text:'Subtotal: £100.00',x:80,y:160},{page:1,text:'VAT: £20.00',x:80,y:200},{page:1,text:'Total due: £120.00',x:80,y:240},
