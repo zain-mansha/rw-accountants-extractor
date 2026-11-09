@@ -42,8 +42,8 @@ const launcherConfigPath = path.join(runtimeDirectory, 'extractor-launcher.json'
 
 function showUpdateSplash() {
   const splash = new BrowserWindow({
-    width: 470,
-    height: 230,
+    width: 520,
+    height: 255,
     resizable: false,
     show: false,
     autoHideMenuBar: true,
@@ -52,11 +52,28 @@ function showUpdateSplash() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
   const title = 'Checking Extractor updates';
-  const copy = 'Checking GitHub and preparing this PC’s local application before opening Extractor.';
-  const html = `<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f8f6;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:370px}.brand{font-size:11px;font-weight:800;letter-spacing:.15em;color:#08796c}.title{font-size:22px;font-weight:700;margin:13px 0 8px}.copy{color:#60736d;line-height:1.55;min-height:43px}.track{height:8px;margin-top:23px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:34%;border-radius:8px;background:#0d8276;animation:move 1.3s ease-in-out infinite alternate}@keyframes move{to{transform:translateX(195%)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title">${title}</div><div class="copy">${copy}</div><div class="track"><div class="bar"></div></div></main>`;
-  splash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  const copy = 'Do not close this window. Extractor will open automatically when the update is complete.';
+  const html = `<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f8f6;color:#173331;font:14px Segoe UI,Arial,sans-serif;display:grid;place-items:center;height:100vh}.card{width:450px}.brand{font-size:11px;font-weight:800;letter-spacing:.15em;color:#08796c}.title{font-size:22px;font-weight:700;margin:13px 0 8px}.copy{color:#60736d;line-height:1.55;min-height:43px}.progress-meta{display:flex;justify-content:space-between;gap:14px;margin-top:20px;color:#60736d;font-size:12px}.status{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.percent{color:#08796c;font-weight:700;white-space:nowrap}.track{height:10px;margin-top:8px;border-radius:8px;background:#dcebe5;overflow:hidden}.bar{height:100%;width:0;border-radius:8px;background:#0d8276;transition:width .25s ease;position:relative;overflow:hidden}.bar:after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 20%,rgba(255,255,255,.34) 50%,transparent 80%);transform:translateX(-100%);animation:shine 1.6s ease-in-out infinite}@keyframes shine{to{transform:translateX(100%)}}</style><main class="card"><div class="brand">R&amp;W ACCOUNTANTS</div><div class="title">${title}</div><div class="copy">${copy}</div><div class="progress-meta"><span id="progressStatus" class="status">Checking GitHub for the latest version...</span><span id="progressPercent" class="percent">0%</span></div><div id="progressTrack" class="track" role="progressbar" aria-label="Extractor update progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progressBar" class="bar"></div></div></main><script>window.setExtractorProgress=(state)=>{const p=Math.max(0,Math.min(100,Number(state.percent)||0));document.getElementById('progressBar').style.width=p+'%';document.getElementById('progressPercent').textContent=Math.round(p)+'%';document.getElementById('progressStatus').textContent=String(state.status||'Preparing Extractor...');document.getElementById('progressTrack').setAttribute('aria-valuenow',String(Math.round(p)));};</script>`;
+  splash.__extractorProgressState = { percent: 0, status: 'Checking GitHub for the latest version...' };
+  splash.webContents.once('did-finish-load', () => {
+    splash.__extractorProgressReady = true;
+    setUpdateSplashProgress(splash, splash.__extractorProgressState.percent, splash.__extractorProgressState.status);
+  });  splash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   splash.once('ready-to-show', () => splash.show());
   return splash;
+}
+
+function setUpdateSplashProgress(splash, percent, status) {
+  if (!splash || splash.isDestroyed() || splash.webContents.isDestroyed()) return;
+  const progressState = {
+    percent: Math.max(0, Math.min(100, Number(percent) || 0)),
+    status: String(status || 'Preparing Extractor...')
+  };
+  const previousState = splash.__extractorProgressState;
+  splash.__extractorProgressState = progressState;
+  if (!splash.__extractorProgressReady) return;
+  if (previousState && previousState.percent === progressState.percent && previousState.status === progressState.status) return;
+  splash.webContents.executeJavaScript(`window.setExtractorProgress(${JSON.stringify(progressState)})`).catch(() => {});
 }
 
 function showStartError(error, splash) {
@@ -114,7 +131,7 @@ function readApplicationBuildId(directory) {
   } catch { return ''; }
 }
 
-function prepareLocalApplication(config) {
+function prepareLocalApplication(config, onProgress = () => {}) {
   const networkRoot = String(config.networkRoot || process.env.FARE_EXTRACTOR_NETWORK_ROOT || '').trim();
   const sharedApplication = String(config.sharedApplication || (networkRoot ? path.join(networkRoot, 'resources', 'app') : '')).trim();
   const networkScript = networkRoot ? path.join(networkRoot, 'Start Extractor from Network.ps1') : '';
@@ -135,11 +152,20 @@ function prepareLocalApplication(config) {
   args.push('-PrepareLocalAppOnly');
   return new Promise((resolve, reject) => {
     const child = spawn(powershell, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '', errorOutput = '';
+    let output = '', errorOutput = '', stdoutLineBuffer = '';
     const append = (current, chunk) => (current + chunk).slice(-1024 * 1024);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', chunk => { output = append(output, chunk); });
+    child.stdout.on('data', chunk => {
+      output = append(output, chunk);
+      stdoutLineBuffer += chunk;
+      const lines = stdoutLineBuffer.split(/\r?\n/);
+      stdoutLineBuffer = lines.pop() || '';
+      for (const line of lines) {
+        const match = line.match(/^EXTRACTOR_PROGRESS:(\d{1,3}):(.+)$/);
+        if (match) onProgress(Number(match[1]), match[2].trim());
+      }
+    });
     child.stderr.on('data', chunk => { errorOutput = append(errorOutput, chunk); });
     child.once('error', reject);
     child.once('close', code => {
@@ -172,7 +198,11 @@ app.whenReady().then(async () => {
     );
     if (!alreadyCheckedThisBuild) {
       try {
-        const prepared = await prepareLocalApplication({ ...config, sharedApplication, lastLocalApplication: localApplication || config.lastLocalApplication });
+        setUpdateSplashProgress(splash, 5, 'Checking the shared application and GitHub for updates...');
+        const prepared = await prepareLocalApplication(
+          { ...config, sharedApplication, lastLocalApplication: localApplication || config.lastLocalApplication },
+          (percent, status) => setUpdateSplashProgress(splash, percent, status)
+        );
         localApplication = prepared.localDirectory;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -181,6 +211,7 @@ app.whenReady().then(async () => {
     }
     const localMain = path.join(localApplication, 'main.cjs');
     if (!fs.existsSync(localMain)) throw new Error(`The local Extractor application could not be found: ${localMain}`);
+    setUpdateSplashProgress(splash, 100, 'Update complete. Opening Extractor...');
     process.env.FARE_EXTRACTOR_SHARED_APP = sharedApplication;
     process.env.FARE_EXTRACTOR_LOCAL_APP = localApplication;
     process.env.FARE_EXTRACTOR_PROFILE_ROOT = String(config.profileRoot || path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'Extractor', 'Profiles'));

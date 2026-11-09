@@ -42,6 +42,61 @@ if (-not $runtimeTarget.StartsWith($runtimePrefix, [StringComparison]::OrdinalIg
   throw 'The local Electron runtime path is outside its selected folder.'
 }
 
+function Send-ExtractorProgress([int]$Percent, [string]$Status) {
+  $boundedPercent = [Math]::Max(0, [Math]::Min(100, $Percent))
+  $safeStatus = ([string]$Status -replace '[\r\n]+', ' ').Trim()
+  [Console]::Out.WriteLine("EXTRACTOR_PROGRESS:$boundedPercent`:$safeStatus")
+  Write-Progress -Activity 'Checking Extractor updates' -Status $safeStatus -PercentComplete $boundedPercent
+}
+
+function Download-ExtractorUpdateArchive([string]$Uri, [string]$DestinationPath) {
+  $response = $null
+  $responseStream = $null
+  $outputStream = $null
+  try {
+    $request = [System.Net.HttpWebRequest]::Create($Uri)
+    $request.Method = 'GET'
+    $request.UserAgent = 'RW-Accountants-Extractor-Updater'
+    $request.Timeout = 120000
+    $request.ReadWriteTimeout = 120000
+    $request.AllowAutoRedirect = $true
+    Send-ExtractorProgress 15 'Downloading the latest Extractor update from GitHub...'
+    $response = $request.GetResponse()
+    $totalBytes = [long]$response.ContentLength
+    $responseStream = $response.GetResponseStream()
+    $outputStream = [IO.File]::Open($DestinationPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    [byte[]]$buffer = New-Object byte[] 65536
+    [long]$downloadedBytes = 0
+    $lastPercent = 14
+    while (($readBytes = $responseStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+      $outputStream.Write($buffer, 0, $readBytes)
+      $downloadedBytes += $readBytes
+      if ($totalBytes -gt 0) {
+        $percent = 15 + [int][Math]::Floor(35 * ([double]$downloadedBytes / $totalBytes))
+        $percent = [Math]::Min(50, $percent)
+        if ($percent -gt $lastPercent) {
+          $downloadedMb = [Math]::Round($downloadedBytes / 1MB, 1)
+          $totalMb = [Math]::Round($totalBytes / 1MB, 1)
+          Send-ExtractorProgress $percent "Downloading update: $downloadedMb of $totalMb MB..."
+          $lastPercent = $percent
+        }
+      } elseif (($downloadedBytes -ge 1MB) -and ($downloadedBytes % 1MB -lt $buffer.Length)) {
+        $downloadedMb = [Math]::Round($downloadedBytes / 1MB, 1)
+        Send-ExtractorProgress 25 "Downloading update: $downloadedMb MB received..."
+      }
+    }
+    $outputStream.Flush()
+    if (($totalBytes -gt 0) -and ($downloadedBytes -ne $totalBytes)) {
+      throw "GitHub update download ended early ($downloadedBytes of $totalBytes bytes received)."
+    }
+    Send-ExtractorProgress 50 'Download complete. Unpacking the update...'
+  } finally {
+    if ($outputStream) { $outputStream.Dispose() }
+    if ($responseStream) { $responseStream.Dispose() }
+    if ($response) { $response.Dispose() }
+  }
+}
+
 $repositoryOwner = 'zain-mansha'
 $repositoryName = 'rw-accountants-extractor'
 $repositoryBranch = 'main'
@@ -360,8 +415,11 @@ function New-SharedExtractorBuild([string]$CommitSha) {
   New-Item -ItemType Directory -Path $localUpdateRoot -Force | Out-Null
   $localWork = Join-Path $localUpdateRoot "$CommitSha-$updateId"
   $archivePath = Join-Path $localWork 'source.zip'
-  $extractDirectory = Join-Path $localWork 'extract'
-  $stageRoot = Join-Path $updatesDirectory "stage-$CommitSha-$updateId"
+  # Keep extracted files under a short local-temp path. The repository contains
+  # deep OCR dependency folders that exceed Windows PowerShell's MAX_PATH when
+  # nested under UpdateCache\<commit>-<guid>.
+  $extractDirectory = Join-Path ([IO.Path]::GetTempPath()) "ex-$updateId"
+  $stageRoot = Join-Path $updatesDirectory "s-$updateId"
   $backupApp = Join-Path $updatesDirectory "previous-app-$([guid]::NewGuid().ToString('N'))"
   $pendingCreated = $false
   $appMovedToBackup = $false
@@ -371,20 +429,19 @@ function New-SharedExtractorBuild([string]$CommitSha) {
     if (Test-Path -LiteralPath $updatePendingPath -PathType Leaf) { Remove-Item -LiteralPath $updatePendingPath -Force }
     [IO.File]::WriteAllText($updatePendingPath, "$CommitSha`n", [Text.Encoding]::ASCII)
     $pendingCreated = $true
-    Write-Output 'EXTRACTOR_UPDATE_WAIT_NOTICE: Extractor is notifying open workspaces before updating the shared application.'
+    Send-ExtractorProgress 14 'Preparing the update. Keep Extractor open while it downloads and installs.'
     if ($env:EXTRACTOR_NETWORK_UPDATE_TESTS -eq '1') {
       Copy-Item -LiteralPath $env:EXTRACTOR_TEST_ARCHIVE -Destination $archivePath -Force
+      Send-ExtractorProgress 50 'Test update archive copied. Unpacking the update...'
     } else {
       $archiveUri = "https://codeload.github.com/$repositoryOwner/$repositoryName/zip/$CommitSha"
-      Invoke-WebRequest -UseBasicParsing -Method Get -Uri $archiveUri -OutFile $archivePath -TimeoutSec 120
+      Download-ExtractorUpdateArchive $archiveUri $archivePath
     }
     if (Test-Path -LiteralPath $extractDirectory) { Remove-Item -LiteralPath $extractDirectory -Recurse -Force }
-    # Expand-Archive in Windows PowerShell 5.1 can mask the actual ZIP error
-    # while cleaning up a partially extracted GitHub archive (notably around
-    # root dotfiles). Extract through the .NET ZIP API so update failures keep
-    # their original error and the archive is unpacked consistently.
+    Send-ExtractorProgress 52 'Unpacking update files...'
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
     [System.IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $extractDirectory)
+    Send-ExtractorProgress 60 'Checking the downloaded application files...'
     $repoRoot = Get-ChildItem -LiteralPath $extractDirectory -Directory | Select-Object -First 1
     if (-not $repoRoot) { throw 'The downloaded GitHub archive did not contain a source folder.' }
     $extractorSource = Join-Path $repoRoot.FullName 'extractor'
@@ -396,6 +453,7 @@ function New-SharedExtractorBuild([string]$CommitSha) {
 
     $applicationStage = Join-Path $stageRoot 'app'
     New-Item -ItemType Directory -Path $applicationStage -Force | Out-Null
+    Send-ExtractorProgress 64 'Preparing the updated application...'
     Get-ChildItem -LiteralPath $extractorSource -Force | Where-Object { $_.Name -notin @('license.cjs','license-config.json') } | ForEach-Object {
       Copy-Item -LiteralPath $_.FullName -Destination $applicationStage -Recurse -Force
     }
@@ -408,16 +466,18 @@ function New-SharedExtractorBuild([string]$CommitSha) {
     [IO.File]::WriteAllText((Join-Path $applicationStage 'build-info.json'), (@{buildId=$buildId;commit=$CommitSha} | ConvertTo-Json -Depth 4), [Text.Encoding]::UTF8)
     if (-not (Test-ExtractorAppReady $applicationStage)) { throw 'The updated Extractor application is incomplete; the existing shared version has been kept.' }
 
+    Send-ExtractorProgress 70 'The update is prepared. Waiting for other open Extractor sessions...'
     $sessionDeadline = [DateTime]::UtcNow.AddMinutes(60)
     while ($true) {
       $activeSessions = @(Get-ActiveExtractorSessions)
       if ($activeSessions.Count -eq 0) { break }
       if ([DateTime]::UtcNow -ge $sessionDeadline) { throw 'The update is ready, but other users still have Extractor open. Close their Extractor windows and launch again; the shared files have not been changed.' }
-      Write-Progress -Activity 'Checking Extractor updates' -Status "Waiting for $($activeSessions.Count) Extractor session(s) to close before replacing shared files..." -PercentComplete 55
+      Send-ExtractorProgress 72 "Waiting for $($activeSessions.Count) open Extractor session(s) to close..."
       Start-Sleep -Seconds 1
     }
 
     $liveApp = Join-Path $source 'resources\app'
+    Send-ExtractorProgress 80 'Installing the update on the shared folder...'
     New-Item -ItemType Directory -Path (Split-Path -Parent $liveApp) -Force | Out-Null
     if (Test-Path -LiteralPath $liveApp) { Move-Item -LiteralPath $liveApp -Destination $backupApp; $appMovedToBackup = $true }
     try {
@@ -448,14 +508,14 @@ function New-SharedExtractorBuild([string]$CommitSha) {
     return $liveApp
   } finally {
     if ($pendingCreated -and (Test-Path -LiteralPath $updatePendingPath -PathType Leaf)) { Remove-Item -LiteralPath $updatePendingPath -Force -ErrorAction SilentlyContinue }
-    foreach ($temporaryPath in @($localWork,$stageRoot)) {
+    foreach ($temporaryPath in @($localWork,$extractDirectory,$stageRoot)) {
       if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Recurse -Force -ErrorAction SilentlyContinue }
     }
   }
 }
 
 $progressStatus = 'Checking the shared network application against GitHub...'
-Write-Progress -Activity 'Checking Extractor updates' -Status $progressStatus -PercentComplete 10
+Send-ExtractorProgress 5 $progressStatus
 $applicationDirectory = Get-CurrentExtractorApp
 if (-not $applicationDirectory) { throw 'The shared application folder is incomplete.' }
 $commitSha = ''
@@ -468,7 +528,7 @@ if ($commitSha -notmatch '^[a-f0-9]{40}$') {
   throw 'Extractor could not verify a valid latest commit on GitHub, so it will not start an older copy. Check the network connection and try again.'
 }
 if ($commitSha) {
-  Write-Progress -Activity 'Checking Extractor updates' -Status 'Checking GitHub for the latest application before preparing this PC’s local copy...' -PercentComplete 25
+  Send-ExtractorProgress 12 'Checking GitHub for the latest application version...'
   # A partially copied network folder can still contain an app marked with the
   # current commit. In that case the normal update check would skip repair and
   # fail later when the local Electron runtime needs its loader files. Treat a
@@ -483,7 +543,7 @@ if ($commitSha) {
       catch [IO.IOException] {
         if ((Get-InstalledExtractorCommit) -eq $commitSha -and (Test-SharedExtractorRuntimeReady)) { break }
         if ([DateTime]::UtcNow -ge $updateDeadline) { throw 'Another Extractor update did not finish within 60 minutes. Try launching again.' }
-        Write-Progress -Activity 'Checking Extractor updates' -Status 'Waiting for another user to finish the shared update...' -PercentComplete 20
+        Send-ExtractorProgress 12 'Another update is already running. Waiting for it to finish...'
         Start-Sleep -Milliseconds 500
       }
     }
@@ -492,7 +552,7 @@ if ($commitSha) {
         $commitSha = Get-LatestExtractorCommit
       }
       if ((Get-InstalledExtractorCommit) -ne $commitSha -or -not (Test-SharedExtractorRuntimeReady)) {
-        Write-Progress -Activity 'Checking Extractor updates' -Status 'Downloading and preparing the update on the shared network folder...' -PercentComplete 35
+        Send-ExtractorProgress 13 'Starting the latest application update...'
         $applicationDirectory = New-SharedExtractorBuild $commitSha
       }
     } finally {
@@ -519,7 +579,7 @@ if ($commitSha) {
     }
   }
   $applicationDirectory = Get-CurrentExtractorApp
-  Write-Progress -Activity 'Checking Extractor updates' -Status 'Shared application files are current.' -PercentComplete 70
+  Send-ExtractorProgress 82 'Shared application files are current.'
 }
 if (-not $applicationDirectory -or -not (Test-ExtractorAppReady $applicationDirectory)) {
   throw 'No complete Extractor application is available on the shared network folder.'
@@ -584,7 +644,7 @@ $runtimeRequiredFiles = @('Extractor.exe','icudtl.dat','resources.pak','snapshot
         $runtimeRootFiles = @(Get-ChildItem -LiteralPath $source -File -Force | Where-Object { $_.Name -notin $excludedRuntimeFiles })
         try {
           New-Item -ItemType Directory -Path $runtimeStage | Out-Null
-          Write-Progress -Activity 'Checking Extractor updates' -Status 'Preparing the Windows Electron runtime on this PC (first launch only)...' -PercentComplete 80
+          Send-ExtractorProgress 86 'Preparing the Electron runtime on this PC...'
           if (-not $runtimeRootFiles.Count) { throw 'The shared package has no Electron runtime files to copy.' }
           foreach ($runtimeFile in $runtimeRootFiles) {
             Copy-Item -LiteralPath $runtimeFile.FullName -Destination $runtimeStage -Force
@@ -686,6 +746,7 @@ foreach ($runtimeBootstrapFile in @('network-build.txt','Start Extractor from Ne
 
 $localApplicationDirectory = ''
 if (-not $NoLaunch -or $PrepareLocalAppOnly) {
+  Send-ExtractorProgress 90 'Preparing the latest local application copy...'
   $localApplicationDirectory = New-LocalExtractorAppCopy $applicationDirectory
   $launcherConfigPath = Join-Path $runtimeTarget 'extractor-launcher.json'
   $launcherConfig = @{
@@ -721,19 +782,23 @@ if (-not $NoLaunch -and $localApplicationDirectory) {
 }
 
 if ($PrepareLocalAppOnly) {
+  Send-ExtractorProgress 98 'Checking the bundled OCR engine...'
   [void](Ensure-ExtractorBundledOcr $localApplicationDirectory)
-  Write-Progress -Activity 'Checking Extractor updates' -Status 'The local application copy is ready.' -PercentComplete 100 -Completed
+  Send-ExtractorProgress 100 'Update complete. Opening Extractor...'
+  Write-Progress -Activity 'Checking Extractor updates' -Completed
   $encodedLocalPath = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($localApplicationDirectory)))
   Write-Output "EXTRACTOR_LOCAL_APP_PATH:$encodedLocalPath"
   exit 0
 }
 
 if (-not $NoLaunch) {
+  Send-ExtractorProgress 98 'Checking the bundled OCR engine...'
   [void](Ensure-ExtractorBundledOcr $localApplicationDirectory)
   New-Item -ItemType Directory -Path $ProfileRoot -Force | Out-Null
   $env:FARE_EXTRACTOR_PROFILE_ROOT = [IO.Path]::GetFullPath($ProfileRoot)
   $launchStatus = 'Starting the latest shared application...'
-  Write-Progress -Activity 'Starting Extractor' -Status $launchStatus -PercentComplete 100 -Completed
+  Send-ExtractorProgress 100 $launchStatus
+  Write-Progress -Activity 'Starting Extractor' -Completed
   $previousSharedApp = $env:FARE_EXTRACTOR_SHARED_APP
   $previousLocalApp = $env:FARE_EXTRACTOR_LOCAL_APP
   $previousProfileRoot = $env:FARE_EXTRACTOR_PROFILE_ROOT
@@ -768,7 +833,8 @@ if (-not $NoLaunch) {
     else { $env:ELECTRON_RUN_AS_NODE = $previousRunAsNode }
   }
 } else {
-  Write-Progress -Activity 'Checking Extractor updates' -Status 'Shared application files are ready.' -PercentComplete 100 -Completed
+  Send-ExtractorProgress 100 'Update complete. Opening Extractor...'
+  Write-Progress -Activity 'Checking Extractor updates' -Completed
   Write-Output "Shared application: $applicationDirectory"
   Write-Output "Electron runtime prepared: $runtimeTarget"
   if ($localApplicationDirectory) { Write-Output "Local application copy: $localApplicationDirectory" }

@@ -4,9 +4,12 @@ title "R&W Accountants Extractor - Checking for updates"
 set "ELECTRON_RUN_AS_NODE="
 if defined LOCALAPPDATA (set "LOGDIR=%LOCALAPPDATA%\Extractor\Logs") else (set "LOGDIR=%TEMP%\Extractor-Logs")
 if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
-set "LOG=%LOGDIR%\Start Extractor from Network.log"
+rem Give each launch its own log. Multiple users or a second click can otherwise
+rem collide on the same file while the updater is still writing to it.
+set "RUN_ID=%RANDOM%-%RANDOM%-%RANDOM%"
+set "LOG=%LOGDIR%\Start Extractor from Network-%RUN_ID%.log"
 >"%LOG%" echo Extractor network launcher started at %DATE% %TIME%.
-echo Checking for Extractor updates before launch.
+echo Checking for Extractor updates before launch. Do not close this window until Extractor opens.
 pushd "%~dp0" >nul 2>&1
 if errorlevel 1 (
   echo Extractor could not open its shared folder. Check that the network location is available and you have read access.
