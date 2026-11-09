@@ -456,17 +456,20 @@
     for(const raw of ocrLines){const page=Number(raw?.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push({...raw,page,x:Number(raw?.x)||0,y:Number(raw?.y)||0,width:Number(raw?.width)||0,height:Number(raw?.height)||0,text:String(raw?.text||'').trim()});}
     const median=values=>{const sorted=values.filter(value=>Number.isFinite(value)&&value>0).sort((a,b)=>a-b);return sorted.length?sorted[Math.floor(sorted.length/2)]:0;};
     const label=line=>String(line?.text||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z ]/g,' ').replace(/\bpaym\s+ent\b/g,'payment').replace(/^dtit\s+e$/,'date').replace(/\bdute\b/g,'date').replace(/\bdote\b/g,'date').replace(/\bderails\b/g,'details').replace(/\s+/g,' ').trim();
+    const compactLabel=value=>String(value||'').replace(/\s+/g,'');
+    const matchesHeader=(line,name)=>compactLabel(label(line))===compactLabel(name);
+    const canonicalHeader=line=>({date:'date',paymenttypeanddetails:'payment type and details',paidout:'paid out',paidin:'paid in',balance:'balance'})[compactLabel(label(line))]||label(line);
     const headers=[];
     for(const [page,items] of pages){
-      const dates=items.filter(line=>/^date$/.test(label(line)));
+      const dates=items.filter(line=>matchesHeader(line,'date'));
       for(const date of dates){
-        const nearby=name=>items.filter(line=>label(line)===name&&Math.abs(line.y-date.y)<=Math.max(22,(date.height||line.height||16)*1.5)).sort((a,b)=>Math.abs(a.y-date.y)-Math.abs(b.y-date.y))[0]||null;
+        const nearby=name=>items.filter(line=>matchesHeader(line,name)&&Math.abs(line.y-date.y)<=Math.max(22,(date.height||line.height||16)*1.5)).sort((a,b)=>Math.abs(a.y-date.y)-Math.abs(b.y-date.y))[0]||null;
         const detail=nearby('payment type and details'),out=nearby('paid out'),income=nearby('paid in'),balance=nearby('balance');
         if(!detail||!out||!income||!balance)continue;
         const anchors=[date,detail,out,income,balance].map(line=>({line,center:line.x+line.width/2})).sort((a,b)=>a.center-b.center);
         if(anchors.some((anchor,index)=>index&&anchor.center<=anchors[index-1].center))continue;
         const anchorHeight=median([date.height,detail.height,out.height,income.height,balance.height]);
-        headers.push({page,items,date,detail,out,income,balance,headerY:median([date.y,detail.y,out.y,income.y,balance.y]),headerHeight:anchorHeight,centers:Object.fromEntries(anchors.map(anchor=>[label(anchor.line),anchor.center]))});
+        headers.push({page,items,date,detail,out,income,balance,headerY:median([date.y,detail.y,out.y,income.y,balance.y]),headerHeight:anchorHeight,centers:Object.fromEntries(anchors.map(anchor=>[canonicalHeader(anchor.line),anchor.center]))});
       }
     }
     // A recognizable HSBC statement with its labelled transaction table is

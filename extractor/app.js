@@ -404,20 +404,43 @@
   }
   function mergeBankRetryLines(firstPassLines,retryLines){
     const merged=(Array.isArray(firstPassLines)?firstPassLines:[]).map(line=>({...line}));
+    const bankHeaderKey=value=>{
+      const normalized=String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z ]/g,' ').replace(/\bpaym\s+ent\b/g,'payment').replace(/^dtit\s+e$/,'date').replace(/\bdute\b/g,'date').replace(/\bdote\b/g,'date').replace(/\bderails\b/g,'details').replace(/\s+/g,' ').trim().replace(/\s/g,'');
+      return ['date','paymenttypeanddetails','paidout','paidin','balance','baiance'].includes(normalized)?(normalized==='baiance'?'balance':normalized):'';
+    };
     for(const line of Array.isArray(retryLines)?retryLines:[]){
       const page=Number(line.page),x=Number(line.x)||0,y=Number(line.y)||0,width=Number(line.width)||0,height=Number(line.height)||0;let bestIndex=-1,bestScore=Infinity;
       for(let index=0;index<merged.length;index++){
         const old=merged[index];if(Number(old.page)!==page)continue;
         const oldX=Number(old.x)||0,oldY=Number(old.y)||0,oldWidth=Number(old.width)||0,oldHeight=Number(old.height)||0,verticalGap=Math.abs(y-oldY),horizontalGap=Math.max(0,Math.max(oldX-(x+width),x-(oldX+oldWidth)));
         if(verticalGap>Math.max(20,(height+oldHeight)/2+8)||horizontalGap>55)continue;
+        if(bankHeaderKey(old.text)&&!bankHeaderKey(line.text))continue;
         const score=verticalGap+horizontalGap/4;if(score<bestScore){bestIndex=index;bestScore=score;}
       }
       if(bestIndex>=0)merged[bestIndex]={...line};else merged.push({...line});
     }
     return merged;
   }
+  function mergeUnreadableBankRetryAmounts(firstPassRows,retryRows,page){
+    const hasMovement=row=>{
+      for(const field of ['amount','receipt','payment']){const value=row?.[field];if(value!==''&&value!==null&&value!==undefined&&Number.isFinite(Number(value)))return true;}
+      return false;
+    };
+    const existing=(Array.isArray(firstPassRows)?firstPassRows:[]).filter(row=>Number(row.page)===Number(page)),candidates=(Array.isArray(retryRows)?retryRows:[]).filter(row=>Number(row.page)===Number(page)&&hasMovement(row)),ys=[...existing,...candidates].map(row=>Number(row.ocrY)).filter(Number.isFinite).sort((a,b)=>a-b),uniqueYs=ys.filter((y,index)=>index===0||y-ys[index-1]>1),gaps=uniqueYs.slice(1).map((y,index)=>y-uniqueYs[index]).filter(gap=>gap>0),rowPitch=gaps.length?gaps.sort((a,b)=>a-b)[Math.floor(gaps.length/2)]:0,tolerance=rowPitch?rowPitch*0.4:10,usedCandidates=new Set();
+    if(!existing.length||!candidates.length)return {rows:firstPassRows,recovered:0};
+    let recovered=0;
+    const rows=firstPassRows.map(row=>{
+      if(Number(row.page)!==Number(page)||hasMovement(row))return row;
+      const y=Number(row.ocrY);if(!Number.isFinite(y))return row;
+      const matches=candidates.map((candidate,index)=>({candidate,index,distance:Math.abs(Number(candidate.ocrY)-y)})).filter(item=>!usedCandidates.has(item.index)&&item.candidate.date===row.date&&Number.isFinite(item.distance)&&item.distance<=tolerance).sort((a,b)=>a.distance-b.distance);
+      if(!matches.length||matches[1]&&matches[1].distance-matches[0].distance<Math.max(1,tolerance*0.08))return row;
+      const {candidate,index}=matches[0];usedCandidates.add(index);recovered++;
+      const updated={...row,amount:candidate.amount,receipt:candidate.receipt,payment:candidate.payment,confidence:'HSBC 5x OCR amount retry'};delete updated.balanceMovementUnreadable;return updated;
+    });
+    return {rows,recovered};
+  }
   async function verifyBankBalanceRows(inputRows,file,fileIndex,totalFiles,sourcePath,password='',canRetry=true,context={}){
-    let checkedRows=Array.isArray(inputRows)?inputRows:[],report=P.inspectBankBalances(checkedRows),retried=false,attempted=false;const originalMismatchCount=report.mismatches.length,run=context.run||{},retryPlan=bankBalanceRetryPlan(checkedRows,report,Number(run.pageCount)||0);
+    let checkedRows=Array.isArray(inputRows)?inputRows:[],report=P.inspectBankBalances(checkedRows),retried=false,attempted=false,recoveredRetryAmounts=0;const originalMismatchCount=report.mismatches.length,run=context.run||{},retryPlan=bankBalanceRetryPlan(checkedRows,report,Number(run.pageCount)||0);
     if(originalMismatchCount&&canRetry&&native?.ocrPdf&&sourcePath&&retryPlan.regions.length){
       const retryPages=retryPlan.pages,retryRegions=retryPlan.regions,pageCount=Number(run.pageCount)||Math.max(1,...retryPages,1),pagesToScan=retryPages,regionsToScan=retryRegions,pageLabel=`${originalMismatchCount} balance interval${originalMismatchCount===1?'':'s'}`;
       setProgress(fileIndex+0.9,totalFiles,`Balance mismatch found. Rechecking ${file.name} at 5\u00D7 \u00B7 ${pageLabel}`,`${fileIndex} / ${totalFiles} files`);$('#extract').textContent='Rechecking bank balances\u2026';
@@ -427,15 +450,22 @@
          try{try{scan=await requestOcrPdf(sourcePath,password,{scale:5,pages:pagesToScan,bankRetryRegions:regionsToScan,requestId,auditStage:'bank-balance-retry'});}catch(firstError){if(!/password-protected/i.test(firstError.message||''))throw firstError;password=await askForPdfPassword(file.name);if(password===null)throw new Error('Password entry was cancelled. The bank statement was not rechecked.');scan=await requestOcrPdf(sourcePath,password,{scale:5,pages:pagesToScan,bankRetryRegions:regionsToScan,requestId,auditStage:'bank-balance-retry'});}}finally{removeOcrListener();}
         const retryLines=scan.lines||[],targetPages=new Set(pagesToScan||Array.from({length:Number(scan.pages)||pageCount},(_,index)=>index+1)),firstPassLines=run.lines||[],contextLines=mergeBankRetryLines(firstPassLines,retryLines),retryText=[run.text||'',scan.text||''].filter(Boolean).join('\n'),parsedRows=retryLines.length?P.parseOcrBank(contextLines,retryText,file.name):P.parseBank(retryText,file.name);
         for(const page of targetPages){
-          const oldPageRows=checkedRows.filter(row=>Number(row.page)===page),newPageRows=parsedRows.filter(row=>Number(row.page)===page);if(!newPageRows.length||newPageRows.length<oldPageRows.length)continue;
-          let inserted=false;const candidateRows=[];for(const row of checkedRows){if(Number(row.page)===page){if(!inserted){candidateRows.push(...newPageRows);inserted=true;}}else candidateRows.push(row);}if(!inserted)candidateRows.push(...newPageRows);
-          const candidateReport=P.inspectBankBalances(candidateRows),hasCoverage=candidateRows.length>=checkedRows.length&&candidateReport.checkpointCount>=report.checkpointCount&&candidateReport.checkedSegments>=report.checkedSegments;
-          if(hasCoverage&&candidateReport.mismatches.length<=report.mismatches.length){checkedRows=candidateRows;report=candidateReport;retried=true;}
+          const oldPageRows=checkedRows.filter(row=>Number(row.page)===page),newPageRows=parsedRows.filter(row=>Number(row.page)===page);let replacedPage=false;
+          if(newPageRows.length&&newPageRows.length>=oldPageRows.length){
+            let inserted=false;const candidateRows=[];for(const row of checkedRows){if(Number(row.page)===page){if(!inserted){candidateRows.push(...newPageRows);inserted=true;}}else candidateRows.push(row);}if(!inserted)candidateRows.push(...newPageRows);
+            const candidateReport=P.inspectBankBalances(candidateRows),hasCoverage=candidateRows.length>=checkedRows.length&&candidateReport.checkpointCount>=report.checkpointCount&&candidateReport.checkedSegments>=report.checkedSegments;
+            if(hasCoverage&&candidateReport.mismatches.length<=report.mismatches.length){checkedRows=candidateRows;report=candidateReport;retried=true;replacedPage=true;}
+          }
+          if(replacedPage)continue;
+          const salvaged=mergeUnreadableBankRetryAmounts(checkedRows,parsedRows,page);if(!salvaged.recovered)continue;
+          const salvageReport=P.inspectBankBalances(salvaged.rows),salvageHasCoverage=salvaged.rows.length>=checkedRows.length&&salvageReport.checkpointCount>=report.checkpointCount&&salvageReport.checkedSegments>=report.checkedSegments;
+          if(salvageHasCoverage&&salvageReport.mismatches.length<=report.mismatches.length){checkedRows=salvaged.rows;report=salvageReport;retried=true;recoveredRetryAmounts+=salvaged.recovered;}
         }
       }catch(error){if(!cancelRequested)notes.push(`${file.name}: the 5x balance verification failed (${error.message}). Any unreconciled date range will be rejected.`);}
     }else if(originalMismatchCount&&canRetry&&native?.ocrPdf&&sourcePath&&!retryPlan.regions.length)notes.push(`${file.name}: balance OCR retry skipped because it could not locate both balance boundaries. No pages outside the mismatched interval were rescanned; unreconciled transaction rows are marked REJECTED.`);
     if(report.mismatches.length){P.markBankBalanceMismatches(checkedRows,report);notes.push(`${file.name}: ${report.mismatches.length} running-balance interval${report.mismatches.length===1?'':'s'} still did not reconcile${attempted?' after the 5x OCR recheck':''}. The affected transaction date range${report.mismatches.length===1?' is':'s are'} marked REJECTED and excluded from the workbook by default.`);}
     else if(originalMismatchCount&&retried)notes.push(`${file.name}: the 5x OCR recheck resolved the running-balance mismatch; the re-read transaction rows are being used.`);
+    if(recoveredRetryAmounts)notes.push(`${file.name}: recovered ${recoveredRetryAmounts} unreadable transaction amount${recoveredRetryAmounts===1?'':'s'} from the 5x OCR retry while keeping the original printed balance readings.`);
     return checkedRows;
   }
   async function verifySumUpAmountRows(inputRows,file,fileIndex,totalFiles,sourcePath,context={}){
