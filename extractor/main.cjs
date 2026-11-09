@@ -122,7 +122,96 @@ fsSync.mkdirSync(dataDirectory,{recursive:true});app.setPath('userData',dataDire
 if(!app.requestSingleInstanceLock()){app.quit();return;}
 let mainWindow;
 const activeOcrChildren=new Map(),cancelledOcrRequests=new Set();
+let ocrService=null,ocrQueue=Promise.resolve();
 function ocrCancelledError(){const error=new Error('OCR processing was cancelled.');error.code='EXTRACTOR_CANCELLED';return error;}
+function stopOcrService(service,error){
+  if(ocrService===service)ocrService=null;
+  for(const [token,pending] of service.pending){
+    service.pending.delete(token);
+    if(pending.timer)clearTimeout(pending.timer);
+    if(pending.requestId&&activeOcrChildren.get(pending.requestId)===service.child)activeOcrChildren.delete(pending.requestId);
+    pending.reject(pending.requestId&&cancelledOcrRequests.has(pending.requestId)?ocrCancelledError():error);
+  }
+}
+function startOcrService(){
+  if(ocrService&&!ocrService.child.killed&&ocrService.child.exitCode===null)return ocrService;
+  const helper=path.join(__dirname,'ocr-engine.cjs');
+  const child=spawn(process.execPath,[helper],{cwd:app.getPath('temp'),windowsHide:true,stdio:['pipe','pipe','pipe'],env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
+  const service={child,buffer:'',stderr:'',pending:new Map()};
+  ocrService=service;
+  const consume=line=>{
+    const value=String(line||'').trim();
+    if(!value)return;
+    const separator=value.indexOf(':');
+    if(separator<0)return;
+    const type=value.slice(0,separator),json=value.slice(separator+1);
+    let message;
+    try{message=JSON.parse(json);}catch{return;}
+    const pending=service.pending.get(String(message?.requestId||''));
+    if(!pending)return;
+    if(type==='PAGE'){
+      try{mainWindow?.webContents.send('ocr-progress',{...message,requestId:pending.requestId,filePath:pending.filePath});}catch{}
+      return;
+    }
+    if(type!=='RESULT')return;
+    service.pending.delete(String(message.requestId));
+    if(pending.timer)clearTimeout(pending.timer);
+    if(pending.requestId&&activeOcrChildren.get(pending.requestId)===child)activeOcrChildren.delete(pending.requestId);
+    if(pending.requestId&&cancelledOcrRequests.has(pending.requestId)){pending.reject(ocrCancelledError());return;}
+    if(message.ok!==true){pending.reject(new Error(message.error||'The bundled OCR engine could not read this PDF.'));return;}
+    delete message.requestId;
+    pending.resolve(message);
+  };
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data',chunk=>{service.buffer+=chunk;let index;while((index=service.buffer.indexOf('\n'))>=0){consume(service.buffer.slice(0,index));service.buffer=service.buffer.slice(index+1);}});
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data',chunk=>{service.stderr=(service.stderr+chunk).slice(-12000);});
+  child.stdin.on('error',error=>stopOcrService(service,error));
+  child.on('error',error=>stopOcrService(service,error));
+  child.on('close',code=>{
+    if(service.buffer.trim())consume(service.buffer);
+    stopOcrService(service,new Error(service.stderr||`The bundled OCR engine stopped${code===null?' unexpectedly':` (exit code ${code})`}.`));
+  });
+  return service;
+}
+function queueOcr(task){
+  const result=ocrQueue.then(task,task);
+  ocrQueue=result.catch(()=>{});
+  return result;
+}
+function requestOcr(payload,requestId,filePath,timeoutMs){
+  return new Promise((resolve,reject)=>{
+    let service;
+    try{service=startOcrService();}catch(error){reject(error);return;}
+    const token=crypto.randomBytes(16).toString('hex');
+    const pending={resolve,reject,requestId,filePath,timer:null};
+    service.pending.set(token,pending);
+    if(requestId)activeOcrChildren.set(requestId,service.child);
+    pending.timer=setTimeout(()=>{
+      if(!service.pending.has(token))return;
+      service.pending.delete(token);
+      if(requestId&&activeOcrChildren.get(requestId)===service.child)activeOcrChildren.delete(requestId);
+      const error=new Error(`The bundled OCR engine timed out after ${Math.round(timeoutMs/60000)} minutes. The affected rows remain available for review.`);
+      reject(error);
+      try{service.child.kill();}catch{}
+    },timeoutMs);
+    const request={...payload,requestId:token};
+    try{
+      service.child.stdin.write(`${JSON.stringify(request)}\n`,error=>{
+        if(!error||!service.pending.has(token))return;
+        service.pending.delete(token);clearTimeout(pending.timer);
+        if(requestId&&activeOcrChildren.get(requestId)===service.child)activeOcrChildren.delete(requestId);
+        reject(error);
+        try{service.child.kill();}catch{}
+      });
+    }catch(error){
+      service.pending.delete(token);clearTimeout(pending.timer);
+      if(requestId&&activeOcrChildren.get(requestId)===service.child)activeOcrChildren.delete(requestId);
+      reject(error);
+      try{service.child.kill();}catch{}
+    }
+  });
+}
 app.on('second-instance',()=>{if(!mainWindow)return;if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();});
 function relaunchWorkspace(workspaceId=''){
   const args=process.argv.slice(1).filter(argument=>!argument.startsWith('--workspace='));
@@ -219,22 +308,14 @@ ipcMain.handle('ocr-pdf',async(_event,payload)=>{
     await fs.mkdir(tempDirectory,{recursive:true});
     await fs.copyFile(resolved,localCopy);
     throwIfCancelled();
-    const helper=path.join(__dirname,'ocr-engine.cjs');
-    return await new Promise((resolve,reject)=>{
-      const child=spawn(process.execPath,[helper],{cwd:tempDirectory,windowsHide:true,stdio:['pipe','pipe','pipe'],env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});let buffer='',parsedResult=null,stderr='';
-      if(requestId){activeOcrChildren.set(requestId,child);if(cancelledOcrRequests.has(requestId))try{child.kill();}catch{}}
-      const consume=line=>{const value=String(line||'').trim();if(!value)return;if(value.startsWith('PAGE:')){try{mainWindow?.webContents.send('ocr-progress',{requestId:payload?.requestId,filePath:resolved,...JSON.parse(value.slice(5))});}catch{}return;}try{const parsed=JSON.parse(value);if(typeof parsed?.ok==='boolean')parsedResult=parsed;}catch{}};
-      child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;let index;while((index=buffer.indexOf('\n'))>=0){consume(buffer.slice(0,index));buffer=buffer.slice(index+1);}});
-      child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-12000);});
-      let timedOut=false,settled=false;const timeoutMs=pages.length?Math.max(180000,pages.length*90000):1800000;let timer;
-      const finish=(callback,value)=>{if(settled)return;settled=true;if(timer)clearTimeout(timer);callback(value);};
-      timer=setTimeout(()=>{timedOut=true;try{child.kill();}catch{}finish(reject,new Error(`The bundled OCR engine timed out after ${Math.round(timeoutMs/60000)} minutes. The affected rows remain available for review.`));},timeoutMs);
-      child.on('error',error=>finish(reject,error));
-      child.on('close',code=>{if(requestId&&activeOcrChildren.get(requestId)===child)activeOcrChildren.delete(requestId);consume(buffer);if(requestId&&cancelledOcrRequests.has(requestId)){finish(reject,ocrCancelledError());return;}if(code!==0||!parsedResult?.ok){finish(reject,new Error(parsedResult?.error||(timedOut?'The bundled OCR engine timed out; the affected rows remain available for review.':stderr||`The bundled OCR engine failed${code===null?' (process stopped)':` (exit code ${code})`}.`)));return;}finish(resolve,parsedResult);});
-      child.stdin.end(JSON.stringify({filePath:localCopy,password,scale,pages,focusPages,dairyFooterRows,bankRetryRegions,invoiceRetryRegions}));
+    const timeoutMs=pages.length?Math.max(180000,pages.length*90000):1800000;
+    return await queueOcr(()=>{
+      throwIfCancelled();
+      return requestOcr({filePath:localCopy,password,scale,pages,focusPages,dairyFooterRows,bankRetryRegions,invoiceRetryRegions},requestId||'',resolved,timeoutMs);
     });
   }finally{if(requestId){activeOcrChildren.delete(requestId);cancelledOcrRequests.delete(requestId);}await fs.rm(tempDirectory,{recursive:true,force:true}).catch(()=>{});}
 });
+app.on('before-quit',()=>{if(ocrService){try{ocrService.child.kill();}catch{}ocrService=null;}});
 function buildImagePdf(pages){
   const objects=[null],pageRefs=[];
   const add=body=>{objects.push(body);return objects.length-1;};

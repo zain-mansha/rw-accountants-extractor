@@ -14,6 +14,8 @@ const ENGINE_VERSION = '7.0.0';
 const CORE_VERSION = '7.0.0';
 const PDFJS_VERSION = '6.5.438';
 const CANVAS_VERSION = '1.1.0';
+let runtimeValidated = false;
+let ocrWorkerPromise = null;
 
 function packageVersion(packageName) {
   const packagePath = path.join(nodeModules, packageName, 'package.json');
@@ -21,6 +23,7 @@ function packageVersion(packageName) {
 }
 
 function validateRuntime() {
+  if (runtimeValidated) return;
   if (process.platform !== 'win32' || process.arch !== 'x64') {
     throw new Error(`The bundled OCR package requires Windows x64. This device reports ${process.platform} ${process.arch}.`);
   }
@@ -49,6 +52,28 @@ function validateRuntime() {
   ]) {
     if (!fs.existsSync(path.join(pdfjsRoot, relative))) throw new Error(`The bundled PDF renderer is incomplete (${relative} is missing). Reinstall the latest Extractor build.`);
   }
+  runtimeValidated = true;
+}
+
+function getOcrWorker() {
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = (async () => {
+      const { createWorker, OEM } = require(path.join(nodeModules, 'tesseract.js'));
+      const worker = await createWorker('eng', OEM.LSTM_ONLY, {
+        workerPath: path.join(nodeModules, 'tesseract.js', 'src', 'worker-script', 'node', 'index.js'),
+        corePath: path.join(nodeModules, 'tesseract.js-core', 'tesseract-core-lstm.js'),
+        langPath: path.join(vendor, 'models'),
+        gzip: false,
+        cacheMethod: 'none',
+      });
+      await worker.setParameters({ preserve_interword_spaces: '1', user_defined_dpi: '180' });
+      return worker;
+    })().catch(error => {
+      ocrWorkerPromise = null;
+      throw error;
+    });
+  }
+  return ocrWorkerPromise;
 }
 
 function groupTesseractLines(blocks, page, scale, offsetX, offsetY) {
@@ -149,8 +174,7 @@ async function run(payload) {
   validateRuntime();
   const { getDocument, GlobalWorkerOptions } = await import(pathToFileURL(path.join(pdfjsRoot, 'legacy', 'build', 'pdf.mjs')).href);
   const { createCanvas } = require(path.join(nodeModules, '@napi-rs', 'canvas'));
-  const { createWorker, OEM } = require(path.join(nodeModules, 'tesseract.js'));
-  const modelPath = path.join(vendor, 'models');
+  const worker = await getOcrWorker();
   GlobalWorkerOptions.workerSrc = pathToFileURL(path.join(pdfjsRoot, 'legacy', 'build', 'pdf.worker.mjs')).href;
   const pdfPath = path.resolve(String(payload.filePath || ''));
   if (!pdfPath.toLowerCase().endsWith('.pdf') || !fs.existsSync(pdfPath)) throw new Error('The selected PDF could not be found.');
@@ -179,14 +203,6 @@ async function run(payload) {
     throw new Error(`The bundled PDF renderer could not open this PDF: ${error?.message || error}`);
   }
 
-  const worker = await createWorker('eng', OEM.LSTM_ONLY, {
-    workerPath: path.join(nodeModules, 'tesseract.js', 'src', 'worker-script', 'node', 'index.js'),
-    corePath: path.join(nodeModules, 'tesseract.js-core', 'tesseract-core-lstm.js'),
-    langPath: modelPath,
-    gzip: false,
-    cacheMethod: 'none',
-  });
-  await worker.setParameters({ preserve_interword_spaces: '1', user_defined_dpi: '180' });
   const pageCount = document.numPages;
   const lines = [];
   const parts = [];
@@ -252,12 +268,11 @@ async function run(payload) {
       lines.push(...pageLines);
       if (pageText) parts.push(pageText);
       completed++;
-      process.stdout.write(`PAGE:${JSON.stringify({ page: pageNumber, pageCount: document.numPages, ocrLanguage: 'eng', ocrEngine: `Tesseract.js ${ENGINE_VERSION}`, ocrModel: 'eng tessdata_best', text: pageText, lines: pageLines })}\n`);
+      process.stdout.write(`PAGE:${JSON.stringify({ requestId: payload.requestId || '', page: pageNumber, pageCount: document.numPages, ocrLanguage: 'eng', ocrEngine: `Tesseract.js ${ENGINE_VERSION}`, ocrModel: 'eng tessdata_best', text: pageText, lines: pageLines })}\n`);
       page.cleanup();
       if (completed % 2 === 0) await new Promise(resolve => setImmediate(resolve));
     }
   } finally {
-    await worker.terminate();
     await loadingTask?.destroy();
   }
   return {
@@ -275,17 +290,29 @@ async function run(payload) {
 }
 
 async function main() {
-  let payload = {};
+  const readline = require('node:readline');
+  const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-    const result = await run(payload);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  } catch (error) {
-    process.stdout.write(`${JSON.stringify({ ok: false, error: String(error?.message || error) })}\n`);
-    process.exitCode = 1;
+    for await (const line of input) {
+      if (!line.trim()) continue;
+      let payload = {};
+      try {
+        payload = JSON.parse(line);
+        const result = await run(payload);
+        process.stdout.write(`RESULT:${JSON.stringify({ ...result, requestId: payload.requestId || '' })}\n`);
+      } catch (error) {
+        process.stdout.write(`RESULT:${JSON.stringify({ ok: false, requestId: payload.requestId || '', error: String(error?.message || error) })}\n`);
+      }
+    }
+  } finally {
+    if (ocrWorkerPromise) {
+      try { await (await ocrWorkerPromise).terminate(); } catch {}
+      ocrWorkerPromise = null;
+    }
   }
 }
 
-main();
+main().catch(error => {
+  process.stderr.write(`${String(error?.stack || error)}\n`);
+  process.exitCode = 1;
+});
