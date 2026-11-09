@@ -5,6 +5,7 @@ const fs=require('node:fs/promises');
 const fsSync=require('node:fs');
 const {execFile,spawn}=require('node:child_process');
 const crypto=require('node:crypto');
+const os=require('node:os');
 const {readWorkspaceProfilesSync,workspaceDirectory,createWorkspace}=require('./workspaces.cjs');
 const {shouldBlockLaunch,readMaintenanceMetadata}=require('./maintenance-gate.cjs');
 let publishNetworkBootstrap=()=>({updated:false});
@@ -147,7 +148,7 @@ ipcMain.handle('app-build-info',()=>{
     const localDirectory=directories.find(directory=>path.basename(directory).startsWith(versionPrefix));
     if(localDirectory)buildId=path.basename(localDirectory);
   }
-  return {version,buildId,commit};
+  return {version,buildId,commit,runtime:{platform:process.platform,osRelease:os.release(),osVersion:os.version(),architecture:process.arch,electron:process.versions.electron||'',node:process.versions.node||'',chromium:process.versions.chrome||''}};
 });
 ipcMain.handle('workspace-current',()=>activeWorkspace?{id:activeWorkspace.id,username:activeWorkspace.username}:null);
 ipcMain.handle('workspace-create',async(_event,value)=>{const profile=await createWorkspace(profileRoot,value);return {id:profile.id,username:profile.username};});
@@ -308,6 +309,21 @@ ipcMain.handle('save-workbook',async(_event,payload)=>{
   });
   if(save.canceled||!save.filePath)return {canceled:true};
   await fs.writeFile(save.filePath,Buffer.from(bytes));
+  return {canceled:false,filePath:save.filePath};
+});
+ipcMain.handle('save-trace-audit',async(_event,payload)=>{
+  const json=typeof payload?.json==='string'?payload.json:'';
+  if(!json)throw new Error('No extraction trace audit was supplied.');
+  if(Buffer.byteLength(json,'utf8')>64*1024*1024)throw new Error('The trace audit is too large to save as one file.');
+  const filename=String(payload?.filename||'extractor-trace-audit.json').replace(/[^\w.-]+/g,'_').replace(/\.json$/i,'')+'.json';
+  const save=await dialog.showSaveDialog(mainWindow,{
+    title:'Save extraction trace audit',
+    defaultPath:path.join(app.getPath('downloads'),filename),
+    filters:[{name:'JSON trace audits',extensions:['json']}],
+    properties:['createDirectory','showOverwriteConfirmation']
+  });
+  if(save.canceled||!save.filePath)return {canceled:true};
+  await fs.writeFile(save.filePath,json,'utf8');
   return {canceled:false,filePath:save.filePath};
 });
 app.whenReady().then(async()=>{

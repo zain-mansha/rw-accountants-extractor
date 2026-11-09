@@ -176,3 +176,6 @@ body{background:#f3f6f5;color:var(--ink)}
 .company-status-review{border-color:#bddfce;background:#edf8f2;color:#176348}
 .company-format-tag{border-color:#c9d5ee;background:#eef2fb;color:#40558d}
 .progress-controls{display:flex;align-items:center;gap:10px;flex-shrink:0}.cancel-processing{padding:5px 9px;color:#8a3028;font-size:10px}.cancel-processing[hidden]{display:none!important}.progress-controls #progress-count{white-space:nowrap}
+
+.result-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:760px){.result-actions{max-width:100%}.result-head{align-items:flex-start;gap:10px;flex-wrap:wrap}}

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('FareExtractorNative',{
   ,onOcrProgress:callback=>{const listener=(_event,progress)=>callback(progress);ipcRenderer.on('ocr-progress',listener);return()=>ipcRenderer.removeListener('ocr-progress',listener);}
   ,makeReadableCopy:(filePath,password='')=>ipcRenderer.invoke('make-readable-copy',{filePath,password})
   ,saveWorkbook:payload=>ipcRenderer.invoke('save-workbook',payload)
+  ,saveTraceAudit:payload=>ipcRenderer.invoke('save-trace-audit',payload)
   ,workspace:{
     list:()=>ipcRenderer.invoke('workspace-list'),
     current:()=>ipcRenderer.invoke('workspace-current'),
