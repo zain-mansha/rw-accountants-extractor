@@ -196,32 +196,41 @@ async function run(payload) {
     for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
       if (requestedPages?.size && !requestedPages.has(pageNumber)) continue;
       const page = await document.getPage(pageNumber);
-      const viewport = page.getViewport({ scale });
-      const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+      const fullViewport = page.getViewport({ scale });
+      const pageWidth = fullViewport.width / scale;
+      const pageHeight = fullViewport.height / scale;
+      const region = mergeRegions(pageNumber, pageWidth, pageHeight, payload);
+      const fullCanvasWidth = Math.ceil(fullViewport.width);
+      const fullCanvasHeight = Math.ceil(fullViewport.height);
+      let viewport = fullViewport;
+      let canvas;
+      let offsetX = 0;
+      let offsetY = 0;
+      if (region) {
+        // Retry requests only need the balance interval, but rendering a full
+        // 5x page and cropping afterwards still allocates and rasterizes every
+        // pixel. Offset the PDF viewport over a region-sized canvas so the
+        // renderer clips to that interval from the start.
+        const sourceX = Math.max(0, Math.floor(region.left * scale / 2));
+        const sourceY = Math.max(0, Math.floor(region.top * scale / 2));
+        const sourceRight = Math.min(fullCanvasWidth, Math.ceil(region.right * scale / 2));
+        const sourceBottom = Math.min(fullCanvasHeight, Math.ceil(region.bottom * scale / 2));
+        const cropWidth = Math.max(1, sourceRight - sourceX);
+        const cropHeight = Math.max(1, sourceBottom - sourceY);
+        viewport = page.getViewport({ scale, offsetX: -sourceX, offsetY: -sourceY });
+        canvas = createCanvas(cropWidth, cropHeight);
+        offsetX = sourceX;
+        offsetY = sourceY;
+      } else {
+        canvas = createCanvas(fullCanvasWidth, fullCanvasHeight);
+      }
       const context = canvas.getContext('2d');
       context.fillStyle = '#fff';
       context.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: context, viewport, background: '#fff' }).promise;
       if (visualInkRatio(canvas, createCanvas) >= 0.012) visualPages.push(pageNumber);
 
-      const pageWidth = viewport.width / scale;
-      const pageHeight = viewport.height / scale;
-      const region = mergeRegions(pageNumber, pageWidth, pageHeight, payload);
-      let ocrCanvas = canvas;
-      let offsetX = 0;
-      let offsetY = 0;
-      if (region) {
-        const sourceX = Math.floor(region.left * scale / 2);
-        const sourceY = Math.floor(region.top * scale / 2);
-        const sourceRight = Math.min(canvas.width, Math.ceil(region.right * scale / 2));
-        const sourceBottom = Math.min(canvas.height, Math.ceil(region.bottom * scale / 2));
-        const cropWidth = Math.max(1, sourceRight - sourceX);
-        const cropHeight = Math.max(1, sourceBottom - sourceY);
-        ocrCanvas = createCanvas(cropWidth, cropHeight);
-        ocrCanvas.getContext('2d').drawImage(canvas, sourceX, sourceY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-        offsetX = sourceX;
-        offsetY = sourceY;
-      }
+      const ocrCanvas = canvas;
 
       let result = await worker.recognize(ocrCanvas.toBuffer('image/png'), {}, { text: true, blocks: true });
       let pageLines = groupTesseractLines(result.data.blocks, pageNumber, scale, offsetX, offsetY);
