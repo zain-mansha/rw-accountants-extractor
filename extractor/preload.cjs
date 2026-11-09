@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('FareExtractorNative',{
   prepareForNetworkUpdate:state=>ipcRenderer.invoke('network-update-prepare',state),
   takeNetworkUpdateState:()=>ipcRenderer.invoke('network-update-take-state'),
   ocrPdf:(filePath,password='',options={})=>ipcRenderer.invoke('ocr-pdf',{filePath,password,...options})
+  ,cancelOcr:requestId=>ipcRenderer.invoke('cancel-ocr',requestId)
   ,onOcrProgress:callback=>{const listener=(_event,progress)=>callback(progress);ipcRenderer.on('ocr-progress',listener);return()=>ipcRenderer.removeListener('ocr-progress',listener);}
   ,makeReadableCopy:(filePath,password='')=>ipcRenderer.invoke('make-readable-copy',{filePath,password})
   ,saveWorkbook:payload=>ipcRenderer.invoke('save-workbook',payload)

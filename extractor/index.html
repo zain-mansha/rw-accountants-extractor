@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' fareextractor://app blob: data:; script-src 'self' fareextractor://app 'unsafe-inline'; style-src 'self' fareextractor://app 'unsafe-inline'; object-src 'none'">
   <title>R&amp;W Accountants | Extractor</title>
-  <link rel="stylesheet" href="fareextractor://app/styles.css?v=1.1.24-company-format-groups">
+  <link rel="stylesheet" href="fareextractor://app/styles.css?v=1.1.25-processing-controls">
 </head>
 <body>
   <section id="workspace-login" class="workspace-login">
@@ -53,7 +53,7 @@
       <header class="topbar"><div><span class="topbar-kicker">R&amp;W ACCOUNTANTS  |  EXTRACTOR</span><div class="topbar-title">Your workbench</div></div><div class="topbar-right"><span id="build-info" class="build-info" role="status" aria-label="Application version">Checking version...</span><span class="local-pill"><i></i>Ready on this device</span></div></header>
       <div class="content-area">
         <section class="hero"><div><span class="eyebrow">EXTRACT  |  REVIEW  |  EXPORT</span><h1>Turn paperwork into<br>work you can use.</h1><p>Choose a document type, add your PDFs, review the extracted details and save a workbook.</p></div><div class="privacy"><span class="privacy-icon">OK</span><div><strong>Processed on this computer</strong><span>Your documents stay in your control.</span></div></div></section>
-        <div id="pdf-workspace"><section class="card upload-card"><div id="drop" class="drop"><div class="drop-icon">&#8593;</div><h2 id="drop-title">Add bank statements</h2><p id="drop-copy">Drop selectable-text PDFs or bank transaction CSV exports here. CSV works when a statement PDF needs a password.</p><label id="choose-files-label" class="button primary" for="files">Choose PDF or CSV files</label><input id="files" type="file" accept="application/pdf,.pdf,.csv,text/csv" multiple></div><div id="receipt-options" class="receipt-options" hidden><label for="receipt-business-type">Receipt is for</label><select id="receipt-business-type"><option value="company">Company</option><option value="taxi-driver">Taxi driver</option></select><label class="receipt-vat-toggle"><input id="receipt-vat-split" type="checkbox"> Split VAT into standard and zero rate</label></div><div id="file-list" class="file-list"></div><div class="actions"><button id="extract" class="button primary" disabled>Extract and review</button><button id="clear" class="button" disabled>Clear files</button></div><div id="progress-panel" class="progress-panel" hidden aria-live="polite"><div class="progress-meta"><span id="progress-label">Preparing...</span><span id="progress-count">0 / 0</span></div><progress id="progress-bar" max="100" value="0">0%</progress></div></section><section id="result" class="result" hidden></section></div>
+        <div id="pdf-workspace"><section class="card upload-card"><div id="drop" class="drop"><div class="drop-icon">&#8593;</div><h2 id="drop-title">Add bank statements</h2><p id="drop-copy">Drop selectable-text PDFs or bank transaction CSV exports here. CSV works when a statement PDF needs a password.</p><label id="choose-files-label" class="button primary" for="files">Choose PDF or CSV files</label><input id="files" type="file" accept="application/pdf,.pdf,.csv,text/csv" multiple></div><div id="receipt-options" class="receipt-options" hidden><label for="receipt-business-type">Receipt is for</label><select id="receipt-business-type"><option value="company">Company</option><option value="taxi-driver">Taxi driver</option></select><label class="receipt-vat-toggle"><input id="receipt-vat-split" type="checkbox"> Split VAT into standard and zero rate</label></div><div id="file-list" class="file-list"></div><div class="actions"><button id="extract" class="button primary" disabled>Extract and review</button><button id="clear" class="button" disabled>Clear files</button></div><div id="progress-panel" class="progress-panel" hidden aria-live="polite"><div class="progress-meta"><span id="progress-label">Preparing...</span><span class="progress-controls"><span id="progress-count">0 / 0</span><button id="cancel-processing" class="button cancel-processing" type="button">Cancel processing</button></span></div><progress id="progress-bar" max="100" value="0">0%</progress></div></section><section id="result" class="result" hidden></section></div>
         <section id="vt-workspace" class="vt-workspace" hidden>
           <section class="card vt-import-card"><div class="vt-intro"><div><span class="eyebrow">VT UNIVERSAL INPUT</span><h2>Prepare a VT paste sheet</h2><p>Upload an Extractor invoice or receipt workbook. Review accepted and rejected rows before creating the VT paste sheet. Receipts keep fuel and other transaction amounts separate.</p></div><div class="vt-privacy"><strong>Processed on this computer</strong><span>The uploaded workbook is not sent anywhere.</span></div></div>
             <div class="vt-file-row"><label class="button primary" for="vt-file">Choose Excel workbook</label><input id="vt-file" type="file" accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.ms-excel.sheet.macroEnabled.12"><span id="vt-file-name">No workbook selected</span><button id="vt-clear" class="button" disabled>Clear</button></div>
@@ -84,6 +84,17 @@
     </section>
   </div>
 
+  <div id="supplier-development-dialog" class="password-dialog" hidden>
+    <section class="password-card" role="dialog" aria-modal="true" aria-labelledby="supplier-development-title" aria-describedby="supplier-development-copy">
+      <span class="eyebrow">SUPPLIER PROFILE</span>
+      <h2 id="supplier-development-title">This supplier is under development</h2>
+      <p id="supplier-development-copy"></p>
+      <div class="password-actions">
+        <button id="supplier-development-cancel" class="button" type="button">Cancel PDF</button>
+        <button id="supplier-development-continue" class="button primary" type="button">Continue</button>
+      </div>
+    </section>
+  </div>
   <div id="network-update-overlay" class="network-update-overlay" hidden role="status" aria-live="polite">
     <section class="network-update-card">
       <span class="eyebrow">R&amp;W ACCOUNTANTS</span>

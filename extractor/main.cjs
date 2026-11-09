@@ -120,6 +120,8 @@ const dataDirectory=activeWorkspace?workspaceDirectory(profileRoot,activeWorkspa
 fsSync.mkdirSync(dataDirectory,{recursive:true});app.setPath('userData',dataDirectory);
 if(!app.requestSingleInstanceLock()){app.quit();return;}
 let mainWindow;
+const activeOcrChildren=new Map(),cancelledOcrRequests=new Set();
+function ocrCancelledError(){const error=new Error('OCR processing was cancelled.');error.code='EXTRACTOR_CANCELLED';return error;}
 app.on('second-instance',()=>{if(!mainWindow)return;if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();});
 function relaunchWorkspace(workspaceId=''){
   const args=process.argv.slice(1).filter(argument=>!argument.startsWith('--workspace='));
@@ -186,9 +188,18 @@ ipcMain.handle('network-update-take-state',async()=>{
     return saved?.version===1&&saved.state&&typeof saved.state==='object'?saved.state:null;
   }catch(error){if(error?.code!=='ENOENT')console.warn(`Could not restore workspace after a network update: ${error.message}`);return null;}
 });
+ipcMain.handle('cancel-ocr',async(_event,requestId)=>{
+  if(typeof requestId!=='string'||!requestId)return false;
+  cancelledOcrRequests.add(requestId);
+  const child=activeOcrChildren.get(requestId);
+  if(child){try{child.kill();}catch{}}
+  return true;
+});
 ipcMain.handle('ocr-pdf',async(_event,payload)=>{
   const filePath=typeof payload==='string'?payload:payload?.filePath;
   const password=typeof payload==='object'&&typeof payload?.password==='string'?payload.password:'';
+  const requestId=typeof payload==='object'&&typeof payload?.requestId==='string'?payload.requestId:'';
+  const throwIfCancelled=()=>{if(requestId&&cancelledOcrRequests.has(requestId))throw ocrCancelledError();};
   const scale=typeof payload==='object'&&Number.isFinite(Number(payload?.scale))?Math.min(5,Math.max(1.5,Number(payload.scale))):2.5;
   const pages=typeof payload==='object'&&Array.isArray(payload?.pages)?payload.pages.map(Number).filter(page=>Number.isInteger(page)&&page>0):[];
   const bankRetryRegions=typeof payload==='object'&&Array.isArray(payload?.bankRetryRegions)?payload.bankRetryRegions.map(region=>({page:Number(region?.page),top:Number(region?.top),bottom:Number(region?.bottom)})).filter(region=>Number.isInteger(region.page)&&region.page>0&&Number.isFinite(region.top)&&Number.isFinite(region.bottom)&&region.top>=0&&region.bottom>region.top):[];
@@ -205,20 +216,26 @@ ipcMain.handle('ocr-pdf',async(_event,payload)=>{
   let encrypted=false;
   const runCopyHelper=async(outputDirectory)=>await new Promise((resolve,reject)=>{
     const copyHelper=path.join(__dirname,'copy-helper.ps1');
-    execFile('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',copyHelper,'-Path',localCopy,'-OutputDirectory',outputDirectory,'-Password',password,'-Scale',String(scale)],{windowsHide:true,maxBuffer:8*1024*1024,timeout:480000},(error,stdout,stderr)=>{
+    const copyChild=execFile('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',copyHelper,'-Path',localCopy,'-OutputDirectory',outputDirectory,'-Password',password,'-Scale',String(scale)],{windowsHide:true,maxBuffer:8*1024*1024,timeout:480000},(error,stdout,stderr)=>{
+      if(requestId&&activeOcrChildren.get(requestId)===copyChild)activeOcrChildren.delete(requestId);
+      if(requestId&&cancelledOcrRequests.has(requestId)){reject(ocrCancelledError());return;}
       let result;try{result=JSON.parse(String(stdout).trim().split(/\r?\n/).filter(Boolean).at(-1)||'{}');}catch{}
       if(error||!result?.ok){const detail=result?.error||stderr||error?.message||'Windows could not render the protected PDF.';reject(new Error(encrypted?`Could not open the protected PDF. Check that its password is correct. (${detail})`:detail));return;}
       resolve(result);
     });
+    if(requestId){activeOcrChildren.set(requestId,copyChild);if(cancelledOcrRequests.has(requestId))try{copyChild.kill();}catch{}}
   });
   try{
+    throwIfCancelled();
     await fs.mkdir(tempDirectory,{recursive:true});
     await fs.copyFile(resolved,localCopy);
+    throwIfCancelled();
     const header=fsSync.readFileSync(localCopy).toString('latin1');encrypted=/\/Encrypt\b/.test(header);
     if(encrypted&&!password)throw new Error('This PDF is password-protected. Enter the password supplied with the bank statement and try again.');
     let ocrPath=localCopy,ocrPassword=password;
     if(encrypted){
       const rendered=await runCopyHelper(tempDirectory),readableCopy=path.join(tempDirectory,'readable-copy.pdf');
+      throwIfCancelled();
       await fs.writeFile(readableCopy,buildImagePdf(rendered.pages));
       ocrPath=readableCopy;ocrPassword='';
     }
@@ -226,6 +243,7 @@ ipcMain.handle('ocr-pdf',async(_event,payload)=>{
     const args=['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',ocrPath,'-Password',ocrPassword,'-Scale',String(scale)];if(pages.length)args.push('-PageList',pages.join(','));if(focusPages.length)args.push('-FocusPageList',focusPages.join(','));if(dairyFooterRows.length)args.push('-DairyFooterRows',JSON.stringify(dairyFooterRows));if(bankRetryRegions.length)args.push('-BankRetryRegions',JSON.stringify(bankRetryRegions));if(invoiceRetryRegions.length)args.push('-InvoiceRetryRegions',JSON.stringify(invoiceRetryRegions));
     return await new Promise((resolve,reject)=>{
       const child=spawn('powershell.exe',args,{windowsHide:true,stdio:['ignore','pipe','pipe']});let buffer='',parsedResult=null,stderr='';
+      if(requestId){activeOcrChildren.set(requestId,child);if(cancelledOcrRequests.has(requestId))try{child.kill();}catch{}}
       const consume=line=>{const value=String(line||'').trim();if(!value)return;if(value.startsWith('PAGE:')){try{mainWindow?.webContents.send('ocr-progress',{requestId:payload?.requestId,filePath:resolved,...JSON.parse(value.slice(5))});}catch{}return;}try{const parsed=JSON.parse(value);if(typeof parsed?.ok==='boolean')parsedResult=parsed;}catch{}};
       child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;let index;while((index=buffer.indexOf('\n'))>=0){consume(buffer.slice(0,index));buffer=buffer.slice(index+1);}});
       child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-12000);});
@@ -233,12 +251,12 @@ ipcMain.handle('ocr-pdf',async(_event,payload)=>{
       const finish=(callback,value)=>{if(settled)return;settled=true;if(timer)clearTimeout(timer);callback(value);};
       timer=setTimeout(()=>{timedOut=true;try{child.kill();}catch{}finish(reject,new Error(`Windows OCR timed out after ${Math.round(timeoutMs/60000)} minutes. The affected invoice rows remain available for review.`));},timeoutMs);
       child.on('error',error=>finish(reject,error));
-      child.on('close',code=>{consume(buffer);if(code!==0||!parsedResult?.ok){finish(reject,new Error(parsedResult?.error||(timedOut?'Windows OCR timed out; the affected invoice rows remain available for review.':stderr||`Windows OCR failed${code===null?' (process stopped)':` (exit code ${code})`}.`)));return;}finish(resolve,parsedResult);});
+      child.on('close',code=>{if(requestId&&activeOcrChildren.get(requestId)===child)activeOcrChildren.delete(requestId);consume(buffer);if(requestId&&cancelledOcrRequests.has(requestId)){finish(reject,ocrCancelledError());return;}if(code!==0||!parsedResult?.ok){finish(reject,new Error(parsedResult?.error||(timedOut?'Windows OCR timed out; the affected invoice rows remain available for review.':stderr||`Windows OCR failed${code===null?' (process stopped)':` (exit code ${code})`}.`)));return;}finish(resolve,parsedResult);});
     });
   }catch(error){
     if(!password&&/(?:prompt\(\) is not supported|0x80048040)/i.test(String(error?.message||'')))throw new Error('This PDF is password-protected. Enter the password supplied with the bank statement and try again.');
     throw error;
-  }finally{await fs.rm(tempDirectory,{recursive:true,force:true}).catch(()=>{});}
+  }finally{if(requestId){activeOcrChildren.delete(requestId);cancelledOcrRequests.delete(requestId);}await fs.rm(tempDirectory,{recursive:true,force:true}).catch(()=>{});}
 });
 function buildImagePdf(pages){
   const objects=[null],pageRefs=[];
