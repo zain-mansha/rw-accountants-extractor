@@ -455,7 +455,7 @@
     const pages=new Map();
     for(const raw of ocrLines){const page=Number(raw?.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push({...raw,page,x:Number(raw?.x)||0,y:Number(raw?.y)||0,width:Number(raw?.width)||0,height:Number(raw?.height)||0,text:String(raw?.text||'').trim()});}
     const median=values=>{const sorted=values.filter(value=>Number.isFinite(value)&&value>0).sort((a,b)=>a-b);return sorted.length?sorted[Math.floor(sorted.length/2)]:0;};
-    const label=line=>String(line?.text||'').toLowerCase().replace(/[^a-z ]/g,' ').replace(/\bdute\b/g,'date').replace(/\bdote\b/g,'date').replace(/\bderails\b/g,'details').replace(/\s+/g,' ').trim();
+    const label=line=>String(line?.text||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z ]/g,' ').replace(/\bpaym\s+ent\b/g,'payment').replace(/^dtit\s+e$/,'date').replace(/\bdute\b/g,'date').replace(/\bdote\b/g,'date').replace(/\bderails\b/g,'details').replace(/\s+/g,' ').trim();
     const headers=[];
     for(const [page,items] of pages){
       const dates=items.filter(line=>/^date$/.test(label(line)));
@@ -480,22 +480,24 @@
       return parseDate(`${day}/${month}/${year}`);
     };
     const readMoney=value=>{
-      let raw=String(value||'').trim().replace(/[\u00A3$\u20AC]/g,'').replace(/\bGBP\b/ig,'').replace(/[Oo]/g,'0').replace(/[Il|]/g,'1').replace(/\s+/g,'').replace(/CR|DR/ig,'');
-      const negative=/^\(.*\)$/.test(raw)||/^-/.test(raw);raw=raw.replace(/[()]/g,'').replace(/^[-+]/,'');
+      let raw=String(value||'').trim().replace(/[\u00A3$\u20AC]/g,'').replace(/\bGBP\b/ig,'').replace(/[Oo]/g,'0').replace(/[Il|]/g,'1').replace(/\s+/g,'');
+      const suffix=(raw.match(/(CR|DR|C|D)$/i)||[])[1]?.toUpperCase()||'';raw=raw.replace(/(?:CR|DR|[CD])$/i,'');
+      const negative=/^\(.*\)$/.test(raw)||/^-/.test(raw)||suffix==='DR'||suffix==='D';raw=raw.replace(/[()]/g,'').replace(/^[-+]/,'');
       // HSBC prints GBP amounts with two decimal places. Requiring both cents
       // avoids treating references, dates, percentages, or partial OCR as money.
       if(!/^\d[\d,]*\.\d{2}$/.test(raw))return null;
       const valueNumber=Number(raw.replace(/,/g,''));return Number.isFinite(valueNumber)?(negative?-1:1)*valueNumber:null;
     };
+    const hasExplicitBalanceSign=value=>/(?:CR|DR|[CD])\s*$/i.test(String(value||'').replace(/\s+/g,''))||/^\s*\(?\s*-/.test(String(value||''));
     const rows=[];let previousPageDate='';
     for(const header of headers.sort((a,b)=>a.page-b.page)){
       const c=header.centers,dateDetail=(c.date+c['payment type and details'])/2,detailOut=(c['payment type and details']+c['paid out'])/2,outIncome=(c['paid out']+c['paid in'])/2,incomeBalance=(c['paid in']+c.balance)/2;
       const afterHeader=header.headerY+Math.max(8,header.headerHeight*.45),items=header.items;
       const dateLines=items.filter(line=>line.y>afterHeader&&line.x<dateDetail).map(line=>({line,date:parseDatePrefix(line.text)})).filter(item=>item.date).sort((a,b)=>a.line.y-b.line.y);
-      const moneyCandidates=items.filter(line=>line.y>afterHeader&&line.x>=detailOut&&line.x<incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==0&&(item.value!==null||/^[\s(+-]*(?:[Â£$â‚¬]\s*)?\d[\d,]*(?:[.,]\d{0,2})?[)\s]*$/.test(item.line.text))).map(item=>({...item,kind:item.line.x<outIncome?'payment':'receipt',readable:item.value!==null})).sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
-      const balances=items.filter(line=>line.y>afterHeader&&line.x>=incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==null).sort((a,b)=>a.line.y-b.line.y);
+      const moneyCandidates=items.filter(line=>line.y>afterHeader&&line.x>=detailOut&&line.x<incomeBalance).map(line=>({line,value:readMoney(line.text)})).filter(item=>item.value!==0&&(item.value!==null||/^[\s(+-]*(?:[Â£$â‚¬]\s*)?\d[\d,]*[.,]\s*\d{2}[)\s]*$/.test(item.line.text))).map(item=>({...item,kind:item.line.x<outIncome?'payment':'receipt',readable:item.value!==null})).sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
+        const balances=items.filter(line=>line.y>afterHeader&&line.x>=incomeBalance).map(line=>({line,value:readMoney(line.text),explicitSign:hasExplicitBalanceSign(line.text)})).filter(item=>item.value!==null).sort((a,b)=>a.line.y-b.line.y);
       const typeMarkers=items.filter(line=>line.y>afterHeader&&line.x>=(c.date+c['payment type and details'])/2&&line.x<c['payment type and details']+Math.max(24,header.headerHeight)&&/^(?:CR|BP|SO)$/i.test(line.text.trim())).sort((a,b)=>a.y-b.y);
-      const isBalanceForward=value=>{const normalized=String(value||'').toLowerCase().replace(/[^a-z]/g,'').replace(/baiance/g,'balance');return /balance(?:brought|carried)/.test(normalized);};
+        const isBalanceForward=value=>{let normalized=String(value||'').toLowerCase().replace(/[^a-z]/g,'').replace(/baiance/g,'balance');if(/^(?:ce|cl|e)?(?:brought|carried)forward$/.test(normalized))normalized=`balance${normalized.replace(/^(?:ce|cl|e)?/,'')}`;return /balance(?:brought|carried)/.test(normalized);};
       // Estimate each page's transaction rhythm from OCR row spacing, so a missing amount does not shift neighboring details.
       const movementHeights=moneyCandidates.map(item=>Number(item.line.height)||0),lineHeight=median([...movementHeights,...typeMarkers.map(line=>Number(line.height)||0),...dateLines.map(item=>Number(item.line.height)||0)])||header.headerHeight||16;
       const movementGaps=moneyCandidates.slice(1).map((item,index)=>Number(item.line.y)-Number(moneyCandidates[index].line.y)).filter(gap=>gap>lineHeight*2.4&&gap<lineHeight*7);
@@ -504,20 +506,11 @@
       const markerOffset=median(moneyCandidates.map(item=>{const prior=[...typeMarkers].reverse().find(line=>line.y<=item.line.y);return prior?Number(item.line.y)-Number(prior.y):0;}).filter(gap=>gap>lineHeight*.6&&gap<=pitch*1.35))||lineHeight*2;
       const slots=moneyCandidates.map(item=>({...item,inferred:false}));
       const pushInferredSlot=(y,kind='')=>{if(slots.some(slot=>Math.abs(Number(slot.line.y)-y)<=lineHeight*.65))return;slots.push({line:{page:header.page,x:kind==='receipt'?c['paid in']:kind==='payment'?c['paid out']:c['paid in'],y,width:0,height:lineHeight,text:''},value:null,kind,readable:false,inferred:true});};
-      for(let index=1;index<moneyCandidates.length;index++){
-        const previous=moneyCandidates[index-1],current=moneyCandidates[index],gap=Number(current.line.y)-Number(previous.line.y),steps=Math.round(gap/pitch);
-        if(steps<2||Math.abs(gap-steps*pitch)>Math.max(lineHeight*1.2,pitch*.18))continue;
-        for(let step=1;step<steps;step++){
-          const y=Number(previous.line.y)+pitch*step;
-          const rowStart=y-markerOffset,marker=[...typeMarkers].reverse().find(line=>Number(line.y)<=rowStart+lineHeight*.65&&Number(line.y)>=rowStart-pitch*.8),kind=marker?/^CR$/i.test(marker.text.trim())?'receipt':'payment':'';
-          pushInferredSlot(y,kind);
-        }
-      }
       // Amounts normally sit one printed line below the transaction's type or
       // date. When OCR loses the entire amount cell there may be no amount line
       // from which to spot a gap, so use those row labels as relative anchors.
       const rowCues=[...typeMarkers.map(line=>({line,kind:/^CR$/i.test(line.text.trim())?'receipt':'payment'})),...dateLines.filter(item=>!typeMarkers.some(marker=>Math.abs(Number(marker.y)-Number(item.line.y))<=markerOffset+lineHeight*.6)).filter(item=>!items.some(line=>isBalanceForward(line.text)&&Math.abs(Number(line.y)-Number(item.line.y))<=lineHeight*.9)).filter(item=>items.some(line=>line.x>=dateDetail&&line.x<detailOut&&line.y>=Number(item.line.y)-lineHeight*.6&&line.y<=Number(item.line.y)+markerOffset+lineHeight*.5&&!isBalanceForward(line.text))).map(item=>({line:item.line,kind:''}))].sort((a,b)=>a.line.y-b.line.y);
-      for(const cue of rowCues){const expectedY=Number(cue.line.y)+markerOffset,hasAmount=moneyCandidates.some(item=>Number(item.line.y)>=Number(cue.line.y)-lineHeight*.5&&Number(item.line.y)<=expectedY+lineHeight*.8);if(!hasAmount)pushInferredSlot(expectedY,cue.kind);}
+      for(const cue of rowCues){const expectedY=Number(cue.line.y)+markerOffset,hasAmount=moneyCandidates.some(item=>Number(item.line.y)>=Number(cue.line.y)-lineHeight*.5&&Number(item.line.y)<=expectedY+lineHeight*2.5);if(!hasAmount)pushInferredSlot(expectedY,cue.kind);}
       slots.sort((a,b)=>a.line.y-b.line.y||a.line.x-b.line.x);
       const movements=[];
       for(let movementIndex=0;movementIndex<slots.length;movementIndex++){
@@ -529,16 +522,59 @@
         let kind=movement.kind;
         if(!kind){const rowMarkers=typeMarkers.filter(line=>Number(line.y)<=rowStart+lineHeight*.65&&Number(line.y)>=rowStart-pitch*.8);const marker=rowMarkers.at(-1);if(marker)kind=/^CR$/i.test(marker.text.trim())?'receipt':'payment';}
         const value=movement.readable?Math.abs(movement.value):'',signed=value===''?'':kind==='receipt'?value:kind==='payment'?-value:'';
-        movements.push({date,details:details||'Bank transaction amount not read',receipt:value!==''&&kind==='receipt'?value:'',payment:value!==''&&kind==='payment'?value:'',amount:signed,balance:balance?.value??'',balanceExpected:Boolean(balance),source,page:header.page,ocrY:Number(movement.line.y)||0,balanceY:balance?.line.y??null,confidence:movement.readable?'HSBC labelled OCR columns':'REJECTED',review:true,...(!movement.readable?{balanceMovementUnreadable:true}: {})});
+          movements.push({date,details:details||'Bank transaction amount not read',receipt:value!==''&&kind==='receipt'?value:'',payment:value!==''&&kind==='payment'?value:'',amount:signed,balance:balance?.value??'',balanceSignExplicit:balance?.explicitSign??false,balanceExpected:Boolean(balance),source,page:header.page,ocrY:Number(movement.line.y)||0,balanceY:balance?.line.y??null,confidence:movement.readable?'HSBC labelled OCR columns':'REJECTED',review:true,...(!movement.readable?{balanceMovementUnreadable:true}: {})});
       }
       if(movements.length){
         const firstMovementY=slots[0]?.line.y??Infinity,pageOpening=balances.filter(item=>item.line.y<firstMovementY).at(-1)?.value;
-        movements[0].pageOpeningBalance=pageOpening??'';
-        if(!rows.length&&pageOpening!==undefined)movements[0].openingBalance=pageOpening;
+          const pageOpeningEntry=balances.filter(item=>item.line.y<firstMovementY).at(-1);
+          movements[0].pageOpeningBalance=pageOpening??'';
+          movements[0].pageOpeningBalanceSignExplicit=pageOpeningEntry?.explicitSign??false;
+          if(!rows.length&&pageOpening!==undefined){movements[0].openingBalance=pageOpening;movements[0].openingBalanceSignExplicit=pageOpeningEntry?.explicitSign??false;}
         rows.push(...movements);
       }
       if(dateLines.length)previousPageDate=dateLines.at(-1).date;
     }
+    // A faint debit/credit suffix is sometimes lost by Windows OCR. Recover a
+    // missing balance sign only when the printed transaction amounts and the
+    // other printed balance checkpoints leave exactly one mathematically valid
+    // sign sequence. Ambiguous or incomplete intervals remain untouched and
+    // are still rejected by the normal balance reconciliation.
+    const checkpoints=[];
+    if(rows.length&&bankValueCents(rows[0].openingBalance)!==null)checkpoints.push({index:-1,row:rows[0],field:'openingBalance',explicit:Boolean(rows[0].openingBalanceSignExplicit)});
+    rows.forEach((row,index)=>{if(bankValueCents(row.balance)!==null)checkpoints.push({index,row,field:'balance',explicit:Boolean(row.balanceSignExplicit)});});
+    const candidates=point=>{const value=bankValueCents(point.row[point.field]);if(value===null)return [];return point.explicit||value===0?[value]:[Math.abs(value),-Math.abs(value)];};
+    const applyUniqueSigns=points=>{
+      if(!points.length)return;
+      const values=points.map(candidates),counts=values[0].map(()=>1),parents=values.map(list=>list.map(()=>-1));
+      let ways=counts;
+      for(let position=1;position<points.length;position++){
+        const previous=points[position-1],current=points[position],movementCents=[];
+        for(let rowIndex=previous.index+1;rowIndex<=current.index;rowIndex++){
+          const cents=bankRowAmountCents(rows[rowIndex]);if(cents===null||rows[rowIndex]?.balanceMovementUnreadable){movementCents.length=0;break;}movementCents.push(cents);
+        }
+        if(previous.index===-1&&current.index<0)movementCents.length=0;
+        const complete=previous.index+1<=current.index&&movementCents.length===current.index-previous.index;
+        if(!complete)return;
+        const delta=movementCents.reduce((sum,value)=>sum+value,0),nextWays=values[position].map(()=>0);
+        for(let next=0;next<values[position].length;next++)for(let prior=0;prior<values[position-1].length;prior++)if(ways[prior]&&values[position-1][prior]+delta===values[position][next]){nextWays[next]=Math.min(2,nextWays[next]+ways[prior]);parents[position][next]=prior;}
+        ways=nextWays;
+      }
+      const total=ways.reduce((sum,count)=>sum+count,0);if(total!==1)return;
+      let state=ways.findIndex(count=>count===1);
+      for(let position=points.length-1;position>=0;position--){
+        const point=points[position],value=values[position][state];
+        if(!point.explicit&&bankValueCents(point.row[point.field])!==value)point.row[point.field]=value/100;
+        if(position>0)state=parents[position][state];
+      }
+    };
+    // Split into balance runs where every transaction movement is readable.
+    let run=[];
+    for(const point of checkpoints){
+      if(run.length){const previous=run.at(-1),complete=previous.index+1<=point.index&&Array.from({length:point.index-previous.index},(_,offset)=>bankRowAmountCents(rows[previous.index+1+offset])).every(value=>value!==null);if(!complete){applyUniqueSigns(run);run=[];}}
+      run.push(point);
+    }
+    applyUniqueSigns(run);
+    for(const row of rows){delete row.balanceSignExplicit;delete row.openingBalanceSignExplicit;delete row.pageOpeningBalanceSignExplicit;}
     return rows;
   }
   function parseSumUpOcrBank(ocrLines,text='',source=''){
@@ -1905,6 +1941,22 @@
     ...receiptProfiles.map(({id,name,category})=>({id,name,category,status:'Under development'})),
     ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status,formatTag,category})=>({id,name,category:category||'Invoices',...(status?{status}:{}),...(formatTag?{formatTag}:{})}))
   ];}
+  function underDevelopmentSuppliers(mode,rows=[],contexts=[]){
+    const categories=mode==='invoice'?['Invoices','PDF only']:mode==='receipt'?['Receipts']:mode==='bank'?['Bank statements']:[];
+    if(!categories.length)return [];
+    const profiles=compatibleCompanies().filter(profile=>profile.status==='Under development'&&categories.includes(profile.category));
+    const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('en-GB').replace(/[^a-z0-9]+/g,' ').trim();
+    const rowList=Array.isArray(rows)?rows:[],contextList=Array.isArray(contexts)?contexts:[contexts],profileIds=new Set(rowList.map(row=>String(row?.profileId||''))),supplierNames=new Set(rowList.map(row=>normalize(row?.supplier||row?.company||'' )).filter(Boolean));
+    const contextText=contextList.map(value=>typeof value==='string'?value:String(value?.text||'')).join('\n');
+    const found=profiles.filter(profile=>{
+      if(profileIds.has(profile.id)||supplierNames.has(normalize(profile.name)))return true;
+      const tokens=String(profile.name||'').trim().split(/[^a-z0-9]+/i).filter(Boolean).map(token=>token.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+      if(!tokens.length)return false;
+      const expression=new RegExp(`(?:^|[^a-z0-9])${tokens.join('[^a-z0-9]+')}(?:$|[^a-z0-9])`,'i');
+      return expression.test(contextText);
+    }).map(profile=>profile.name);
+    return [...new Set(found)].sort((a,b)=>a.localeCompare(b,'en-GB'));
+  }
   function receiptLevenshtein(a,b){const row=Array.from({length:b.length+1},(_,i)=>i);for(let i=1;i<=a.length;i++){let previous=row[0];row[0]=i;for(let j=1;j<=b.length;j++){const current=row[j];row[j]=Math.min(row[j]+1,row[j-1]+1,previous+(a[i-1]===b[j-1]?0:1));previous=current;}}return row[b.length];}
   function receiptTotalLabel(value){const letters=String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/0/g,'O').replace(/1/g,'I');return !['TOTALS','TODAY'].includes(letters)&&letters.length>=4&&letters.length<=6&&receiptLevenshtein(letters,'TOTAL')<=2;}
   function receiptFaintTotalLabel(line,fuelY){const x=Number(line?.x)||0,y=Number(line?.y)||0,letters=String(line?.text||'').toUpperCase().replace(/[^A-Z]/g,'');return x<260&&y>=(Number(fuelY)||0)+70&&y<=(Number(fuelY)||0)+320&&letters.length>=2&&letters.length<=3&&receiptLevenshtein(letters,'TOTAL')<=3;}
@@ -3509,7 +3561,7 @@
     if(candidate?.ocrConflictReason){merged.ocrConflictReason=candidate.ocrConflictReason;merged.total='';merged.accepted=false;merged.rejectedReason=candidate.ocrConflictReason;}
     return merged;
   }
-  return {extractText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
+  return {extractText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),underDevelopmentSuppliers,parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
 });
 
 

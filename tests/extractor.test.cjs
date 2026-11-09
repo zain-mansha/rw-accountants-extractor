@@ -136,6 +136,42 @@ test('Acre invoice summaries split across adjacent pages keep the printed VAT an
     assert.deepEqual([row.profileId,row.invoiceNumber,row.date,row.subtotal,row.vat,row.total,row.status,row.retryOcr],['acre-aesthetics','1234','2026-01-15',83.33,16.67,100,'ACCEPTED',false]);
   }
 });
+test('Acre same-page summary tolerates a narrow amount column and does not invent a missing printed total',()=>{
+  const line=(text,x,y,width=String(text).length*8)=>({page:1,text,x,y,width,height:24,confidence:1});
+  const parse=items=>P.parseInvoiceBatch(items.map(item=>item.text).join('\n'),'renamed-acre.pdf',items)[0];
+  const zeroVat=parse([
+    line('ACRE AESTHETICS LIMITED',100,20),line('Invoice Number',130,100),line('1-0000018986',240,100),line('Invoice Date',130,140),line('11/9/2026',240,140),
+    line('Net Amount (E)',1080,700),line('VAT Amount (E)',1380,700),line('Total (E)',1740,700),line('280.00',1080,736),line('0.00',1400,736),line('280.00',1760,736)
+  ]);
+  assert.deepEqual([zeroVat.invoiceNumber,zeroVat.date,zeroVat.vat,zeroVat.total,zeroVat.status],['8986','2026-09-11',0,280,'ACCEPTED']);
+  const noPrintedTotal=parse([
+    line('ACRE AESTHETICS LIMITED',100,20),line('Invoice Number',130,100),line('1-0000015272',240,100),line('Invoice Date',130,140),line('24/9/2026',240,140),
+    line('Net Amount (E)',1080,700),line('VAT Amount (E)',1380,700),line('Total (E)',1740,700),line('457.24',1400,736)
+  ]);
+  assert.deepEqual([noPrintedTotal.vat,noPrintedTotal.total,noPrintedTotal.status],[457.24,'','REJECTED'],'a missing total stays blank; it is never rebuilt from VAT or item rows');
+});
+test('Care Check header reference and Dr Stuttee amount labels are read from invoice text',()=>{
+  const care=[
+    {page:1,text:'CARE CHECK LTD Invoice',x:80,y:20,width:180,height:20},
+    {page:1,text:'946517',x:520,y:40,width:60,height:20},
+    {page:1,text:'Invoice Date',x:80,y:100,width:90,height:20},
+    {page:1,text:'26/10/2026',x:190,y:100,width:90,height:20},
+    {page:1,text:'VAT Amount',x:80,y:500,width:120,height:20},
+    {page:1,text:'3.13',x:420,y:500,width:40,height:20},
+    {page:1,text:'TOTAL DUE',x:80,y:540,width:100,height:20},
+    {page:1,text:'59.80',x:420,y:540,width:50,height:20}
+  ];
+  const careText=care.map(line=>line.text).join('\n'),[careRow]=P.parseInvoiceBatch(careText,'care-check.pdf',care);
+  assert.deepEqual([careRow.invoiceNumber,careRow.date,careRow.vat,careRow.total,careRow.status],['6517','2026-10-26',3.13,59.8,'ACCEPTED']);
+  const stuttee=P.parseInvoice('Dr Stuttee Health Clinic INVOICE #167 Invoice date 8 Sep 2026 AMOUNT £5,830.91 PAYMENT DUE 8 Oct 2026');
+  assert.deepEqual([stuttee.invoiceNumber,stuttee.date,stuttee.total,stuttee.vat,stuttee.status],['167','2026-09-08',5830.91,0,'ACCEPTED'],'the supplier invoice prints no VAT field; record explicit zero rather than reject it');
+});
+test('order confirmations with mangled ligatures stay rejected while printed receipt values remain available',()=>{
+  const board=P.parseInvoice('Discount Displays Limited Sign-Holders.co.uk order conÞrmation 25 August 2026 VAT £11.09 Total £66.54 We will email you a VAT Invoice when your order has been processed');
+  assert.deepEqual([board.documentType,board.isInvoiceDocument,board.vat,board.total,board.status],['NON-INVOICE',false,11.09,66.54,'REJECTED']);
+  const receipt=P.parseInvoice('Issuer Royal Borough of Kensington and Chelsea Address Horton Street London Receipt Number 1000082217 Pay Date 15/10/2026 Pay Amount £44.90 Mastercard Debit Card Where VAT is Applicable the VAT No. is GB 238 6993 10');
+  assert.deepEqual([receipt.supplier,receipt.invoiceNumber,receipt.date,receipt.total,receipt.vat,receipt.documentType,receipt.status],['Royal Borough of Kensington and Chelsea','2217','2026-10-15',44.9,'','RECEIPT','REJECTED']);
+});
 test('Eagle Foods uses invoice pages only and statement rows only confirm existing invoice pages',()=>{
   const line=(page,text,x,y,width=String(text).length*9)=>({page,text,x,y,width,height:20,confidence:1});
   const invoice=[line(1,'EAGLEFOODS',80,20,150),line(1,'Invoice To:',80,80),line(1,'Account No',80,120),line(1,'CMKL',250,120),line(1,'Invoice No',500,120),line(1,'143871',700,120),line(1,'Order Date',1000,120),line(1,'31-AUG-26',1240,120),line(1,'Total Credit',1650,800),line(1,'1880.40',1800,850),line(1,'New Invoice Total',1650,900),line(1,'5,927.42',1800,950)];
@@ -1227,6 +1263,28 @@ test('HSBC OCR follows labelled columns and carries a date across a page break',
   assert.equal(rows[0].openingBalance,1000);assert.equal(rows[2].pageOpeningBalance,1050);assert.ok(rows.every(row=>! /BALANCE BROUGHT FORWARD/i.test(row.details)));
   const report=P.inspectBankBalances(rows);assert.equal(report.mismatches.length,0);assert.equal(report.checkedSegments,4);
 });
+test('HSBC tolerates OCR variants in the Date and Payment headings and drops carried-forward rows',()=>{
+  const lines=[
+    {page:1,text:'HSBC',x:20,y:10},
+    {page:1,text:'Dåte',x:100,y:100,width:40,height:20},{page:1,text:'Paym ent type and details',x:200,y:100,width:180,height:20},{page:1,text:'Paid out',x:600,y:100,width:60,height:20},{page:1,text:'Paid in',x:750,y:100,width:50,height:20},{page:1,text:'Balance',x:900,y:100,width:55,height:20},
+    {page:1,text:'02 Jul 25',x:100,y:150},{page:1,text:'CE CARRIED FORWARD',x:220,y:150},{page:1,text:'4,000.00',x:910,y:150},
+    {page:1,text:'03 Jul 25',x:100,y:200},{page:1,text:'BP',x:210,y:200},{page:1,text:'Supplier payment',x:250,y:200},{page:1,text:'10.00',x:620,y:220},{page:1,text:'3,990.00',x:910,y:220}
+  ];
+  const rows=P.parseOcrBank(lines,'HSBC Kinetic Current Account Statement','sample.pdf');
+  assert.equal(rows.length,1);assert.equal(rows[0].date,'2025-07-03');assert.equal(rows[0].amount,-10);assert.equal(rows[0].balance,3990);
+});
+test('HSBC infers a missing balance debit sign only when printed movements uniquely reconcile',()=>{
+  const lines=[
+    {page:1,text:'HSBC',x:20,y:10},
+    {page:1,text:'Date',x:100,y:100,width:40,height:20},{page:1,text:'Payment type and details',x:200,y:100,width:180,height:20},{page:1,text:'Paid out',x:600,y:100,width:60,height:20},{page:1,text:'Paid in',x:750,y:100,width:50,height:20},{page:1,text:'Balance',x:900,y:100,width:55,height:20},
+    {page:1,text:'01 Sep 25',x:100,y:150},{page:1,text:'BALANCE BROUGHT FORWARD',x:220,y:150},{page:1,text:'1,000.00',x:910,y:150},
+    {page:1,text:'02 Sep 25',x:100,y:200},{page:1,text:'BP',x:210,y:200},{page:1,text:'Large payment',x:250,y:200},{page:1,text:'2,000.00',x:620,y:220},{page:1,text:'1,000.00',x:910,y:220},
+    {page:1,text:'03 Sep 25',x:100,y:250},{page:1,text:'CR',x:210,y:250},{page:1,text:'Receipt',x:250,y:250},{page:1,text:'100.00',x:780,y:270},{page:1,text:'900.00 D',x:910,y:270}
+  ];
+  const rows=P.parseOcrBank(lines,'HSBC Kinetic Current Account Statement','sample.pdf');
+  assert.deepEqual(rows.map(row=>[row.amount,row.balance]),[[-2000,-1000],[100,-900]]);
+  assert.equal(rows[0].openingBalance,1000);assert.equal(P.inspectBankBalances(rows).mismatches.length,0);
+});
 test('HSBC keeps a transaction with an unreadable amount separate from the next movement',()=>{
   const lines=[
     {page:1,text:'HSBC',x:20,y:10},
@@ -1743,4 +1801,52 @@ test('Eagle Foods high-resolution retry combines complementary readings only fro
   assert.equal(P.invoiceRetryAccepted(combined,candidate,complete),true);
   assert.deepEqual([combined.originalInvoiceNumber,combined.date,combined.total,combined.vat],['146433','2026-10-04',1865.77,42.92]);
   Object.assign(page43,combined,{status:'ACCEPTED'});const deduplicated=P.deduplicateInvoiceRows(first);assert.equal(deduplicated.rows.length,1);
+});
+test('supplier invoice summary extraction follows moved text instead of fixed page positions',()=>{
+  const makeLines=(offsetX=0,offsetY=0)=>[
+    ['TAKEPAYMENTS',10,10],['Invoice Number',10,80],['PZ17941900',250,80],['Invoice Date',10,110],['29/10/2026',250,110],
+    ['VAT Code',10,300],['Total GBP Excl. VAT',400,460],['VAT',700,460],['Total GBP',900,460],['20.00',550,460],['4.00',790,460],['24.00',1010,460]
+  ].map(([text,x,y])=>({page:1,text,x:x+offsetX,y:y+offsetY,width:text.length*8,height:18}));
+  const parse=lines=>P.parseInvoiceBatch(lines.map(line=>line.text).join(' '),'renamed.pdf',lines)[0];
+  for(const [offsetX,offsetY] of [[0,0],[370,640]]){const row=parse(makeLines(offsetX,offsetY));assert.deepEqual([row.invoiceNumber,row.date,row.vat,row.total,row.status],['1900','2026-10-29',4,24,'ACCEPTED']);}
+});
+test('invoice-only zero-VAT suppliers accept confirmed zero and disclose generated internal references',()=>{
+  const generated=P.parseInvoice('ARABELLA JOHNSON INVOICE Invoice Date 23 September 2026 Total 600.00');
+  assert.equal(generated.profileId,'arabella-johnson');assert.equal(generated.invoiceNumberGenerated,true);assert.match(generated.invoiceNumber,/^AUTO-20260923-[A-Z0-9]{7}$/);assert.deepEqual([generated.date,generated.vat,generated.total,generated.status],['2026-09-23',0,600,'ACCEPTED']);
+  const noVatEvidence=P.parseInvoice('FRANCISCO ELECTRICAL INVOICE Invoice No 233 Invoice Date 5 October 2026 Amount, GBP 110.00');
+  assert.deepEqual([noVatEvidence.invoiceNumber,noVatEvidence.date,noVatEvidence.vat,noVatEvidence.total,noVatEvidence.status],['233','2026-10-05',0,110,'ACCEPTED']);
+  const order=P.parseInvoice('ALUMIERMD UK order confirmation Order Date 2 September 2026 Total 298.50');
+  assert.deepEqual([order.isInvoiceDocument,order.total,order.status],[false,298.5,'REJECTED']);
+});
+test('Dr Stuttee retries its amount fields and blanks totals when AMOUNT conflicts with PAYMENT DUE',()=>{
+  const invoice='DR STUTTEE HEALTH CLINIC INVOICE Invoice #168 Invoice date 12 Oct 2026 AMOUNT 11.27 PAYMENT DUE 11 Nov 2026 ';
+  const matching=P.parseInvoice(`${invoice}11.27`),conflicting=P.parseInvoice(`${invoice}1,811.27`),merged=P.mergeInvoiceRetryCandidate(matching,conflicting);
+  assert.equal(matching.retryOcr,true);assert.deepEqual([matching.total,matching.status],[11.27,'ACCEPTED']);
+  assert.equal(merged.total,'');assert.equal(merged.accepted,false);assert.match(merged.ocrConflictReason,/AMOUNT and PAYMENT DUE figures were read differently/);
+});
+test('invoice 5x retries publish page progress while OCR runs',()=>{
+  const app=fs.readFileSync(path.join(__dirname,'..','extractor','app.js'),'utf8');
+  assert.match(app,/requestId=`invoice-retry-\$\{fileIndex\}-\$\{jobIndex\}-\$\{Date\.now\(\)\}`/);
+  assert.match(app,/if\(progress\.requestId!==requestId\)return/);
+  assert.match(app,/retry page \$\{done\} \/ \$\{planned\}/);
+});
+test('under-development warning detection covers each workflow and only its own supplier category',()=>{
+  const companies=P.compatibleCompanies,invoice=companies.find(profile=>profile.category==='Invoices'&&profile.status==='Under development'),receipt=companies.find(profile=>profile.category==='Receipts'&&profile.status==='Under development');
+  assert.ok(invoice);assert.ok(receipt);
+  assert.deepEqual(P.underDevelopmentSuppliers('invoice',[{profileId:invoice.id,supplier:invoice.name}],[]),[invoice.name]);
+  assert.deepEqual(P.underDevelopmentSuppliers('receipt',[{profileId:receipt.id,supplier:receipt.name}],[]),[receipt.name]);
+  assert.deepEqual(P.underDevelopmentSuppliers('bank',[],['Monzo current account statement','HSBC bank statement']),['HSBC','Monzo']);
+  assert.deepEqual(P.underDevelopmentSuppliers('bank',[],['Barclays bank statement']),[],'review-status providers do not trigger the warning');
+  assert.deepEqual(P.underDevelopmentSuppliers('receipt',[],['Monzo statement']),[],'bank profiles do not leak into other workflows');
+  assert.deepEqual(P.underDevelopmentSuppliers('invoice',[{profileId:invoice.id}],[]),[invoice.name],'a supplier is listed once even if multiple rows match');
+});
+test('one under-development decision is shown after all selected files and blocks exports until answered',()=>{
+  const app=fs.readFileSync(path.join(__dirname,'..','extractor','app.js'),'utf8'),html=fs.readFileSync(path.join(__dirname,'..','extractor','index.html'),'utf8');
+  assert.equal((app.match(/confirmUnderDevelopment\(/g)||[]).length,2,'one declaration and one call site');
+  assert.match(app,/P\.underDevelopmentSuppliers\(mode,rows\.slice\(rowStart\)/);
+  assert.ok(app.indexOf('const proceed=await confirmUnderDevelopment(developmentSuppliers)')>app.indexOf('for(let fileIndex=0;fileIndex<totalFiles;fileIndex++)'),'the decision follows the complete file-processing loop');
+  assert.match(app,/Upload cancelled\. No results were kept/);
+  assert.match(app,/data-download="bank" \$\{isProcessingBank\?'disabled':''\}/);
+  assert.match(app,/data-download="invoice-all" \$\{isExtracting\|\|!rows\.length\?'disabled':''\}/);
+  assert.match(html,/Cancel upload/);assert.match(html,/Continue to review/);assert.match(html,/supplier-development-list/);
 });
