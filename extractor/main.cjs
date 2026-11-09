@@ -209,54 +209,30 @@ ipcMain.handle('ocr-pdf',async(_event,payload)=>{
   const invoiceRetryRegions=typeof payload==='object'&&Array.isArray(payload?.invoiceRetryRegions)?payload.invoiceRetryRegions.map(region=>({page:Number(region?.page),left:Number(region?.left),top:Number(region?.top),width:Number(region?.width),height:Number(region?.height)})).filter(region=>Number.isInteger(region.page)&&region.page>0&&[region.left,region.top,region.width,region.height].every(Number.isFinite)&&region.left>=0&&region.top>=0&&region.width>0&&region.height>0):[];
   if(typeof filePath!=='string'||path.extname(filePath).toLowerCase()!=='.pdf')throw new Error('OCR accepts PDF files only.');
   const resolved=path.resolve(filePath);if(!fsSync.existsSync(resolved))throw new Error('The selected PDF could not be found.');
-  // Windows PDF/OCR APIs do not reliably read PDFs directly from shared or
-  // mapped folders. Give every request an isolated local copy before calling
-  // those APIs, while retaining `resolved` for progress events and source links.
+  // OCR always runs with the renderer, LSTM core, and model shipped with this
+  // app. Keep an isolated local copy for mapped/network PDFs, while retaining
+  // the original path for progress events and PDF links.
   const tempDirectory=path.join(app.getPath('temp'),`extractor-ocr-${crypto.randomBytes(8).toString('hex')}`);
   const localCopy=path.join(tempDirectory,'source.pdf');
-  let encrypted=false;
-  const runCopyHelper=async(outputDirectory)=>await new Promise((resolve,reject)=>{
-    const copyHelper=path.join(__dirname,'copy-helper.ps1');
-    const copyChild=execFile('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',copyHelper,'-Path',localCopy,'-OutputDirectory',outputDirectory,'-Password',password,'-Scale',String(scale)],{windowsHide:true,maxBuffer:8*1024*1024,timeout:480000},(error,stdout,stderr)=>{
-      if(requestId&&activeOcrChildren.get(requestId)===copyChild)activeOcrChildren.delete(requestId);
-      if(requestId&&cancelledOcrRequests.has(requestId)){reject(ocrCancelledError());return;}
-      let result;try{result=JSON.parse(String(stdout).trim().split(/\r?\n/).filter(Boolean).at(-1)||'{}');}catch{}
-      if(error||!result?.ok){const detail=result?.error||stderr||error?.message||'Windows could not render the protected PDF.';reject(new Error(encrypted?`Could not open the protected PDF. Check that its password is correct. (${detail})`:detail));return;}
-      resolve(result);
-    });
-    if(requestId){activeOcrChildren.set(requestId,copyChild);if(cancelledOcrRequests.has(requestId))try{copyChild.kill();}catch{}}
-  });
   try{
     throwIfCancelled();
     await fs.mkdir(tempDirectory,{recursive:true});
     await fs.copyFile(resolved,localCopy);
     throwIfCancelled();
-    const header=fsSync.readFileSync(localCopy).toString('latin1');encrypted=/\/Encrypt\b/.test(header);
-    if(encrypted&&!password)throw new Error('This PDF is password-protected. Enter the password supplied with the bank statement and try again.');
-    let ocrPath=localCopy,ocrPassword=password;
-    if(encrypted){
-      const rendered=await runCopyHelper(tempDirectory),readableCopy=path.join(tempDirectory,'readable-copy.pdf');
-      throwIfCancelled();
-      await fs.writeFile(readableCopy,buildImagePdf(rendered.pages));
-      ocrPath=readableCopy;ocrPassword='';
-    }
-    const helper=path.join(__dirname,'ocr-helper.ps1');
-    const args=['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',ocrPath,'-Password',ocrPassword,'-Scale',String(scale)];if(pages.length)args.push('-PageList',pages.join(','));if(focusPages.length)args.push('-FocusPageList',focusPages.join(','));if(dairyFooterRows.length)args.push('-DairyFooterRows',JSON.stringify(dairyFooterRows));if(bankRetryRegions.length)args.push('-BankRetryRegions',JSON.stringify(bankRetryRegions));if(invoiceRetryRegions.length)args.push('-InvoiceRetryRegions',JSON.stringify(invoiceRetryRegions));
+    const helper=path.join(__dirname,'ocr-engine.cjs');
     return await new Promise((resolve,reject)=>{
-      const child=spawn('powershell.exe',args,{windowsHide:true,stdio:['ignore','pipe','pipe']});let buffer='',parsedResult=null,stderr='';
+      const child=spawn(process.execPath,[helper],{cwd:tempDirectory,windowsHide:true,stdio:['pipe','pipe','pipe'],env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});let buffer='',parsedResult=null,stderr='';
       if(requestId){activeOcrChildren.set(requestId,child);if(cancelledOcrRequests.has(requestId))try{child.kill();}catch{}}
       const consume=line=>{const value=String(line||'').trim();if(!value)return;if(value.startsWith('PAGE:')){try{mainWindow?.webContents.send('ocr-progress',{requestId:payload?.requestId,filePath:resolved,...JSON.parse(value.slice(5))});}catch{}return;}try{const parsed=JSON.parse(value);if(typeof parsed?.ok==='boolean')parsedResult=parsed;}catch{}};
       child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;let index;while((index=buffer.indexOf('\n'))>=0){consume(buffer.slice(0,index));buffer=buffer.slice(index+1);}});
       child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-12000);});
-      let timedOut=false,settled=false;const timeoutMs=pages.length&&scale>=4?120000:180000;let timer;
+      let timedOut=false,settled=false;const timeoutMs=pages.length?Math.max(180000,pages.length*90000):1800000;let timer;
       const finish=(callback,value)=>{if(settled)return;settled=true;if(timer)clearTimeout(timer);callback(value);};
-      timer=setTimeout(()=>{timedOut=true;try{child.kill();}catch{}finish(reject,new Error(`Windows OCR timed out after ${Math.round(timeoutMs/60000)} minutes. The affected invoice rows remain available for review.`));},timeoutMs);
+      timer=setTimeout(()=>{timedOut=true;try{child.kill();}catch{}finish(reject,new Error(`The bundled OCR engine timed out after ${Math.round(timeoutMs/60000)} minutes. The affected rows remain available for review.`));},timeoutMs);
       child.on('error',error=>finish(reject,error));
-      child.on('close',code=>{if(requestId&&activeOcrChildren.get(requestId)===child)activeOcrChildren.delete(requestId);consume(buffer);if(requestId&&cancelledOcrRequests.has(requestId)){finish(reject,ocrCancelledError());return;}if(code!==0||!parsedResult?.ok){finish(reject,new Error(parsedResult?.error||(timedOut?'Windows OCR timed out; the affected invoice rows remain available for review.':stderr||`Windows OCR failed${code===null?' (process stopped)':` (exit code ${code})`}.`)));return;}finish(resolve,parsedResult);});
+      child.on('close',code=>{if(requestId&&activeOcrChildren.get(requestId)===child)activeOcrChildren.delete(requestId);consume(buffer);if(requestId&&cancelledOcrRequests.has(requestId)){finish(reject,ocrCancelledError());return;}if(code!==0||!parsedResult?.ok){finish(reject,new Error(parsedResult?.error||(timedOut?'The bundled OCR engine timed out; the affected rows remain available for review.':stderr||`The bundled OCR engine failed${code===null?' (process stopped)':` (exit code ${code})`}.`)));return;}finish(resolve,parsedResult);});
+      child.stdin.end(JSON.stringify({filePath:localCopy,password,scale,pages,focusPages,dairyFooterRows,bankRetryRegions,invoiceRetryRegions}));
     });
-  }catch(error){
-    if(!password&&/(?:prompt\(\) is not supported|0x80048040)/i.test(String(error?.message||'')))throw new Error('This PDF is password-protected. Enter the password supplied with the bank statement and try again.');
-    throw error;
   }finally{if(requestId){activeOcrChildren.delete(requestId);cancelledOcrRequests.delete(requestId);}await fs.rm(tempDirectory,{recursive:true,force:true}).catch(()=>{});}
 });
 function buildImagePdf(pages){

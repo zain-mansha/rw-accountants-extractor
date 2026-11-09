@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "platform": "win32-x64",
+  "ocrEngine": {
+    "package": "tesseract.js",
+    "version": "7.0.0",
+    "corePackage": "tesseract.js-core",
+    "coreVersion": "7.0.0",
+    "coreVariant": "tesseract-core-lstm",
+    "language": "eng",
+    "model": "tessdata_best eng.traineddata",
+    "modelSha256": "8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba"
+  },
+  "pdfRenderer": {
+    "package": "pdfjs-dist",
+    "version": "6.5.438"
+  },
+  "canvas": {
+    "package": "@napi-rs/canvas",
+    "version": "1.1.0",
+    "platformPackage": "@napi-rs/canvas-win32-x64-msvc"
+  },
+  "offlineOnly": true,
+  "windowsOcrFallback": false
+}

@@ -464,12 +464,34 @@
       const dates=items.filter(line=>matchesHeader(line,'date'));
       for(const date of dates){
         const nearby=name=>items.filter(line=>matchesHeader(line,name)&&Math.abs(line.y-date.y)<=Math.max(22,(date.height||line.height||16)*1.5)).sort((a,b)=>Math.abs(a.y-date.y)-Math.abs(b.y-date.y))[0]||null;
-        const detail=nearby('payment type and details'),out=nearby('paid out'),income=nearby('paid in'),balance=nearby('balance');
+        const detail=nearby('payment type and details');let out=nearby('paid out'),income=nearby('paid in'),balance=nearby('balance');
+        // On scans, OCR can preserve the HSBC column positions while losing
+        // most of the wording in the three amount headings (for example,
+        // "Paidow", "edn", "Bec"). Recover those columns from the header
+        // fragments' left-to-right order, anchored to the recognized date and
+        // details headings. This uses the page's own layout, not fixed points.
+        if(detail&&(!out||!income||!balance)){
+          const headerTolerance=Math.max(20,Math.min(34,median([date.height,detail.height])*1.25||20));
+          const fragments=items.filter(line=>line.x>detail.x+detail.width*.65&&Math.abs(line.y-date.y)<=headerTolerance&&/[a-z]/i.test(line.text)&&!/^(?:date|payment\s+type\s+and\s+details)$/i.test(line.text))
+            .sort((a,b)=>(a.x+a.width/2)-(b.x+b.width/2));
+          const distinct=[];
+          for(const fragment of fragments){const center=fragment.x+fragment.width/2;if(!distinct.some(item=>Math.abs(item.center-center)<Math.max(12,Math.min(item.line.height,fragment.height)*.6)))distinct.push({line:fragment,center});}
+          if(distinct.length>=3){
+            const byLabel={
+              out:distinct.find(item=>/paid\s*out|paidow/i.test(label(item.line))),
+              income:distinct.find(item=>/paid\s*in|edn/i.test(label(item.line))),
+              balance:distinct.find(item=>/balanc|\bbec\b/i.test(label(item.line))),
+            };
+            out=out||byLabel.out?.line||distinct[0].line;
+            balance=balance||byLabel.balance?.line||distinct.at(-1).line;
+            income=income||byLabel.income?.line||distinct.find(item=>item.line!==out&&item.line!==balance)?.line;
+          }
+        }
         if(!detail||!out||!income||!balance)continue;
-        const anchors=[date,detail,out,income,balance].map(line=>({line,center:line.x+line.width/2})).sort((a,b)=>a.center-b.center);
+        const anchors=[{line:date,name:'date'},{line:detail,name:'payment type and details'},{line:out,name:'paid out'},{line:income,name:'paid in'},{line:balance,name:'balance'}].map(anchor=>({...anchor,center:anchor.line.x+anchor.line.width/2})).sort((a,b)=>a.center-b.center);
         if(anchors.some((anchor,index)=>index&&anchor.center<=anchors[index-1].center))continue;
         const anchorHeight=median([date.height,detail.height,out.height,income.height,balance.height]);
-        headers.push({page,items,date,detail,out,income,balance,headerY:median([date.y,detail.y,out.y,income.y,balance.y]),headerHeight:anchorHeight,centers:Object.fromEntries(anchors.map(anchor=>[canonicalHeader(anchor.line),anchor.center]))});
+        headers.push({page,items,date,detail,out,income,balance,headerY:median([date.y,detail.y,out.y,income.y,balance.y]),headerHeight:anchorHeight,centers:Object.fromEntries(anchors.map(anchor=>[anchor.name,anchor.center]))});
       }
     }
     // A recognizable HSBC statement with its labelled transaction table is
