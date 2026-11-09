@@ -446,7 +446,7 @@ try {
     $bitmap=Await($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap,Windows.Graphics,ContentType=WindowsRuntime])
     $result=Await($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult,Windows.Media.Ocr,ContentType=WindowsRuntime])
     if($result.Text){$parts.Add($result.Text)}
-    foreach($line in $result.Lines){$words=@($line.Words);if($words.Count){$rect=$words[0].BoundingRect;$geometryScale=2.0/$Scale;$ocrY=if($bankRegion){$regionTop+[double]$rect.Y*$geometryScale}else{[double]$rect.Y*$geometryScale};$ocrLine=[pscustomobject]@{page=$index+1;text=$line.Text;x=[double]$rect.X*$geometryScale;y=$ocrY;width=[double]$rect.Width*$geometryScale;height=[double]$rect.Height*$geometryScale;confidence=(Get-OcrLineConfidence $line)};$ocrLines.Add($ocrLine);$pageLines.Add($ocrLine)}}
+    foreach($line in $result.Lines){$words=@($line.Words);if($words.Count){$rect=$words[0].BoundingRect;$geometryScale=2.0/$Scale;$ocrY=if($bankRegion){$regionTop+[double]$rect.Y*$geometryScale-($regionTop/5.0)}else{[double]$rect.Y*$geometryScale};$ocrLine=[pscustomobject]@{page=$index+1;text=$line.Text;x=[double]$rect.X*$geometryScale;y=$ocrY;width=[double]$rect.Width*$geometryScale;height=[double]$rect.Height*$geometryScale;confidence=(Get-OcrLineConfidence $line)};$ocrLines.Add($ocrLine);$pageLines.Add($ocrLine)}}
     $hasVisualContent=$pageLines.Count -gt 0
     if(-not $hasVisualContent){try{$hasVisualContent=(Get-SoftwareBitmapInkRatio $bitmap) -ge 0.012}catch{$hasVisualContent=$false}}
     if($hasVisualContent){$visualPages.Add($index+1)}

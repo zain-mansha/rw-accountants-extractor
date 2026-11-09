@@ -259,7 +259,7 @@
       const unreadable=entries.filter(entry=>entry.amountCents===null||entry.row?.balanceMovementUnreadable);if(!unreadable.length)return;
       const first=unreadable[0];let mismatch=mismatches.find(item=>item.unreadableMovement&&item.currentIndex===first.index);
       if(!mismatch){mismatch={startIndex:first.index,endIndex:first.index,rowIndexes:[first.index],previousIndex:null,currentIndex:first.index,previousDate:'',date:first.date,expectedCents:0,actualCents:0,differenceCents:0,page:first.row?.page||'',unreadableMovement:true};mismatches.push(mismatch);}
-      Object.assign(mismatch,{startIndex:entries[0]?.index??first.index,endIndex:balanceItem.index,rowIndexes:[...new Set(entries.map(entry=>entry.index))],previousIndex:previousItem?.index??null,previousDate:previousItem?.date||'',date:balanceItem.date,page:balanceItem.row?.page||first.row?.page||''});
+      Object.assign(mismatch,{startIndex:entries[0]?.index??first.index,endIndex:balanceItem.index,currentIndex:balanceItem.index,rowIndexes:[...new Set(entries.map(entry=>entry.index))],previousIndex:previousItem?.index??null,previousDate:previousItem?.date||'',date:balanceItem.date,page:balanceItem.row?.page||first.row?.page||''});
       for(const extra of unreadable.slice(1)){const duplicate=mismatches.findIndex(item=>item!==mismatch&&item.unreadableMovement&&item.currentIndex===extra.index);if(duplicate>=0)mismatches.splice(duplicate,1);}
     };
     for(const item of items){
