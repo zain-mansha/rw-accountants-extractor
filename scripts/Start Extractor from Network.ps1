@@ -379,7 +379,12 @@ function New-SharedExtractorBuild([string]$CommitSha) {
       Invoke-WebRequest -UseBasicParsing -Method Get -Uri $archiveUri -OutFile $archivePath -TimeoutSec 120
     }
     if (Test-Path -LiteralPath $extractDirectory) { Remove-Item -LiteralPath $extractDirectory -Recurse -Force }
-    Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDirectory -Force
+    # Expand-Archive in Windows PowerShell 5.1 can mask the actual ZIP error
+    # while cleaning up a partially extracted GitHub archive (notably around
+    # root dotfiles). Extract through the .NET ZIP API so update failures keep
+    # their original error and the archive is unpacked consistently.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($archivePath, $extractDirectory)
     $repoRoot = Get-ChildItem -LiteralPath $extractDirectory -Directory | Select-Object -First 1
     if (-not $repoRoot) { throw 'The downloaded GitHub archive did not contain a source folder.' }
     $extractorSource = Join-Path $repoRoot.FullName 'extractor'
