@@ -517,31 +517,37 @@ function New-SharedExtractorBuild([string]$CommitSha) {
 $progressStatus = 'Checking the shared network application against GitHub...'
 Send-ExtractorProgress 5 $progressStatus
 $applicationDirectory = Get-CurrentExtractorApp
-if (-not $applicationDirectory) { throw 'The shared application folder is incomplete.' }
+if (-not $applicationDirectory) {
+  Send-ExtractorProgress 8 'Application files are incomplete. Checking GitHub for a complete repair...'
+}
 $commitSha = ''
 try {
   $commitSha = Get-LatestExtractorCommit
 } catch {
+  if (-not $applicationDirectory) {
+    throw "The application files in '$source' are incomplete, and GitHub could not be reached to repair them. Check internet access and run the launcher again. Details: $($_.Exception.Message)"
+  }
   throw "Extractor could not verify the latest version on GitHub, so it will not start an older copy. Check this PC's internet access to github.com and try again. Details: $($_.Exception.Message)"
 }
 if ($commitSha -notmatch '^[a-f0-9]{40}$') {
+  if (-not $applicationDirectory) {
+    throw 'The application files are incomplete, and Extractor could not verify a valid latest GitHub commit to repair them. Check the network connection and try again.'
+  }
   throw 'Extractor could not verify a valid latest commit on GitHub, so it will not start an older copy. Check the network connection and try again.'
 }
 if ($commitSha) {
   Send-ExtractorProgress 12 'Checking GitHub for the latest application version...'
-  # A partially copied network folder can still contain an app marked with the
-  # current commit. In that case the normal update check would skip repair and
-  # fail later when the local Electron runtime needs its loader files. Treat a
-  # missing launcher/runtime file as an update so the GitHub archive restores
-  # the complete package even when the app commit itself is unchanged.
-  if ($commitSha -and ((Get-InstalledExtractorCommit) -ne $commitSha -or -not (Test-SharedExtractorRuntimeReady))) {
+  # A partial package can retain the current commit marker while application or
+  # runtime files are missing. Treat any incomplete component as a repair so
+  # the GitHub archive restores a complete package before launch.
+  if ($commitSha -and ((Get-InstalledExtractorCommit) -ne $commitSha -or -not (Test-SharedExtractorRuntimeReady) -or -not (Get-CurrentExtractorApp))) {
     $updateLockPath = Join-Path $source '.extractor-update.lock'
     $updateLock = $null
     $updateDeadline = [DateTime]::UtcNow.AddMinutes(60)
     while (-not $updateLock) {
       try { $updateLock = [IO.File]::Open($updateLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
       catch [IO.IOException] {
-        if ((Get-InstalledExtractorCommit) -eq $commitSha -and (Test-SharedExtractorRuntimeReady)) { break }
+        if ((Get-InstalledExtractorCommit) -eq $commitSha -and (Test-SharedExtractorRuntimeReady) -and (Get-CurrentExtractorApp)) { break }
         if ([DateTime]::UtcNow -ge $updateDeadline) { throw 'Another Extractor update did not finish within 60 minutes. Try launching again.' }
         Send-ExtractorProgress 12 'Another update is already running. Waiting for it to finish...'
         Start-Sleep -Milliseconds 500
@@ -551,7 +557,7 @@ if ($commitSha) {
       if ($updateLock) {
         $commitSha = Get-LatestExtractorCommit
       }
-      if ((Get-InstalledExtractorCommit) -ne $commitSha -or -not (Test-SharedExtractorRuntimeReady)) {
+      if ((Get-InstalledExtractorCommit) -ne $commitSha -or -not (Test-SharedExtractorRuntimeReady) -or -not (Get-CurrentExtractorApp)) {
         Send-ExtractorProgress 13 'Starting the latest application update...'
         $applicationDirectory = New-SharedExtractorBuild $commitSha
       }
