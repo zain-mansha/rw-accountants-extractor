@@ -3477,12 +3477,38 @@
     }
     const uniqueRows=[];for(const row of fallbackRows){if(!uniqueRows.some(existing=>existing.length===row.length&&existing.every((cell,index)=>Math.abs(cell.x-row[index].x)<18&&cell.value===row[index].value)))uniqueRows.push(row);}
     if(uniqueRows.length===1)return uniqueRows[0].at(-1)?.value??null;
+    // GSF's tax breakdown is often split by OCR into separate CODE and GOODS
+    // headings, with the net and VAT values printed in the row below. When
+    // VAT% is missing from OCR, those two neighbouring headers still anchor
+    // the table; use its rightmost printed money cell as VAT, outside the
+    // separate invoice-total box.
+    const codeHeaders=items.filter(line=>(Number(line.y)||0)>=pageHeight*.7&&/\bCODE\b/i.test(String(line.text||''))),goodsColumnHeaders=items.filter(line=>(Number(line.y)||0)>=pageHeight*.7&&gsfNormalizedLabel(line.text).includes('GOODS'));
+    for(const code of codeHeaders)for(const goods of goodsColumnHeaders){const codeY=Number(code.y)||0,goodsY=Number(goods.y)||0,headerHeight=Math.max(Number(code.height)||0,Number(goods.height)||0,16),headerTolerance=Math.max(headerHeight*1.5,pageHeight*.009,18);if(Math.abs(codeY-goodsY)>headerTolerance)continue;const headerY=Math.min(codeY,goodsY),goodsX=Number(goods.x)||0,tableRight=pageWidth*.78,maxY=headerY+Math.max(pageHeight*.035,headerHeight*4),rowTolerance=Math.max(headerHeight*1.5,pageHeight*.009,18),cells=[];
+      for(const line of items){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<=headerY+headerHeight*.25||y>maxY||x<goodsX-headerHeight||x>tableRight)continue;for(const money of anchoredInvoiceMoneyValues(line.text))cells.push({value:money.value,x,y});if(/^\s*0[.,]0{2}\s*$/.test(String(line.text||'')))cells.push({value:0,x,y});}
+      const rows=[];for(const cell of cells.sort((a,b)=>a.y-b.y||a.x-b.x)){let row=rows.find(item=>Math.abs(item.y-cell.y)<=rowTolerance);if(!row){row={y:cell.y,cells:[]};rows.push(row);}if(!row.cells.some(item=>Math.abs(item.x-cell.x)<=rowTolerance*.5))row.cells.push(cell);}
+      const qualified=rows.filter(row=>row.cells.length>=2).sort((a,b)=>a.y-b.y);if(qualified.length===1)return qualified[0].cells.sort((a,b)=>b.x-a.x)[0]?.value??null;
+    }
     return null;
   }
   function gsfSummary(lines){
     const pages=new Map();for(const line of lines||[]){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}
     const results=[];
     for(const [page,items] of pages){const pageHeight=Math.max(...items.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),pageWidth=Math.max(...items.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),labels=items.map(line=>({line,kind:gsfSummaryLabelKind(line)})).filter(item=>item.kind&&((Number(item.line.y)||0)>=pageHeight*.62));
+      // A focused footer retry is a fresh OCR pass over the detected invoice
+      // summary area. Prefer its aligned printed rows over noisy first-pass
+      // labels, which can mistake a damaged "TOTAL" heading for "VAT".
+      const focusedFooterLines=items.filter(line=>line.gsfRetryFocused===true);
+      if(focusedFooterLines.length){
+        const focusedPageHeight=Math.max(...items.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),focusedPageWidth=Math.max(...items.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),focusedRows=gsfFooterAmountRows(focusedFooterLines,focusedPageHeight,focusedPageWidth),focusedLabels=focusedFooterLines.filter(line=>['goods','vat','total'].includes(gsfSummaryLabelKind(line))&&(Number(line.y)||0)>=focusedPageHeight*.62),rightAligned=focusedRows.length>=2&&Math.max(...focusedRows.map(row=>row.x))-Math.min(...focusedRows.map(row=>row.x))<=focusedPageWidth*.045&&focusedRows.slice(1).every((row,index)=>(row.y-focusedRows[index].y)<=focusedPageHeight*.04),focusedVat=gsfFooterVatBreakdown(focusedFooterLines,focusedPageHeight,focusedPageWidth);
+        const focusedFocCount=focusedFooterLines.filter(line=>/^\s*F\s*\.?\s*O\s*\.?\s*C\s*\.?\s*$/i.test(String(line.text||''))).length;
+        if(rightAligned&&focusedRows.length===3&&focusedRows.every(row=>row.value===0)&&focusedFocCount>=3){results.push({page,total:0,vat:0,totalEvidence:'printed F.O.C. total row in GSF footer summary',vatEvidence:'printed F.O.C. VAT row in GSF footer summary'});continue;}
+        if(rightAligned&&focusedLabels.length&&focusedRows.length>=3){const vatRow=focusedRows.at(-2),totalRow=focusedRows.at(-1);results.push({page,total:totalRow.value,vat:vatRow.value,totalEvidence:'last printed row in focused GSF footer summary',vatEvidence:'preceding printed row in focused GSF footer summary'});continue;}
+        if(rightAligned&&focusedLabels.length&&focusedRows.length===2&&focusedVat!==null&&Math.abs(focusedRows[0].value-focusedVat)<0.005){results.push({page,total:focusedRows.at(-1).value,vat:focusedVat,totalEvidence:'last printed row in focused GSF footer summary',vatEvidence:'matching printed GSF VAT breakdown cell'});continue;}
+        // Fall through to the existing label/table parser. It may still have
+        // a fully confirmed tax breakdown even when the focused crop missed
+        // one of the summary-box rows. Partial legacy matches are discarded
+        // below so a damaged label cannot overwrite a first-pass value.
+      }
       const totalLabels=labels.filter(item=>item.kind==='total').map(item=>({...item,found:gsfLineMoney(items,item.line)})).filter(item=>item.found).sort((a,b)=>(Number(b.line.y)||0)-(Number(a.line.y)||0)||(Number(b.line.x)||0)-(Number(a.line.x)||0));
       let total=totalLabels[0]||null;
       const vatLabels=labels.filter(item=>item.kind==='vat'&&(!total||Math.abs((Number(item.line.x)||0)-(Number(total.line.x)||0))<=Math.max(pageWidth*.13,(Number(total.line.height)||18)*6))&&(!total||(Number(item.line.y)||0)<=(Number(total.line.y)||0))&&(!total||(Number(total.line.y)||0)-(Number(item.line.y)||0)<=Math.max(pageHeight*.05,(Number(total.line.height)||18)*5))).map(item=>({...item,found:gsfLineMoney(items,item.line)})).filter(item=>item.found).sort((a,b)=>total?Math.abs((Number(a.line.y)||0)-(Number(total.line.y)||0))-Math.abs((Number(b.line.y)||0)-(Number(total.line.y)||0)):(Number(b.line.y)||0)-(Number(a.line.y)||0));
@@ -3501,7 +3527,9 @@
       if(!total&&(summaryStackIsAnchored||rightAlignedStack)&&stackedTotal!==null)total={found:{value:stackedTotal,raw:'printed final value in GSF footer amount rows'},line:null,kind:'total'};
       if(!vat&&(summaryStackIsAnchored||rightAlignedStack)&&stackedVat!==null)vat={found:{value:stackedVat,raw:'printed middle value in GSF footer amount rows'},line:null,kind:'vat'};
       if(!vat&&breakdownVat!==null)vat={found:{value:breakdownVat,raw:'printed GSF VAT breakdown cell'},line:null,kind:'vat'};
-      results.push({page,total:total?.found?.value??null,vat:vat?.found?.value??null,totalEvidence:total?.found?.raw||'',vatEvidence:vat?.found?.raw||''});
+      const legacyTotal=total?.found?.value??null,legacyVat=vat?.found?.value??null;
+      if(focusedFooterLines.length&&(legacyTotal===null||legacyVat===null))results.push({page,total:null,vat:null,totalEvidence:'',vatEvidence:''});
+      else results.push({page,total:legacyTotal,vat:legacyVat,totalEvidence:total?.found?.raw||'',vatEvidence:vat?.found?.raw||''});
     }
     return results.sort((a,b)=>(Number(b.page)||0)-(Number(a.page)||0)).find(item=>item.total!==null||item.vat!==null)||null;
   }

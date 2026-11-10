@@ -87,18 +87,36 @@ test('GSF profile reads printed invoice footer, tolerates shifted scans, and ski
   assert.equal(firstPass.status,'REJECTED','a first pass without the printed summary remains rejected and queues the retry');
   assert.deepEqual([retryCandidate.vat,retryCandidate.total,retryCandidate.status],[3.29,19.75,'ACCEPTED'],'the focused footer retry reads printed VAT and Total values');
   assert.equal(P.invoiceRetryAccepted(merged,retryCandidate,retryComplete),true,'a complete, invoice-number-matched GSF retry is accepted');
+  const focusedIdentity=make(13,{number:'7431130364',date:'10/07/26',vat:'',total:''}).filter(item=>item.y<500),focusedFooter=[line(13,'CODE.',911,2377),line(13,'GOODS',1086,2377),line(13,'20.00',723,2425),line(13,'68.61',1105,2429),line(13,'13.72',1310,2429),line(13,'GOODS',1819,2408),line(13,'13.72',2130,2478),line(13,'82.33',2128,2553)].map(item=>({...item,gsfRetryFocused:true})),[focusedStack]=parse([[...focusedIdentity,...focusedFooter]]);
+  assert.deepEqual([focusedStack.vat,focusedStack.total,focusedStack.status],[13.72,82.33,'ACCEPTED'],'a retry uses the printed VAT breakdown and aligned footer total even when first-pass labels were garbled');
+  const focusedThreeRow=[...make(14,{number:'7431130365',date:'10/07/26',vat:'',total:''}).filter(item=>item.y<500),...[
+    line(14,'GOODS',1810,2418),line(14,'133.20',1974,2419),line(14,'26.64',1993,2481),line(14,'Vet.',1655,2563),line(14,'159.84',1975,2556)
+  ].map(item=>({...item,gsfRetryFocused:true}))],[threeRowStack]=parse([focusedThreeRow]);
+  assert.deepEqual([threeRowStack.vat,threeRowStack.total,threeRowStack.status],[26.64,159.84,'ACCEPTED'],'three explicit aligned summary values are read by row order without arithmetic');
+  const focusedFoc=[...make(15,{number:'7431122766',date:'11/05/26',vat:'',total:''}).filter(item=>item.y<500),...[
+    line(15,'OdobF',1810,2410),line(15,'F.O.C',1974,2420),line(15,'F.O.C',1974,2482),line(15,'F.O.C',1974,2557)
+  ].map(item=>({...item,gsfRetryFocused:true}))],[focRow]=parse([focusedFoc]);
+  assert.deepEqual([focRow.vat,focRow.total,focRow.status],[0,0,'ACCEPTED'],'three printed F.O.C. summary rows are represented as explicit zero values');
   const mixed=[...make(1),line(2,'GSF Car Parts Limited Stateqent of Account From Customer Account No 7439774 Last Payment received 18 Jun 26 INVOICE 7431123001',70,80),line(3,'GSF Car Parts Limited CUSTOMER GOODS RETURNS NOTE INVOICE 7431123002',70,80),line(4,'GSF Car Parts Limited WEEKLY OFFERS Invoice specials',70,80)],rows=parse([mixed]);
   assert.equal(rows.length,1,'statement, returns-note and promotional pages do not create invoice records');
   const unreadable=make(5,{number:'',date:'03/06/26',vat:'',total:''}).filter(item=>item.text!=='Invoice No'&&item.text!=='VAT'&&item.text!=='TOTAL'),[rejected]=parse([unreadable]);
   assert.deepEqual([rejected.status,rejected.retryOcr,rejected.total,rejected.vat],['REJECTED',true,'',''],'missing printed details stay blank and enter OCR retry instead of being guessed');
-  const garbledDate=make(12,{number:'7431125650',date:'0±5/07126',vat:'4.25',total:'25.48'}),[dateRejected]=parse([garbledDate]);
-  assert.deepEqual([dateRejected.invoiceNumber,dateRejected.date,dateRejected.vat,dateRejected.total,dateRejected.status,dateRejected.retryOcr],['5650','',4.25,25.48,'REJECTED',true],'a malformed OCR date must not be guessed; readable printed amounts are kept and the row retries');
+  const garbledDate=make(12,{number:'7431125650',date:'7439774 0±5/07126',vat:'4.25',total:'25.48'}),[dateRejected]=parse([garbledDate]);
+  assert.deepEqual([dateRejected.invoiceNumber,dateRejected.date,dateRejected.vat,dateRejected.total,dateRejected.status,dateRejected.retryOcr],['5650','',4.25,25.48,'REJECTED',true],'a GSF tax-point string damaged by OCR must not be guessed from adjacent account digits; readable printed amounts are kept and the row retries');
   const retryLines=make(6,{date:'not readable',vat:'4.71',total:'28.27'}).filter(item=>item.text!=='not readable'),[needsDate]=parse([retryLines]),identityRegions=P.invoiceRetryRegionsForRow(needsDate,retryLines);
   assert.equal(identityRegions.length,1);assert.equal(identityRegions[0].regionType,'invoice-date');assert.ok(identityRegions[0].top<1000&&identityRegions[0].height>0,'date retry is anchored to the invoice metadata text');
   const amountLines=make(8,{vat:'',total:''}).filter(item=>item.text!==''),[needsAmounts]=parse([amountLines]),footerRegions=P.invoiceRetryRegionsForRow(needsAmounts,amountLines);
   assert.equal(footerRegions.length,1);assert.equal(footerRegions[0].regionType,'footer-summary');assert.ok(footerRegions[0].top>1800,'amount retry is anchored to the invoice footer and remittance text');
   const profile=P.compatibleCompanies.find(company=>company.id==='gsf-car-parts');
   assert.deepEqual([profile.name,profile.category,profile.status,profile.formatTag],['GSF Car Parts Limited','Invoices','Review',undefined]);
+});
+test('PowerShell retry JSON is parsed as a flat list of page regions',()=>{
+  const helper=fs.readFileSync(path.join(__dirname,'..','extractor','ocr-helper.ps1'),'utf8');
+  assert.match(helper,/ConvertFrom-Json\s+-InputObject\s+\$InvoiceRetryRegions/);
+  assert.doesNotMatch(helper,/\$InvoiceRetryRegions\s*\|\s*ConvertFrom-Json/);
+  const script="$regions=ConvertFrom-Json -InputObject '[{\"page\":2},{\"page\":3},{\"page\":10}]'; if($regions.Count -ne 3 -or @($regions | Where-Object { $_.page -isnot [int] }).Count -ne 0){throw 'retry regions were nested or their page values were not integers'}; $regions | ForEach-Object { [int]$_.page }";
+  const output=execFileSync('powershell.exe',['-NoProfile','-Command',script],{encoding:'utf8',windowsHide:true}).trim().split(/\r?\n/);
+  assert.deepEqual(output,['2','3','10']);
 });
 test('Parkers profile reads invoice identity and printed footer cells without using VAT rate or item prices',()=>{
   const line=(page,text,x,y,width=String(text).length*9,height=20)=>({page,text,x,y,width,height,confidence:1});

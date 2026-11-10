@@ -414,8 +414,8 @@ try {
   $Scale=[math]::Min(5.0,[math]::Max(1.5,$Scale))
   if($PageList){$pageIndexes=@($PageList.Split(',')|ForEach-Object{[int]$n=0;if([int]::TryParse($_,[ref]$n)-and $n -ge 1 -and $n -le $pdf.PageCount){$n-1}}|Sort-Object -Unique)}else{$pageIndexes=@(0..($pdf.PageCount-1))}
   $focusPageNumbers=@($FocusPageList.Split([char]44)|ForEach-Object{[int]$n=0;if([int]::TryParse($_,[ref]$n)-and $n -ge 1 -and $n -le $pdf.PageCount){$n}}|Sort-Object -Unique)
-  $dairyFooterRows=@();try{$dairyFooterRows=@($DairyFooterRows|ConvertFrom-Json)}catch{$dairyFooterRows=@()}
-  $parsedInvoiceRetryRegions=@();try{$parsedInvoiceRetryRegions=@($InvoiceRetryRegions|ConvertFrom-Json)}catch{$parsedInvoiceRetryRegions=@()}
+  $dairyFooterRows=$null;try{$dairyFooterRows=ConvertFrom-Json -InputObject $DairyFooterRows;if($null -eq $dairyFooterRows){$dairyFooterRows=@()}}catch{$dairyFooterRows=@()}
+  $parsedInvoiceRetryRegions=$null;try{$parsedInvoiceRetryRegions=ConvertFrom-Json -InputObject $InvoiceRetryRegions;if($null -eq $parsedInvoiceRetryRegions){$parsedInvoiceRetryRegions=@()}}catch{$parsedInvoiceRetryRegions=@()}
   # PowerShell variable names are case-insensitive. Keep the parsed regions in
   # a separate variable so this does not overwrite the BankRetryRegions input.
   $parsedBankRetryRegions=$null;try{$parsedBankRetryRegions=ConvertFrom-Json -InputObject $BankRetryRegions}catch{$parsedBankRetryRegions=$null}
