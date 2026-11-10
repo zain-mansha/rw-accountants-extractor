@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Path,[string]$Password='',[double]$Scale=2.5,[string]$PageList='',[string]$FocusPageList='',[string]$DairyFooterRows='[]',[string]$BankRetryRegions='[]',[string]$InvoiceRetryRegions='[]')
+﻿param([Parameter(Mandatory=$true)][string]$Path,[string]$Password='',[double]$Scale=2.5,[string]$PageList='',[string]$FocusPageList='',[string]$DairyFooterRows='[]',[string]$BankRetryRegions='[]',[string]$InvoiceRetryRegions='[]')
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -346,7 +346,7 @@ function Read-EnhancedReceiptRegion($bitmap,$scale,$left,$top,$width,$height,$en
   }catch{return @{Text='';Lines=@()}}finally{if($enhanced){$enhanced.Dispose()};$stream.Dispose()}
 }
 function Read-FocusedPdfRegion($page,$region,$pageNumber,$engine){
-  $stream=New-Object Windows.Storage.Streams.InMemoryRandomAccessStream;$software=$null
+  $stream=New-Object Windows.Storage.Streams.InMemoryRandomAccessStream;$software=$null;$drawing=$null;$copy=$null
   try{
     # OCR line coordinates use the same 2.5x page-point scale as bank retry
     # regions. Convert them back to PDF points for SourceRect, then map the
@@ -356,8 +356,23 @@ function Read-FocusedPdfRegion($page,$region,$pageNumber,$engine){
     $cropScale=[math]::Min(10.0,3000.0/[math]::Max($width,$height));$sourceRect=[Windows.Foundation.Rect]::new($sourceLeft,$sourceTop,$sourceWidth,$sourceHeight);$options=New-Object Windows.Data.Pdf.PdfPageRenderOptions;$options.SourceRect=$sourceRect;$options.DestinationWidth=[uint32]([math]::Max(1,[math]::Round($width*$cropScale)));$options.DestinationHeight=[uint32]([math]::Max(1,[math]::Round($height*$cropScale)))
     Await($page.RenderToStreamAsync($stream,$options))|Out-Null;$stream.Seek(0)|Out-Null;$decoder=Await ([Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]);$software=Await($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap,Windows.Graphics,ContentType=WindowsRuntime]);$result=Await($engine.RecognizeAsync($software)) ([Windows.Media.Ocr.OcrResult,Windows,ContentType=WindowsRuntime]);$lines=New-Object System.Collections.Generic.List[object]
     foreach($line in $result.Lines){$words=@($line.Words);if(!$words.Count){continue};$lefts=@($words|ForEach-Object{[double]$_.BoundingRect.X});$tops=@($words|ForEach-Object{[double]$_.BoundingRect.Y});$rights=@($words|ForEach-Object{[double]$_.BoundingRect.X+[double]$_.BoundingRect.Width});$bottoms=@($words|ForEach-Object{[double]$_.BoundingRect.Y+[double]$_.BoundingRect.Height});$minX=($lefts|Measure-Object -Minimum).Minimum;$minY=($tops|Measure-Object -Minimum).Minimum;$maxX=($rights|Measure-Object -Maximum).Maximum;$maxY=($bottoms|Measure-Object -Maximum).Maximum;$lines.Add([pscustomobject]@{page=$pageNumber;text=[string]$line.Text;x=$left+[double]$minX/$cropScale;y=$top+[double]$minY/$cropScale;width=[double]($maxX-$minX)/$cropScale;height=[double]($maxY-$minY)/$cropScale;confidence=(Get-OcrLineConfidence $line)})}
+    if([string]$region.profileId -eq 'gsf-car-parts' -and [string]$region.regionType -eq 'invoice-date'){
+      # The GSF tax-point date is faint on some scans. On this small,
+      # text-anchored crop, compare a few binary contrast passes and emit the
+      # date only when independent Windows OCR passes agree exactly.
+      $dateCandidates=New-Object System.Collections.Generic.List[object];$formats=@('d/M/yy','dd/MM/yy','d/M/yyyy','dd/MM/yyyy','d-M-yy','dd-MM-yy','d.M.yy','dd.MM.yy');$culture=[Globalization.CultureInfo]::GetCultureInfo('en-GB')
+      $copy=Copy-SoftwareBitmapToDrawingBitmap $software;$drawing=$copy.Bitmap
+      $dateImages=New-Object System.Collections.Generic.List[object];$dateImages.Add([pscustomobject]@{bitmap=$drawing;offsetX=0;offsetY=0;owned=$false})
+      # A faint date can share a line with a clear account number. Crop around
+      # OCR's date-like line box so the adjacent account digits, rules and
+      # other table cells do not dominate the retry. The crop is derived from
+      # the recognised line bounds, never from a page coordinate template.
+      foreach($dateLine in $lines){$raw=[string]$dateLine.text;if($raw -notmatch '[/.-]' -or $raw -notmatch '\d{3}'){continue};$lineX=([double]$dateLine.x-$left)*$cropScale;$lineY=([double]$dateLine.y-$top)*$cropScale;$lineW=[double]$dateLine.width*$cropScale;$lineH=[double]$dateLine.height*$cropScale;if($lineW -lt 1 -or $lineH -lt 1){continue};$padX=[math]::Max(10,$lineH*.45);$padY=[math]::Max(8,$lineH*.3);$cropLeft=[math]::Max(0,[int][math]::Floor($lineX-$padX));$cropTop=[math]::Max(0,[int][math]::Floor($lineY-$padY));$cropRight=[math]::Min($drawing.Width,[int][math]::Ceiling($lineX+$lineW+$padX));$cropBottom=[math]::Min($drawing.Height,[int][math]::Ceiling($lineY+$lineH+$padY));if($cropRight-$cropLeft -lt 20 -or $cropBottom-$cropTop -lt 10){continue};$dateCrop=$drawing.Clone([System.Drawing.Rectangle]::new($cropLeft,$cropTop,$cropRight-$cropLeft,$cropBottom-$cropTop),[System.Drawing.Imaging.PixelFormat]::Format24bppRgb);$dateImages.Add([pscustomobject]@{bitmap=$dateCrop;offsetX=$cropLeft;offsetY=$cropTop;owned=$true})}
+      foreach($dateImage in $dateImages){try{$variantResult=Read-BitmapOcrResult $dateImage.bitmap $engine;foreach($variantLine in $variantResult.Lines){$raw=[string]$variantLine.Text;foreach($match in [regex]::Matches($raw,'(?<!\d)\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{2,4}(?!\d)')){$parsedDate=[datetime]::MinValue;$value=$match.Value -replace '\s+','';if([datetime]::TryParseExact($value,$formats,$culture,[Globalization.DateTimeStyles]::None,[ref]$parsedDate)){$dateCandidates.Add([pscustomobject]@{key=$parsedDate.ToString('yyyy-MM-dd');date=$parsedDate;variant='original';line=$variantLine;offsetX=$dateImage.offsetX;offsetY=$dateImage.offsetY})}}}}catch{};foreach($threshold in @(160,180,200,220)){$thresholdBitmap=$null;try{$thresholdBitmap=[InkGapRepair]::Threshold($dateImage.bitmap,$threshold);$variantResult=Read-BitmapOcrResult $thresholdBitmap $engine;foreach($variantLine in $variantResult.Lines){$raw=[string]$variantLine.Text;foreach($match in [regex]::Matches($raw,'(?<!\d)\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{2,4}(?!\d)')){$parsedDate=[datetime]::MinValue;$value=$match.Value -replace '\s+','';if([datetime]::TryParseExact($value,$formats,$culture,[Globalization.DateTimeStyles]::None,[ref]$parsedDate)){$dateCandidates.Add([pscustomobject]@{key=$parsedDate.ToString('yyyy-MM-dd');date=$parsedDate;variant=$threshold;line=$variantLine;offsetX=$dateImage.offsetX;offsetY=$dateImage.offsetY})}}}}catch{}finally{if($thresholdBitmap){$thresholdBitmap.Dispose()}}};if($dateImage.owned){$dateImage.bitmap.Dispose()}}
+      $agreements=@($dateCandidates|Group-Object key|Where-Object{@($_.Group.variant|Select-Object -Unique).Count -ge 2});if($agreements.Count -eq 1){$candidate=$agreements[0].Group[0];$words=@($candidate.line.Words);if($words.Count){$lefts=@($words|ForEach-Object{[double]$_.BoundingRect.X});$tops=@($words|ForEach-Object{[double]$_.BoundingRect.Y});$rights=@($words|ForEach-Object{[double]$_.BoundingRect.X+[double]$_.BoundingRect.Width});$bottoms=@($words|ForEach-Object{[double]$_.BoundingRect.Y+[double]$_.BoundingRect.Height});$minX=($lefts|Measure-Object -Minimum).Minimum;$minY=($tops|Measure-Object -Minimum).Minimum;$maxX=($rights|Measure-Object -Maximum).Maximum;$maxY=($bottoms|Measure-Object -Maximum).Maximum;$lines.Add([pscustomobject]@{page=$pageNumber;text=$candidate.date.ToString('dd/MM/yyyy');x=$left+([double]$candidate.offsetX+[double]$minX)/$cropScale;y=$top+([double]$candidate.offsetY+[double]$minY)/$cropScale;width=[double]($maxX-$minX)/$cropScale;height=[double]($maxY-$minY)/$cropScale;confidence=1.0;gsfDateConsensus=$true})}}
+    }
     return @{Text=[string]$result.Text;Lines=$lines.ToArray()}
-  }catch{throw}finally{if($software){$software.Dispose()};$stream.Dispose()}
+  }catch{throw}finally{if($drawing){$drawing.Dispose()};if($copy){$copy.Memory.Dispose();$copy.Reader.Dispose();$copy.Stream.Dispose()};if($software){$software.Dispose()};$stream.Dispose()}
 }
 function Read-DairyFreshFooterRegion($bitmap,$scale,$left,$top,$width,$height,$engine,$page){
   # The printer's pale address watermark crosses Dairy Fresh's right-hand
@@ -604,7 +619,7 @@ try {
     }
     # Shahid Halal Poultry's current invoice amount is the value beside the
     # footer TOTAL label. A pound glyph can be mistaken for a leading 2 (for
-    # example £1,196.18 -> 21,196.18); when the parser flags that shape, retry
+    # example Â£1,196.18 -> 21,196.18); when the parser flags that shape, retry
     # only that total cell at 5x and replace it only with a complete printed
     # amount. BALANCE and G TOTAL are deliberately outside this search.
     $shahidText=($pageLines.ToArray()|ForEach-Object{[string]$_.text}) -join ' '
@@ -618,7 +633,7 @@ try {
           $rawDigits=[regex]::Replace($raw,'\D','');$expectedDigits=if($rawDigits.Length -gt 1){$rawDigits.Substring(1)}else{''}
           foreach($offset in @(24.0,34.0,44.0,54.0,64.0)){
             # Read past the fixed pound-sign position while keeping the full
-            # number cell. This prevents the £ glyph from becoming a false
+            # number cell. This prevents the Â£ glyph from becoming a false
             # leading digit without dropping the first actual digit.
             $shifted=[pscustomobject]@{x=[double]$candidate.x+$offset;y=[double]$candidate.y;width=[math]::Max(70.0,[double]$candidate.width-$offset);height=[math]::Max(28.0,[double]$candidate.height)}
             try{$improved=[string](Read-EnhancedVatCell $bitmap $Scale $shifted $engine $page);$improvedDigits=[regex]::Replace($improved,'\D','');if($improved -match '^\s*\d[\d\s,]*[.,]\s*\d{2}\s*$' -and $improvedDigits -eq $expectedDigits){$candidate.text=$improved.Trim();$candidate|Add-Member -NotePropertyName shahidTotalVerified -NotePropertyValue $true -Force;break}}catch{}
@@ -630,7 +645,7 @@ try {
     # Polish delivery notes print their document total in a bold, isolated
     # amount cell beside `Total` at the top of a summary page. On the 5x retry,
     # OCR that cell separately so a clear printed 223,26 is not left as an
-    # ambiguous `22S,Ã¤6`. Only replace the original text when the focused scan
+    # ambiguous `22S,ÃƒÂ¤6`. Only replace the original text when the focused scan
     # returns a complete amount with two decimal digits.
     if(-not $bankRegion -and $Scale -ge 4.5){
       $wzTotals=@($pageLines.ToArray()|Where-Object{[string]$_.text -match '^\s*total\s*$' -and [double]$_.y -lt 360})
@@ -641,7 +656,7 @@ try {
           if($raw -match '^\s*\d[\d\s]*[.,]\s*\d{2}\s*$'){continue}
           try{$improved=[string](Read-EnhancedVatCell $bitmap $Scale $candidate $engine $page);if($improved -match '^\s*\d[\d\s]*[.,]\s*\d{2}\s*$'){$candidate.text=$improved.Trim();break}}catch{}
           # At this point the value is already isolated beside the printed
-          # Total label at 5x. Windows OCR can render a zero as O/Ã¶ and a
+          # Total label at 5x. Windows OCR can render a zero as O/ÃƒÂ¶ and a
           # comma as a semicolon; normalize only that constrained money shape.
           if($raw -match '^\s*(\d{1,3})[OoQq\u00D6\u00F6][,.;]\s*(\d{2})\s*$'){$whole=$matches[1]+'0';$pennies=$matches[2];$candidate.text=$whole+'.'+$pennies;break}
         }
@@ -650,7 +665,7 @@ try {
     # MFG fuel receipts can print extra shop items, followed by separate VAT
     # tables for Motor Fuel and the shop. The receipt's own Total is above
     # those tables. On faded scans Windows OCR may retain only the pennies
-    # (for example `.26` from `Â£31.26`), so rescan that exact printed amount
+    # (for example `.26` from `Ã‚Â£31.26`), so rescan that exact printed amount
     # cell from the 5x page render. Never derive the receipt total from the
     # separate supplier totals below it.
     if(-not $bankRegion -and $Scale -ge 4.5 -and @($pageLines.ToArray()|Where-Object{[string]$_.text -match '\b(?:MFG|MOTOR\s+FUEL)\b'}).Count -and @($pageLines.ToArray()|Where-Object{[string]$_.text -match '\b(?:UNLEADED|DIESEL)\b'}).Count){
@@ -668,7 +683,7 @@ try {
       }
     }
     # Fuel receipts can lose the total line when the scan is faint or the OCR
-    # joins its label to the amount (for example `TO r AL` and `€30.01`). On
+    # joins its label to the amount (for example `TO r AL` and `â‚¬30.01`). On
     # the single high-resolution retry, rescan the compact receipt-total band
     # beside the pump line and retain its original page coordinates.
     if(-not $bankRegion -and $Scale -ge 4.5){
