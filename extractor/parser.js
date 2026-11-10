@@ -52,6 +52,42 @@
     if(typeof DecompressionStream==='undefined')return data;
     const stream=new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate'));return new Uint8Array(await new Response(stream).arrayBuffer());
   }
+  // Starling's selectable text uses embedded custom fonts. The ordinary text
+  // scanner above sees the raw character codes and can lose digits. Resolve
+  // those fonts' ToUnicode maps and retain their page positions so the same
+  // heading-relative bank parser can read online PDFs without OCR.
+  async function extractStarlingPdfText(input){
+    const bytes=input instanceof Uint8Array?input:new Uint8Array(input),source=bytesToLatin(bytes),objects=new Map(),objectPattern=/(\d+)\s+0\s+obj\b/g;let match;
+    while((match=objectPattern.exec(source))){const id=Number(match[1]),bodyStart=objectPattern.lastIndex;let end=source.indexOf('endobj',bodyStart),stream=source.indexOf('stream',bodyStart);if(stream>=0&&(end<0||stream<end)){const endStream=source.indexOf('endstream',stream);if(endStream<0)break;end=source.indexOf('endobj',endStream);if(end<0)break;}objects.set(id,{body:source.slice(bodyStart,end),start:bodyStart});objectPattern.lastIndex=end+6;}
+    if(!objects.size)return null;
+    const streamBytes=async object=>{if(!object||object.start<0)return null;const offset=object.body.indexOf('stream');if(offset<0)return null;let start=object.start+offset+6;if(bytes[start]===13&&bytes[start+1]===10)start+=2;else if(bytes[start]===10||bytes[start]===13)start++;let end=source.indexOf('endstream',start);if(end<0)return null;let raw=bytes.subarray(start,end);while(raw.length&&(raw.at(-1)===10||raw.at(-1)===13))raw=raw.subarray(0,-1);if(/\/FlateDecode\b/.test(object.body.slice(0,offset)))try{raw=await inflate(raw);}catch{return null;}return raw;};
+    for(const object of [...objects.values()]){if(!/\/Type\s*\/ObjStm\b/.test(object.body))continue;const count=Number(object.body.match(/\/N\s+(\d+)/)?.[1]),first=Number(object.body.match(/\/First\s+(\d+)/)?.[1]),raw=await streamBytes(object);if(!raw||!count||!first)continue;const decoded=bytesToLatin(raw),header=decoded.slice(0,first).trim().split(/\s+/).map(Number);for(let index=0;index<count;index++){const id=header[index*2],offset=header[index*2+1],next=index+1<count?header[index*2+3]:decoded.length-first;if(Number.isFinite(id)&&Number.isFinite(offset))objects.set(id,{body:decoded.slice(first+offset,first+next),start:-1});}}
+    const reference=(body,key)=>Number(body.match(new RegExp(`\\/${key}\\s+(\\d+)\\s+\\d+\\s+R`))?.[1])||0;
+    const toUnicode=async object=>{const raw=await streamBytes(object);if(!raw)return null;const text=bytesToLatin(raw),map=new Map();for(const block of text.matchAll(/beginbfchar([\s\S]*?)endbfchar/g))for(const pair of block[1].matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g))map.set(pair[1].toUpperCase(),unicodeHex(pair[2]));for(const block of text.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)){const range=/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:<([0-9A-Fa-f]+)>|\[((?:\s*<[0-9A-Fa-f]+>\s*)+)\])/g;for(const item of block[1].matchAll(range)){const start=parseInt(item[1],16),finish=parseInt(item[2],16),digits=item[1].length;if(item[3]){const destination=parseInt(item[3],16);for(let code=start;code<=finish;code++)map.set(code.toString(16).toUpperCase().padStart(digits,'0'),String.fromCharCode(destination+code-start));}else{const values=[...item[4].matchAll(/<([0-9A-Fa-f]+)>/g)].map(value=>unicodeHex(value[1]));for(let code=start;code<=finish&&code-start<values.length;code++)map.set(code.toString(16).toUpperCase().padStart(digits,'0'),values[code-start]);}}}const codeLength=Math.max(1,...[...map.keys()].map(key=>key.length/2));return {map,codeLength};};
+    const unicodeHex=value=>{let result='';for(let index=0;index+3<value.length;index+=4)result+=String.fromCharCode(parseInt(value.slice(index,index+4),16));return result;};
+    const unicodeCache=new Map(),fontMaps=async pageBody=>{let resourcesBody=objects.get(reference(pageBody,'Resources'))?.body||pageBody;if(!/\/Font\b/.test(resourcesBody)){const parent=reference(pageBody,'Parent');if(parent)resourcesBody=objects.get(parent)?.body||resourcesBody;}const fontId=reference(resourcesBody,'Font'),fontBody=objects.get(fontId)?.body||resourcesBody,result={};for(const item of fontBody.matchAll(/\/(\w+)\s+(\d+)\s+0\s+R/g)){const font=objects.get(Number(item[2])),mapId=reference(font?.body||'','ToUnicode');if(!mapId)continue;if(!unicodeCache.has(mapId))unicodeCache.set(mapId,toUnicode(objects.get(mapId)));result[item[1]]=await unicodeCache.get(mapId);}return result;};
+    const decodePdfString=(token,map)=>{let raw;if(token[0]==='<')raw=token.slice(1,-1).replace(/\s/g,'').match(/../g)?.map(value=>parseInt(value,16))||[];else raw=[...unescapePdf(token.slice(1,-1))].map(value=>value.charCodeAt(0)&255);if(!map)return raw.map(value=>String.fromCharCode(value)).join('');let output='';for(let index=0;index<raw.length;index+=map.codeLength){const key=raw.slice(index,index+map.codeLength).map(value=>value.toString(16).padStart(2,'0')).join('').toUpperCase();output+=map.map.get(key)||'�';}return output;};
+    const tokenize=content=>[...content.matchAll(/\/[A-Za-z0-9_.+-]+|<[^>]*>|\((?:\\[\s\S]|[^\\)])*\)|[-+]?(?:\d+\.?\d*|\.\d+)|\[|\]|[A-Za-z*"']+/g)].map(value=>value[0]);
+    const contentLines=(content,maps,page,height)=>{const tokens=tokenize(content),items=[];let stack=[],font='',fontSize=8,lineX=0,lineY=0,leading=0,ctm=[1,0,0,1,0,0],graphics=[];const transform=(x,y)=>[ctm[0]*x+ctm[2]*y+ctm[4],ctm[1]*x+ctm[3]*y+ctm[5]],multiply=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]],emit=text=>{if(!text.trim())return;const [x,y]=transform(lineX,lineY),width=text.length*fontSize*.5*Math.hypot(ctm[0],ctm[1]),lineHeight=fontSize*Math.hypot(ctm[2],ctm[3]);items.push({page,text,x:x*2.5,y:(height-y-lineHeight)*2.5,width:width*2.5,height:lineHeight*2.5});},add=token=>emit(decodePdfString(token,maps[font]));
+      for(let index=0;index<tokens.length;index++){const token=tokens[index];if(token==='['){const values=[];while(index+1<tokens.length&&tokens[index+1]!==']')values.push(tokens[++index]);index++;stack.push(values);continue;}if(token[0]==='/'){stack.push(token.slice(1));continue;}if(token[0]==='('||token[0]==='<'){stack.push(token);continue;}if(/^[-+]?(?:\d|\.)/.test(token)){stack.push(Number(token));continue;}switch(token){case'q':graphics.push([...ctm]);stack=[];break;case'Q':ctm=graphics.pop()||ctm;stack=[];break;case'cm':{const matrix=stack.splice(-6).map(Number);if(matrix.length===6&&matrix.every(Number.isFinite))ctm=multiply(ctm,matrix);stack=[];break;}case'BT':stack=[];lineX=0;lineY=0;break;case'ET':stack=[];break;case'Tf':{const size=stack.pop(),name=stack.pop();font=String(name||'');fontSize=Number(size)||fontSize;stack=[];break;}case'Td':case'TD':{lineY+=Number(stack.pop())||0;lineX+=Number(stack.pop())||0;stack=[];break;}case'Tm':{const values=stack.splice(-6).map(Number);if(values.length===6){lineX=values[4];lineY=values[5];}stack=[];break;}case'TL':leading=Number(stack.pop())||leading;stack=[];break;case'T*':lineY-=leading;stack=[];break;case'Tj':{const value=stack.pop();if(typeof value==='string')add(value);stack=[];break;}case'TJ':{const values=stack.pop();if(Array.isArray(values))emit(values.filter(value=>typeof value==='string').map(value=>decodePdfString(value,maps[font])).join(''));stack=[];break;}case"'":{const value=stack.pop();lineY-=leading;if(typeof value==='string')add(value);stack=[];break;}default:if(/^(?:sc|SC|scn|SCN|g|G|rg|RG|w|m|l|c|v|y|re|S|s|f|F|f\*|B|B\*|n|Do|Tc|Tw|Tz|Tr|Ts|d|J|j|M|W|W\*)$/.test(token))stack=[];}}
+      return items;};
+    const tree=[...objects.entries()].find(([,object])=>/\/Type\s*\/Pages\b/.test(object.body));if(!tree)return null;const pageIds=[];const walk=id=>{const body=objects.get(id)?.body||'';if(/\/Type\s*\/Page\b/.test(body)&&!/\/Type\s*\/Pages\b/.test(body)){pageIds.push(id);return;}const kids=body.match(/\/Kids\s*\[([^\]]*)\]/);if(kids)for(const child of kids[1].matchAll(/(\d+)\s+\d+\s+R/g))walk(Number(child[1]));};walk(tree[0]);if(!pageIds.length)return null;
+    const pageItems=[],imagePages=[];for(let index=0;index<pageIds.length;index++){
+      const body=objects.get(pageIds[index]).body;let media=body.match(/\/MediaBox\s*\[([^\]]+)\]/),parent=reference(body,'Parent');while(!media&&parent){const parentBody=objects.get(parent)?.body||'';media=parentBody.match(/\/MediaBox\s*\[([^\]]+)\]/);parent=reference(parentBody,'Parent');}
+      const coords=(media?.[1]||'0 0 612 792').trim().split(/\s+/).map(Number),height=coords[3]-coords[1],maps=await fontMaps(body),contentIds=[...body.matchAll(/\/Contents\s+(\d+)\s+\d+\s+R/g)].map(value=>Number(value[1])),array=body.match(/\/Contents\s*\[([^\]]+)\]/);if(array)contentIds.push(...[...array[1].matchAll(/(\d+)\s+\d+\s+R/g)].map(value=>Number(value[1])));
+      const items=[],content=[];for(const id of contentIds){const raw=await streamBytes(objects.get(id));if(raw){const decoded=bytesToLatin(raw);content.push(decoded);items.push(...contentLines(decoded,maps,index+1,height));}}
+      let resources=objects.get(reference(body,'Resources'))?.body||body;if(!/\/XObject\b/.test(resources)){const parentId=reference(body,'Parent');if(parentId)resources=objects.get(parentId)?.body||resources;}
+      const xObjectBody=objects.get(reference(resources,'XObject'))?.body||'';for(const entry of xObjectBody.matchAll(/\/(\w+)\s+(\d+)\s+\d+\s+R/g)){const image=objects.get(Number(entry[2]))?.body||'';if(!/\/Subtype\s*\/Image\b/.test(image))continue;const width=Number(image.match(/\/Width\s+(\d+)/)?.[1])||0,imageHeight=Number(image.match(/\/Height\s+(\d+)/)?.[1])||0;if(width*imageHeight<100000||!content.some(stream=>new RegExp(`\\/${entry[1]}\\s+Do\\b`).test(stream)))continue;imagePages.push(index+1);break;}
+      pageItems.push(items.sort((a,b)=>a.y-b.y||a.x-b.x));
+    }
+    const text=pageItems.flat().map(item=>item.text).join('\n');if(!/starlingbank\.com/i.test(text)||!/(?:END\s+OF\s+DAY|ACCOUNT\s+BALANCE|PAYMENTS\s+IN|PAYMENTS\s+OUT)/i.test(text))return null;
+    // Large image XObjects can be logos or signatures repeated on every page.
+    // OCR only pages with no selectable transaction dates and no statement
+    // summary; this catches mixed text/scanned statements without OCRing every
+    // page or mistaking the summary page for a missing transaction page.
+    const imagePagesToRead=pageItems.flatMap((items,index)=>{const pageText=items.map(item=>item.text).join(' '),hasDates=/\b\d{1,2}\s*\/\s*\d{1,2}\s*\/\s*20\d{2}\b/.test(pageText),hasSummary=/\b(?:OPENING\s+BALANCE|CLOSING\s+BALANCE|PAYMENTS\s+IN|PAYMENTS\s+OUT)\b/i.test(pageText);return imagePages.includes(index+1)&&!hasDates&&!hasSummary?[index+1]:[];});
+    return {text,pages:pageIds.length,hasText:Boolean(text.trim()),pageItems,imagePages:imagePagesToRead};
+  }
   async function extractText(input){
     // Find stream boundaries in the original bytes. Decoding compressed bytes as
     // latin1 first corrupts a handful of values in Node (the label maps to
@@ -656,9 +692,107 @@
     for(const row of rawRows){const reason=!row.date?'Transaction date could not be confirmed from the SumUp statement. Verify this row on the linked PDF page.':!row.amountConfirmed?'Transaction amount or direction could not be confirmed from the SumUp statement. Verify this row on the linked PDF page.':row.sumupAmountConflict?'SumUp OCR readings disagree on the printed amount. The row needs a higher-resolution check.':!row.description?'Transaction description could not be read from the SumUp statement. Verify this row on the linked PDF page.':'';if(reason){row.status='REJECTED';row.accepted=false;row.rejected=true;row.review=true;row.confidence='REJECTED';row.rejectedReason=reason;}else{row.status='ACCEPTED';row.accepted=true;row.rejected=false;row.review=false;row.rejectedReason='';}delete row.dateDay;delete row.amountConfirmed;delete row.description;}
     return rawRows;
   }
+  function parseStarlingOcrBank(ocrLines,text='',source=''){
+    if(!Array.isArray(ocrLines)||!ocrLines.length)return null;
+    const allText=`${String(text||'')}\n${ocrLines.map(line=>String(line?.text||'')).join('\n')}`;
+    if(!/(?:\bstarling\b|starlingbank\.com)/i.test(allText)||!/(?:END\s+OF\s+DAY|ACCOUNT\s+BALANCE|PAYMENTS\s+IN|PAYMENTS\s+OUT)/i.test(allText))return null;
+    const normalize=value=>String(value||'').toUpperCase().replace(/[^A-Z]/g,''),center=line=>Number(line.x||0)+Number(line.width||0)/2;
+    const pages=new Map();for(const original of ocrLines){const page=Number(original?.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push({...original,page,x:Number(original?.x)||0,y:Number(original?.y)||0,width:Number(original?.width)||0,height:Number(original?.height)||0,text:String(original?.text||'').trim()});}
+    const pageEntries=[...pages.entries()].sort((a,b)=>a[0]-b[0]);let previousHeader=null;const rows=[],pageHeaders=new Map();
+    const headerFor=items=>{
+      const labels={date:[],type:[],transaction:[],in:[],out:[],balance:[],endOfDay:[]};
+      for(const line of items){const value=normalize(line.text);if(value==='DATE'||value==='DATEE')labels.date.push(line);else if(value==='TYPE')labels.type.push(line);else if(value==='TRANSACTION'||value==='TRANSACTIONS')labels.transaction.push(line);else if(value==='IN')labels.in.push(line);else if(value==='OUT')labels.out.push(line);else if(value==='ACCOUNTBALANCE'||value==='BALANCE')labels.balance.push(line);else if(value==='ENDOFDAY')labels.endOfDay.push(line);}
+      for(const date of labels.date){const nearest=(list,max=85)=>list.map(line=>({line,distance:Math.abs(line.y-date.y)})).filter(item=>item.distance<=max).sort((a,b)=>a.distance-b.distance)[0]?.line||null,type=nearest(labels.type),transaction=nearest(labels.transaction),incoming=nearest(labels.in),outgoing=nearest(labels.out);if(!type||!transaction||!incoming||!outgoing)continue;
+        const headerY=[date,type,transaction,incoming,outgoing].reduce((sum,line)=>sum+line.y,0)/5,base={date:center(date),type:center(type),transaction:center(transaction),in:center(incoming),out:center(outgoing),y:headerY,height:Math.max(10,...[date,type,transaction,incoming,outgoing].map(line=>line.height||0))};
+        if(!(base.date<base.type&&base.type<base.transaction&&base.transaction<base.in&&base.in<base.out))continue;
+        const close=(list)=>list.map(line=>({line,distance:Math.abs(line.y-headerY)})).filter(item=>item.distance<=90&&center(item.line)>base.out-20).sort((a,b)=>a.distance-b.distance)[0]?.line||null;
+        const balanceLabel=close(labels.balance),endOfDay=close(labels.endOfDay);base.balance=balanceLabel?center(balanceLabel):endOfDay?center(endOfDay):base.out+(base.out-base.in);return base;
+      }
+      return null;
+    };
+    const parseStarlingDate=value=>{const compact=String(value||'').replace(/\s+/g,'').replace(/[Oo]/g,'0').replace(/[Il|]/g,'1');if(!/^\d{1,2}\/\d{1,2}\/20\d{2}$/.test(compact))return '';return parseDate(compact);};
+    const parseStarlingMoney=value=>{
+      let raw=String(value||'').trim();if(!raw)return null;
+      // Windows OCR often renders "£1" as "El" in Starling's amount cells.
+      // Preserve that leading one; removing the whole token loses a digit from
+      // values such as £134.64 and £122,650.00. Other currency-glyph variants
+      // remain prefixes only and are discarded before parsing.
+      raw=raw.replace(/^\s*E\s*[Il|](?=\s*(?:[0-9OoIl|]|[.,]\s*[0-9OoIl|]))/i,'1').replace(/^\s*(?:[£$€]|E|[QO]\s*[Il|])\s*/i,'');
+      if(/^[QO]\s*[Il|]\s*[.,]\s*[0-9OoIl|]{2}$/i.test(raw))return null;
+      if(/^\s*[.,]\s*[0-9OoIl|]{2}\s*$/.test(raw))raw=`0${raw.trim()}`;
+      const token=raw.match(/\(?-?[0-9OoIl|][0-9OoIl|,.'\s]*[.,]\s*[0-9OoIl|]{2}\)?/);if(!token)return null;
+      const valueNumber=invoiceAmount(token[0]);return valueNumber===null?null:Math.abs(valueNumber);
+    };
+    const median=values=>{const sorted=values.filter(Number.isFinite).sort((a,b)=>a-b);return sorted.length?sorted[Math.floor(sorted.length/2)]:null;};
+    const inferContinuationHeader=items=>{
+      if(!previousHeader)return null;
+      const dateLines=items.filter(line=>parseStarlingDate(line.text)).sort((a,b)=>a.y-b.y);if(dateLines.length<4)return null;
+      const minY=dateLines[0].y-10,maxY=dateLines.at(-1).y+10,within=line=>line.y>=minY&&line.y<=maxY;
+      const typePattern=/^(?:DIRECT DEBIT|APPLE PAY|ONLINE PAYMENT|FASTER PAYMENT|INTERNATIONAL PAYMENT|CARD SUBSCRIPTION|DIRECT CREDIT|TRANSFER|CASH WITHDRAWAL|STANDING ORDER|CARD PAYMENT|CARD REFUND|REFUND|CASH DEPOSIT)\b/i;
+      const typeLines=items.filter(line=>within(line)&&typePattern.test(line.text.trim()));if(typeLines.length<3)return null;
+      const typeX=median(typeLines.map(center)),dateX=median(dateLines.map(center));if(typeX===null||dateX===null)return null;
+      // Text continuations keep the same column geometry as the prior page;
+      // use that measured header directly. Infer a new layout only when OCR
+      // reports a materially shifted table (for example a rasterized page).
+      if(Math.abs(dateX-previousHeader.date)<=Math.max(80,Math.abs(previousHeader.date)*.25)&&Math.abs(typeX-previousHeader.type)<=Math.max(90,Math.abs(previousHeader.type)*.25))return null;
+      const descriptionLines=items.filter(line=>within(line)&&!parseStarlingDate(line.text)&&!parseStarlingMoney(line.text)&&center(line)>typeX&&!typePattern.test(line.text.trim())&&line.text.trim());
+      const descriptionX=median(descriptionLines.map(center));if(descriptionX===null||descriptionX<=typeX)return null;
+      const amountFloor=descriptionX+(descriptionX-typeX)*.5;
+      const amountLines=items.filter(line=>within(line)&&center(line)>amountFloor&&parseStarlingMoney(line.text)!==null);if(amountLines.length<8)return null;
+      const values=amountLines.map(line=>center(line)).sort((a,b)=>a-b),gaps=values.slice(1).map((value,index)=>({index,gap:value-values[index]})),splitIndexes=new Set(gaps.slice().sort((a,b)=>b.gap-a.gap).slice(0,2).filter(item=>item.gap>Math.max(25,(median(gaps.map(value=>value.gap))||0)*2)).map(item=>item.index)),clusters=[values[0]];
+      for(let index=0;index<gaps.length;index++){if(splitIndexes.has(index))clusters.push(values[index+1]);else clusters[clusters.length-1]=(clusters.at(-1)+values[index+1])/2;}
+      if(clusters.length!==3)return null;
+      const [incoming,outgoing,balance]=clusters;if(!(previousHeader.date<previousHeader.type&&previousHeader.type<previousHeader.transaction&&previousHeader.transaction<previousHeader.in&&previousHeader.in<previousHeader.out&&previousHeader.out<previousHeader.balance&&incoming<outgoing&&outgoing<balance))return null;
+      return {date:median(dateLines.map(center)),type:typeX,transaction:descriptionX,in:incoming,out:outgoing,balance,y:minY-30,height:median(dateLines.map(line=>line.height||0))||10};
+    };
+    const midpoint=(a,b)=>(a+b)/2,nearestCell=(line,header)=>{
+      const x=center(line),bounds=[midpoint(header.date,header.type),midpoint(header.type,header.transaction),midpoint(header.transaction,header.in),midpoint(header.in,header.out),midpoint(header.out,header.balance)];
+      if(x<bounds[0])return 'date';if(x<bounds[1])return 'type';if(x<bounds[2])return 'transaction';if(x<bounds[3])return 'in';if(x<bounds[4])return 'out';return 'balance';
+    };
+    for(const [page,items] of pageEntries){const detected=headerFor(items),inferred=!detected?inferContinuationHeader(items):null;if(detected)previousHeader=detected;const header=detected||inferred||previousHeader;if(!header)continue;pageHeaders.set(page,header);
+      const dateLines=items.filter(line=>nearestCell(line,header)==='date'&&parseStarlingDate(line.text)).sort((a,b)=>a.y-b.y);
+      for(const dateLine of dateLines){
+        if(detected&&dateLine.y<header.y+Math.max(4,header.height*.35))continue;
+        const parsedDate=parseStarlingDate(dateLine.text);if(rows.some(row=>row.page===page&&row.date===parsedDate&&Math.abs(Number(row.ocrY)-dateLine.y)<=Math.max(14,(dateLine.height||0)*.75)))continue;
+        const sameRow=items.filter(line=>Math.abs(line.y-dateLine.y)<=(line.starlingFocused?Math.max(26,(dateLine.height||0)*.75):Math.max(7,(dateLine.height||0)*.45)));
+        const cellLines={type:[],transaction:[],in:[],out:[],balance:[]};for(const line of sameRow){const cell=nearestCell(line,header);if(cellLines[cell])cellLines[cell].push(line);}
+        const typeLine=cellLines.type.filter(line=>!/^(?:TYPE|DATE|TRANSACTION|IN|OUT|ACCOUNT|BALANCE|END OF DAY)$/i.test(line.text)).sort((a,b)=>a.x-b.x)[0]||null;
+        const description=cellLines.transaction.map(line=>line.text).filter(value=>value&&!/^(?:TYPE|DATE|TRANSACTION|IN|OUT|ACCOUNT|BALANCE|END OF DAY)$/i.test(value)).join(' ').replace(/\s+/g,' ').trim();
+        const byBestReading=(a,b)=>Number(Boolean(b.line.starlingFocused))-Number(Boolean(a.line.starlingFocused))||Math.abs(a.line.y-dateLine.y)-Math.abs(b.line.y-dateLine.y);
+        const incoming=cellLines.in.map(line=>({line,value:parseStarlingMoney(line.text)})).filter(item=>item.value!==null).sort(byBestReading)[0]||null;
+        const outgoing=cellLines.out.map(line=>({line,value:parseStarlingMoney(line.text)})).filter(item=>item.value!==null).sort(byBestReading)[0]||null;
+        const balanceItem=cellLines.balance.map(line=>({line,value:parseStarlingMoney(line.text)})).filter(item=>item.value!==null).sort(byBestReading)[0]||null;
+        const rawCellLine=list=>list.filter(line=>/\d/.test(line.text)).sort((a,b)=>Math.abs(a.y-dateLine.y)-Math.abs(b.y-dateLine.y))[0]||null,cellStarts={in:rawCellLine(cellLines.in)?.x,out:rawCellLine(cellLines.out)?.x,balance:rawCellLine(cellLines.balance)?.x};
+        const conflict=Boolean(incoming&&outgoing),movement=conflict?null:incoming?{value:incoming.value,sign:1,line:incoming.line}:outgoing?{value:outgoing.value,sign:-1,line:outgoing.line}:null,amount=movement?movement.value*movement.sign:'';
+        const type=typeLine?.text.replace(/\s+/g,' ').trim()||'',detail=[type,description].filter(Boolean).join(': ')||'Bank transaction';
+        const row={date:parsedDate,details:detail,receipt:movement?.sign>0?movement.value:'',payment:movement?.sign<0?movement.value:'',amount,balance:balanceItem?.value??'',balanceExpected:Boolean(balanceItem),source,page,ocrY:Number(dateLine.y)||0,balanceY:Number(balanceItem?.line?.y)||Number(dateLine.y)||0,confidence:'Starling OCR · heading-anchored columns',profileId:'starling-bank',starlingColumns:{date:header.date,type:header.type,transaction:header.transaction,in:header.in,out:header.out,balance:header.balance},starlingCellStarts:cellStarts,review:false};
+        if(!row.date||!movement||conflict){row.status='REJECTED';row.accepted=false;row.rejected=true;row.review=true;row.confidence='REJECTED';row.rejectedReason=conflict?'Both Starling IN and OUT values were read on the same transaction row; verify the printed statement.':!movement?'Starling transaction amount or direction could not be confirmed from the printed IN/OUT columns. Verify this row on the linked PDF page.':'Starling transaction date could not be confirmed from the statement.';}
+        else{row.status='ACCEPTED';row.accepted=true;row.rejected=false;row.rejectedReason='';}
+        rows.push(row);
+      }
+    }
+    if(!rows.length)return [];
+    const getSummaryValue=(label)=>{
+      const labels=[];for(const [,items] of pageEntries)for(const line of items)if(normalize(line.text)===normalize(label))labels.push(line);
+      for(const labelLine of labels){const items=pages.get(labelLine.page)||[],candidates=items.filter(line=>line.x>labelLine.x&&Math.abs(line.y-labelLine.y)<=Math.max(12,(labelLine.height||16)*1.1)).map(line=>({line,value:parseStarlingMoney(line.text)})).filter(item=>item.value!==null).sort((a,b)=>a.line.x-b.line.x);if(candidates.length)return candidates[0].value;}
+      return null;
+    };
+    const summaryOpening=getSummaryValue('Opening Balance'),tableOpeningLabels=[];
+    for(const [page,items] of pageEntries){const header=pageHeaders.get(page);if(!header)continue;for(const line of items){if(normalize(line.text)!=='OPENINGBALANCE'||line.y<=header.y)continue;const candidate=items.filter(value=>Math.abs(value.y-line.y)<=Math.max(8,(line.height||16)*.5)&&nearestCell(value,header)==='balance').map(value=>({line:value,amount:parseStarlingMoney(value.text)})).filter(value=>value.amount!==null).sort((a,b)=>Math.abs(a.line.y-line.y)-Math.abs(b.line.y-line.y))[0];if(candidate)tableOpeningLabels.push({page,y:line.y,value:candidate.amount});}}
+    const tableOpening=tableOpeningLabels[0]?.value??null,opening=tableOpening??summaryOpening,summary={openingBalance:summaryOpening,tableOpeningBalance:tableOpening,paymentsIn:getSummaryValue('Payments In'),paymentsOut:getSummaryValue('Payments Out'),closingBalance:getSummaryValue('Closing Balance')};
+    if(opening!==null)rows[0].openingBalance=opening;if(tableOpeningLabels.length)rows[0].starlingOpeningY=tableOpeningLabels[0].y;
+    rows[0].starlingStatementSummary=summary;
+    for(const [page,header] of pageHeaders){const pageRows=rows.filter(row=>Number(row.page)===page);if(!pageRows.length)continue;const starts={};for(const column of ['in','out','balance']){const values=pageRows.map(row=>Number(row.starlingCellStarts?.[column])).filter(Number.isFinite);if(values.length)starts[`${column}Start`]=Math.min(...values);}const columns={...header,...starts};for(const row of pageRows)row.starlingColumns=columns;}
+    const dates=new Map();for(let index=0;index<rows.length;index++){const key=rows[index].date;if(!key)continue;dates.set(key,index);}
+    // End-of-day balance is only expected after the final transaction for a
+    // date. Mark it required only when that date has a printed checkpoint;
+    // balance inspection then validates the full interval without guessing.
+    return rows;
+  }
   function parseOcrBank(ocrLines,text='',source=''){
     if(!Array.isArray(ocrLines)||!ocrLines.length)return [];
     const sumUpRows=parseSumUpOcrBank(ocrLines,text,source);if(sumUpRows!==null)return sumUpRows;
+    const starlingRows=parseStarlingOcrBank(ocrLines,text,source);if(starlingRows!==null)return starlingRows;
     const metroReportRows=parseMetroOnlineTransactionReport(ocrLines,text,source);if(metroReportRows!==null)return metroReportRows;
     const hsbcRows=parseHsbcOcrBank(ocrLines,text,source);if(hsbcRows!==null){if(hsbcRows.length)return hsbcRows;}
     const barclaysRows=parseBarclaysOcrBank(ocrLines,text,source);if(barclaysRows!==null){const opening=bankOpeningBalance(`${text}\n${ocrLines.map(line=>line?.text||'').join('\n')}`);if(barclaysRows.length&&opening!==null)barclaysRows[0].openingBalance=opening;return barclaysRows;}
@@ -1963,6 +2097,7 @@
     {id:'barclays-bank',name:'Barclays',category:'Bank statements',status:'Review',description:'OCR-supported statements with day and month transaction dates'},
     {id:'metro-bank',name:'Metro Bank',category:'Bank statements',status:'Review',description:'Column-based statements and online transaction reports with separate money out, money in and balance columns'},
     {id:'hsbc-bank',name:'HSBC',category:'Bank statements',status:'Under development',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
+    {id:'starling-bank',name:'Starling',category:'Bank statements',status:'Under development',description:'OCR-supported statements with heading-detected date, transaction, money in, money out and end-of-day balance columns'},
     ...receiptProfiles.map(({id,name,category})=>({id,name,category,status:'Under development'})),
     ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status,formatTag,category})=>({id,name,category:category||'Invoices',...(status?{status}:{}),...(formatTag?{formatTag}:{})}))
   ];}
@@ -3478,7 +3613,7 @@
       records.push({...record,page:start,profileId:identifyInvoiceProfile(segmentText)?.id||'generic'});
     }
     const rows=disambiguateGeneratedShahidReferences(records),libertyRows=deduplicateInvoiceRows(rows.filter(row=>row.profileId==='liberty-frozen-foods')).rows.map(row=>row.status==='ACCEPTED'?{...row,rejectedReason:'',retryOcr:false}:row),otherRows=rows.filter(row=>row.profileId!=='liberty-frozen-foods');return [...otherRows,...libertyRows].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
-  }  async function parsePdf(input,mode,source=''){const info=await extractText(input);return {info,...(mode==='invoice'?{invoice:parseInvoiceRobust(info.text,source),invoices:parseInvoiceBatch(info.text,source)}:mode==='receipt'?{receipts:parseReceiptBatch(info.text,source)}:{transactions:parseBank(info.text,source,info.pageItems)})};}
+  }  async function parsePdf(input,mode,source=''){let info=await extractText(input);if(mode==='bank'){const native=await extractStarlingPdfText(input);if(native){const rows=parseStarlingOcrBank(native.pageItems.flat(),native.text,source);if(rows?.length)info={...info,...native};else info=null;if(!info)info=await extractText(input);else return {info,transactions:rows};}}return {info,...(mode==='invoice'?{invoice:parseInvoiceRobust(info.text,source),invoices:parseInvoiceBatch(info.text,source)}:mode==='receipt'?{receipts:parseReceiptBatch(info.text,source)}:{transactions:parseBank(info.text,source,info.pageItems)})};}
   function pdfFileUrl(filePath,page=1){
     const raw=String(filePath||'').trim();if(!raw)return '';
     const safePart=part=>encodeURIComponent(part).replace(/%3A/gi,':');
@@ -3586,7 +3721,7 @@
     if(candidate?.ocrConflictReason){merged.ocrConflictReason=candidate.ocrConflictReason;merged.total='';merged.accepted=false;merged.rejectedReason=candidate.ocrConflictReason;}
     return merged;
   }
-  return {extractText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),underDevelopmentSuppliers,parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
+  return {extractText,extractStarlingPdfText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),underDevelopmentSuppliers,parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
 });
 
 

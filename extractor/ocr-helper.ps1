@@ -419,6 +419,23 @@ try {
       if($processedPageCount%3 -eq 0){[GC]::Collect();[GC]::WaitForPendingFinalizers()}
       continue
     }
+    $starlingRegions=@($parsedBankRetryRegions|Where-Object{[int]$_.page -eq ($index+1) -and [string]$_.profileId -eq 'starling-bank' -and $_.columns})
+    if($starlingRegions.Count){
+      # Re-read only the amount cells inside each balance-mismatch interval.
+      # The OCR-detected Starling headings supply the column centers; cell
+      # width is derived from the gaps between those headings, so the crop
+      # follows the page layout instead of relying on fixed page coordinates.
+      foreach($bankRegion in $starlingRegions){
+        $columns=$bankRegion.columns;$centers=@([double]$columns.in,[double]$columns.out,[double]$columns.balance);$orderedCenters=@($centers|Sort-Object);$regionTop=[math]::Max(0.0,[double]$bankRegion.top);$regionBottom=[math]::Min([double]$page.Size.Height*2.5,[double]$bankRegion.bottom);$regionHeight=$regionBottom-$regionTop;if($regionHeight -le 0){continue}
+        foreach($columnName in @('in','out','balance')){$center=[double]$columns.$columnName;$neighborGaps=@($orderedCenters|Where-Object{[math]::Abs([double]$_-$center) -gt 0}|ForEach-Object{[math]::Abs([double]$_-$center)});if(!$neighborGaps.Count){continue};$cellGap=($neighborGaps|Measure-Object -Minimum).Minimum;$left=$center-($cellGap*.75);$startProperty="${columnName}Start";if($columns.PSObject.Properties[$startProperty]){$observedStart=[double]$columns.$startProperty;if($observedStart -gt 0){$left=[math]::Min($left,$observedStart-($cellGap*.15))}};$left=[math]::Max(0.0,$left);$cellWidth=$cellGap*1.55;$focused=Read-FocusedPdfRegion $page @{left=$left;top=$regionTop;width=$cellWidth;height=$regionHeight} ($index+1) $engine;if($focused.Text){$parts.Add([string]$focused.Text)};foreach($line in $focused.Lines){$line|Add-Member -NotePropertyName starlingFocused -NotePropertyValue $true -Force;$ocrLines.Add($line);$pageLines.Add($line)}}
+      }
+      if($pageLines.Count){$visualPages.Add($index+1)}
+      $focusedPageText=(@($pageLines|ForEach-Object{[string]$_.text}) -join "`n")
+      [Console]::WriteLine('PAGE:'+(@{page=$index+1;pageCount=$pdf.PageCount;ocrLanguage=$ocrLanguage;ocrEngine='Windows.Media.Ocr';text=$focusedPageText;lines=$pageLines.ToArray()}|ConvertTo-Json -Compress -Depth 5))
+      $page.Dispose();$processedPageCount++
+      if($processedPageCount%3 -eq 0){[GC]::Collect();[GC]::WaitForPendingFinalizers()}
+      continue
+    }
     $stream=New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
     # A bank reconciliation retry rereads only the printed vertical interval
     # between the last confirmed balance and the first mismatched one.

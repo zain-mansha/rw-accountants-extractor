@@ -1222,7 +1222,7 @@ test('an unreadable amount rejects every transaction in its unverified balance i
   assert.equal(rows[2].include,undefined);
   assert.match(rows[2].rejectedReason,/interval .* contains an unreadable transaction amount/i);
 });
-test('compatible formats list the supported SumUp, Monzo, Barclays, Metro Bank and HSBC statement layouts',()=>{const banks=P.compatibleCompanies.filter(company=>company.category==='Bank statements');assert.deepEqual(banks.map(company=>company.name),['SumUp','Monzo','Barclays','Metro Bank','HSBC']);assert.match(banks[0].description,/content-detected Date, Reference, Type, Amount and Description columns/);assert.match(banks[1].description,/ISO dates/);assert.match(banks[2].description,/OCR-supported/);assert.match(banks[3].description,/money out, money in and balance columns/);assert.match(banks[4].description,/paid out, paid in and balance columns/);});
+test('compatible formats list the supported SumUp, Monzo, Barclays, Metro Bank, HSBC and Starling statement layouts',()=>{const banks=P.compatibleCompanies.filter(company=>company.category==='Bank statements');assert.deepEqual(banks.map(company=>company.name),['SumUp','Monzo','Barclays','Metro Bank','HSBC','Starling']);assert.match(banks[0].description,/content-detected Date, Reference, Type, Amount and Description columns/);assert.match(banks[1].description,/ISO dates/);assert.match(banks[2].description,/OCR-supported/);assert.match(banks[3].description,/money out, money in and balance columns/);assert.match(banks[4].description,/paid out, paid in and balance columns/);assert.match(banks[5].description,/heading-detected date, transaction, money in, money out and end-of-day balance columns/);});
 test('SumUp OCR follows table headings on shifted pages and gets direction from the transaction type',()=>{
   const header=(page,y,xs)=>[
     {page,text:'Date',x:xs[0],y,width:50,height:20},{page,text:'Reference',x:xs[1],y,width:90,height:20},{page,text:'Type',x:xs[2],y,width:110,height:20},{page,text:'Amount',x:xs[3],y,width:90,height:20},{page,text:'Description',x:xs[4],y,width:130,height:20}
@@ -1244,6 +1244,49 @@ test('SumUp empty statement pages are recognized without inventing transactions'
   const lines=[{page:1,text:'SumUp Account Statement',x:20,y:20},{page:1,text:'Date',x:20,y:100,width:50,height:20},{page:1,text:'Reference',x:120,y:100,width:90,height:20},{page:1,text:'Type',x:280,y:100,width:110,height:20},{page:1,text:'Amount',x:470,y:100,width:90,height:20},{page:1,text:'Description',x:620,y:100,width:130,height:20}];
   assert.deepEqual(P.parseOcrBank(lines,'SumUp Account Statement','empty.pdf'),[]);
   assert.deepEqual(P.parseOcrBank(lines,'','C:\\Statements\\Sum-UP\\empty.pdf'),[]);
+});
+test('Starling OCR follows statement headings across pages and reconciles printed balance checkpoints',()=>{
+  const lines=[
+    {page:1,text:'STARLING',x:30,y:10},{page:1,text:'Opening Balance',x:300,y:50},{page:1,text:'E0.00',x:1700,y:50},
+    {page:1,text:'DATE',x:100,y:100,width:50,height:20},{page:1,text:'TYPE',x:300,y:100,width:60,height:20},{page:1,text:'TRANSACTION',x:600,y:100,width:150,height:20},{page:1,text:'IN',x:1300,y:100,width:50,height:20},{page:1,text:'OUT',x:1500,y:100,width:60,height:20},{page:1,text:'END OF DAY',x:1700,y:70,width:100,height:20},
+    {page:1,text:'OPENING BALANCE',x:300,y:130,width:150,height:20},{page:1,text:'E100.00',x:1700,y:130,width:90,height:20},
+    {page:1,text:'01/08/2026',x:100,y:160,width:80,height:20},{page:1,text:'FASTER PAYMENT',x:300,y:160,width:130,height:20},{page:1,text:'Customer receipt',x:600,y:160,width:170,height:20},{page:1,text:'E20.00',x:1300,y:160,width:70,height:20},{page:1,text:'E120.00',x:1700,y:160,width:90,height:20},
+    // Windows OCR can emit a second copy of a row's date with a small
+    // baseline shift. Suppress it without collapsing the next transaction.
+    {page:1,text:'01/08/2026',x:112,y:169,width:80,height:20},
+    {page:1,text:'01/08/2026',x:100,y:200,width:80,height:20},{page:1,text:'CARD PAYMENT',x:300,y:200,width:120,height:20},{page:1,text:'Shop purchase',x:600,y:200,width:150,height:20},{page:1,text:'E5.50',x:1500,y:200,width:60,height:20},{page:1,text:'E114.50',x:1700,y:200,width:90,height:20},
+    {page:2,text:'1 2/08/2026',x:140,y:120,width:80,height:20},{page:2,text:'CARD PAYMENT',x:340,y:120,width:120,height:20},{page:2,text:'Taxi',x:640,y:120,width:70,height:20},{page:2,text:'E0.95',x:1540,y:120,width:60,height:20},{page:2,text:'E113.55',x:1740,y:120,width:90,height:20}
+  ];
+  const rows=P.parseOcrBank(lines,'Starling Bank account statement','starling.pdf');
+  assert.deepEqual(rows.map(row=>[row.date,row.amount,row.balance,row.profileId,row.status]),[
+    ['2026-08-01',20,120,'starling-bank','ACCEPTED'],['2026-08-01',-5.5,114.5,'starling-bank','ACCEPTED'],['2026-08-12',-0.95,113.55,'starling-bank','ACCEPTED']
+  ]);
+  assert.equal(rows[0].openingBalance,100);assert.equal(rows[0].starlingStatementSummary.openingBalance,0);assert.equal(rows[0].starlingStatementSummary.tableOpeningBalance,100);assert.match(rows[0].details,/FASTER PAYMENT: Customer receipt/);assert.equal(P.inspectBankBalances(rows).mismatches.length,0);
+});
+test('Starling OCR preserves the leading one when Windows OCR reads the pound and digit as El',()=>{
+  const lines=[
+    {page:1,text:'STARLING',x:30,y:10},{page:1,text:'DATE',x:100,y:100,width:50,height:20},{page:1,text:'TYPE',x:300,y:100,width:60,height:20},{page:1,text:'TRANSACTION',x:600,y:100,width:150,height:20},{page:1,text:'IN',x:1300,y:100,width:50,height:20},{page:1,text:'OUT',x:1500,y:100,width:60,height:20},{page:1,text:'END OF DAY',x:1700,y:70,width:100,height:20},
+    {page:1,text:'OPENING BALANCE',x:300,y:130,width:150,height:20},{page:1,text:'E1,000.00',x:1700,y:130,width:90,height:20},
+    {page:1,text:'01/08/2026',x:100,y:160,width:80,height:20},{page:1,text:'APPLE PAY',x:300,y:160,width:120,height:20},{page:1,text:'Coffee',x:600,y:160,width:70,height:20},{page:1,text:'El .29',x:1500,y:160,width:60,height:20},
+    {page:1,text:'01/08/2026',x:100,y:200,width:80,height:20},{page:1,text:'DIRECT DEBIT',x:300,y:200,width:120,height:20},{page:1,text:'Bright HR',x:600,y:200,width:90,height:20},{page:1,text:'El 34.64',x:1500,y:200,width:70,height:20},{page:1,text:'E864.07',x:1700,y:200,width:90,height:20}
+  ];
+  const rows=P.parseOcrBank(lines,'Starling Bank account statement','starling-pound-one.pdf');
+  assert.deepEqual(rows.map(row=>[row.payment,row.balance,row.status]),[[1.29,'','ACCEPTED'],[134.64,864.07,'ACCEPTED']]);
+  assert.equal(P.inspectBankBalances(rows).mismatches.length,0);
+});
+test('Starling OCR does not claim unrelated bank statements without Starling statement evidence',()=>{
+  const lines=[{page:1,text:'DATE',x:100,y:100,width:50},{page:1,text:'TYPE',x:300,y:100,width:60},{page:1,text:'TRANSACTION',x:600,y:100,width:150},{page:1,text:'IN',x:1300,y:100,width:50},{page:1,text:'OUT',x:1500,y:100,width:60},{page:1,text:'END OF DAY',x:1700,y:70,width:100}];
+  assert.deepEqual(P.parseOcrBank(lines,'','another-bank.pdf'),[]);
+});
+test('Starling focused retries replace a misread amount despite a small OCR baseline shift',()=>{
+  const lines=[
+    {page:1,text:'STARLING',x:30,y:10},{page:1,text:'DATE',x:100,y:100,width:50,height:20},{page:1,text:'TYPE',x:300,y:100,width:60,height:20},{page:1,text:'TRANSACTION',x:600,y:100,width:150,height:20},{page:1,text:'IN',x:1300,y:100,width:50,height:20},{page:1,text:'OUT',x:1500,y:100,width:60,height:20},{page:1,text:'END OF DAY',x:1700,y:70,width:100,height:20},
+    {page:1,text:'OPENING BALANCE',x:300,y:130,width:150,height:20},{page:1,text:'E1000.00',x:1700,y:130,width:90,height:20},
+    {page:1,text:'01/08/2026',x:100,y:160,width:80,height:20},{page:1,text:'CARD PAYMENT',x:300,y:160,width:120,height:20},{page:1,text:'Shop purchase',x:600,y:160,width:150,height:20},{page:1,text:'8.00',x:1500,y:160,width:60,height:20},{page:1,text:'E902.00',x:1700,y:160,width:90,height:20},
+    {page:1,text:'98.00',x:1500,y:179,width:60,height:20,starlingFocused:true}
+  ];
+  const rows=P.parseOcrBank(lines,'Starling Bank account statement','starling-retry.pdf');
+  assert.equal(rows.length,1);assert.equal(rows[0].payment,98);assert.equal(rows[0].balance,902);assert.equal(P.inspectBankBalances(rows).mismatches.length,0);
 });
 test('HSBC OCR follows labelled columns and carries a date across a page break',()=>{
   const lines=[
