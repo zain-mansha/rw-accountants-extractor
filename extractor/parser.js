@@ -2097,7 +2097,7 @@
     {id:'barclays-bank',name:'Barclays',category:'Bank statements',status:'Review',description:'OCR-supported statements with day and month transaction dates'},
     {id:'metro-bank',name:'Metro Bank',category:'Bank statements',status:'Review',description:'Column-based statements and online transaction reports with separate money out, money in and balance columns'},
     {id:'hsbc-bank',name:'HSBC',category:'Bank statements',status:'Under development',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
-    {id:'starling-bank',name:'Starling',category:'Bank statements',status:'Under development',description:'OCR-supported statements with heading-detected date, transaction, money in, money out and end-of-day balance columns'},
+    {id:'starling-bank',name:'Starling',category:'Bank statements',status:'Review',description:'OCR-supported statements with heading-detected date, transaction, money in, money out and end-of-day balance columns'},
     ...receiptProfiles.map(({id,name,category})=>({id,name,category,status:'Under development'})),
     ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status,formatTag,category})=>({id,name,category:category||'Invoices',...(status?{status}:{}),...(formatTag?{formatTag}:{})}))
   ];}
