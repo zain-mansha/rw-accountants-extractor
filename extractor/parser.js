@@ -2096,7 +2096,7 @@
     {id:'monzo-bank',name:'Monzo',category:'Bank statements',status:'Under development',description:'Digital PDF statements with ISO dates and CR/DR transactions'},
     {id:'barclays-bank',name:'Barclays',category:'Bank statements',status:'Review',description:'OCR-supported statements with day and month transaction dates'},
     {id:'metro-bank',name:'Metro Bank',category:'Bank statements',status:'Review',description:'Column-based statements and online transaction reports with separate money out, money in and balance columns'},
-    {id:'hsbc-bank',name:'HSBC',category:'Bank statements',status:'Under development',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
+    {id:'hsbc-bank',name:'HSBC',category:'Bank statements',status:'Review',description:'OCR-supported statements with labelled date, paid out, paid in and balance columns'},
     {id:'starling-bank',name:'Starling',category:'Bank statements',status:'Review',description:'OCR-supported statements with heading-detected date, transaction, money in, money out and end-of-day balance columns'},
     ...receiptProfiles.map(({id,name,category})=>({id,name,category,status:'Under development'})),
     ...invoiceProfiles.filter(profile=>!['generic','wz-delivery'].includes(profile.id)).map(({id,name,status,formatTag,category})=>({id,name,category:category||'Invoices',...(status?{status}:{}),...(formatTag?{formatTag}:{})}))
@@ -3395,7 +3395,7 @@
     const retryOcr=Boolean(isInvoiceDocument&&(profile.id==='dr-stuttee'||!resolvedNumber||!date||!totalFound||!vatFound));generic.originalInvoiceNumber=lyntonReference||takepaymentsReference||medisortReference||healthxchangeReference||sofwaveReference||generic.originalInvoiceNumber||resolvedNumber||number;
     const resolvedKind=exportInvoice?'INVOICE':documentEvidence.kind;
     return {...generic,invoiceNumber:resolvedNumber||number,invoiceNumberGenerated,invoiceNumberGeneratedReason,date,supplier:profile.name,total:totalFound?.value??(exactTotalProfiles.has(profile.id)?'':generic.total??''),vat:vatFound?.value??(exactVatProfiles.has(profile.id)?'':generic.vat??''),subtotal:subtotalFound?.value??generic.subtotal??'',currency:/\bEUR\b|Ã¢â€šÂ¬/i.test(text)?'EUR':/\bUSD\b|\$/i.test(text)?'USD':'GBP',documentType:resolvedKind,isInvoiceDocument,accepted:false,rejected:true,retryOcr,ocrConflictReason:supplierOcrConflictReason,rejectedReason:supplierOcrConflictReason||(isInvoiceDocument?'':'This document does not appear to be an invoice.')};
-  }  function anchoredInvoiceProfile(id,name,detect){const profile={id,name,kind:'supplier',status:'Under development',category:'Invoices',formatTag:'PDF only',detect};return {...profile,parse:(flat,source,lines)=>parseAnchoredInvoice(flat,source,lines,profile)};}
+  }  function anchoredInvoiceProfile(id,name,detect){const profile={id,name,kind:'supplier',status:'Review',category:'Invoices',formatTag:'PDF only',detect};return {...profile,parse:(flat,source,lines)=>parseAnchoredInvoice(flat,source,lines,profile)};}
   const invoiceProfiles=[
     {id:'amazon',name:'Amazon',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isAmazonInvoiceText,parse:(flat,source,lines)=>parseAmazonInvoice(flat,source,lines)},
     {id:'kin-global',name:'Kin Global Distribution Ltd',kind:'supplier',status:'Under development',category:'Invoices',formatTag:'PDF only',detect:isKinGlobalText,parse:(flat,source,lines)=>parseKinGlobalInvoice(flat,source,lines)},
