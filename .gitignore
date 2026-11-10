@@ -11,8 +11,3 @@ release/
 samples/
 license-server/data/
 license-server/keys/private.pem
-
-# The Extractor's pinned offline OCR runtime is intentionally vendored.
-!extractor/vendor/ocr/node_modules/
-!extractor/vendor/ocr/node_modules/**
-
