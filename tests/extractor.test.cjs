@@ -83,6 +83,31 @@ test('RAC profile reads printed summary fields and ignores invoice detail/suppor
   assert.deepEqual([summaryRejected.invoiceNumber,summaryRejected.date,summaryRejected.vat,summaryRejected.total,summaryRejected.status],['1240','2024-07-05','','','REJECTED'],'invoice header evidence preserves a rejected row when the printed summary box is unreadable');
   assert.ok(P.compatibleCompanies.some(company=>company.id==='rac-motoring-services'&&company.name==='RAC Motoring Services'&&company.category==='Invoices'&&company.status==='Review'&&company.formatTag===undefined));
 });
+test('EU LTD profile reads label-relative invoice and credit totals, skips non-invoice pages, and deduplicates scans',()=>{
+  const line=(page,text,x,y,width=String(text).length*9,height=20)=>({page,text,x,y,width,height,confidence:1});
+  const invoice=(page,{number='090S462702',date='02/07/26',vat='15.67',total='94.02',title='Sales Invoice'}={})=>[
+    line(page,'E.U. LTD',80,35),line(page,'Specialist Exhaust and Component Distributors',80,65),line(page,title,720,110),
+    ...(title==='Credit'?[line(page,'Credit To:',80,170)]:[line(page,'Invoice To:',80,170)]),line(page,'VAT Reg. No. 372 9612 33',780,170),
+    line(page,'Date',560,300),line(page,date,560,335),line(page,'Invoice No.',760,300),line(page,number,760,335),
+    line(page,'VAT',790,500),line(page,'99.99',900,520),line(page,'Net Total',650,850),line(page,'78.35',900,850),
+    line(page,'VAT',650,890),...(vat===''?[]:[line(page,vat,900,890)]),line(page,'Total Due',650,930),line(page,total,900,930),
+    line(page,'No Credit shall be given for parts returned',80,965)
+  ];
+  const statement=[line(3,'E.U. LTD',80,35),line(3,'STATEMENT',720,110),line(3,'Total Due',650,930),line(3,'999.99',900,930)];
+  const returns=[line(4,"Car Parts & Exhaust Distributors",80,35),line(4,'RETURNS COLLECTION NOTE',600,110),line(4,'INVOICE NO',500,400)];
+  const first=invoice(1),credit=invoice(2,{number:'090D174054',date:'30/07/26',vat:'-10.56',total:'-63.37',title:'Credit'}),duplicate=invoice(5),shifted=invoice(6).map(item=>({...item,x:item.x*1.7+240,y:item.y*1.6+310,width:item.width*1.7,height:item.height*1.6})),missingVat=invoice(7,{number:'090S462703',vat:''}),differentAmountSameTotal=invoice(8,{number:'090S462704'}),freeOfCharge=invoice(9,{number:'090S462705',vat:'F.O.C.',total:'F.O.C.'}),lines=[...first,...credit,...statement,...returns,...duplicate,...shifted,...missingVat,...differentAmountSameTotal,...freeOfCharge],rows=P.parseInvoiceBatch(lines.map(item=>item.text).join('\n'),'mixed-EU-LTD-scan.pdf',lines),byNumber=new Map(rows.map(row=>[row.originalInvoiceNumber,row]));
+  assert.equal(P.identifyInvoiceProfile('E.U. LTD Specialist Exhaust and Component Distributors VAT Reg. No. 372 9612 33').id,'eu-ltd');
+  assert.ok(P.compatibleCompanies.some(company=>company.id==='eu-ltd'&&company.name==='EU LTD'&&company.category==='Invoices'&&company.status==='Review'&&company.formatTag===undefined));
+  assert.deepEqual(rows.map(row=>[row.page,row.sourcePages,row.profileId,row.invoiceNumber,row.originalInvoiceNumber,row.date,row.supplier,row.vat,row.total,row.documentType,row.status]),[
+    [1,[1,5,6],'eu-ltd','2702','090S462702','2026-07-02','EU LTD',15.67,94.02,'INVOICE','ACCEPTED'],
+    [2,[2],'eu-ltd','4054','090D174054','2026-07-30','EU LTD',-10.56,-63.37,'CREDIT NOTE','ACCEPTED'],
+    [7,[7],'eu-ltd','2703','090S462703','2026-07-02','EU LTD','',94.02,'INVOICE','REJECTED'],
+    [8,[8],'eu-ltd','2704','090S462704','2026-07-02','EU LTD',15.67,94.02,'INVOICE','ACCEPTED'],
+    [9,[9],'eu-ltd','2705','090S462705','2026-07-02','EU LTD',0,0,'INVOICE','ACCEPTED']
+  ]);
+  assert.equal(byNumber.get('090S462703').retryOcr,true,'a missing printed VAT amount must be left blank and rejected, never calculated');
+  assert.equal(rows.some(row=>[3,4].includes(row.page)),false,'statements and returns forms must not create invoice rows');
+});
 test('RAC scanned sample extracts each summary invoice once and skips repair-detail pages',{skip:process.env.CLEARCOUNT_RUN_RAC_OCR!=='1'||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/RAC/RAC.pdf'))},()=>{
   const fixture=path.resolve(__dirname,'../samples/extractor/Invoices/RAC/RAC.pdf'),helper=path.resolve(__dirname,'../extractor/ocr-helper.ps1'),raw=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',fixture,'-Scale','2.5'],{encoding:'utf8',windowsHide:true,maxBuffer:100*1024*1024}),pages=raw.replace(/^\uFEFF/,'').split(/\r?\n/).filter(line=>line.startsWith('PAGE:')).map(line=>JSON.parse(line.slice(5))),lines=pages.flatMap(page=>page.lines||[]),rows=P.parseInvoiceBatch(pages.map(page=>page.text||'').join('\n'),fixture,lines),expected=[
     [1,'1517','32741517','2024-05-08',48,288],[4,'1275','32751275','2024-06-06',87,522],[6,'1276','32751276','2024-06-06',56,336],[8,'1238','32761238','2024-07-05',39,234],[10,'1239','32761239','2024-07-05',16,96]
@@ -91,6 +116,18 @@ test('RAC scanned sample extracts each summary invoice once and skips repair-det
   assert.deepEqual(rows.map(row=>[row.page,row.invoiceNumber,row.originalInvoiceNumber,row.date,row.vat,row.total]),expected);
   assert.ok(rows.every(row=>row.profileId==='rac-motoring-services'&&row.supplier==='RAC Motoring Services'&&row.status==='ACCEPTED'&&!row.retryOcr));
   assert.equal(new Set(rows.map(row=>row.originalInvoiceNumber)).size,rows.length);
+});
+test('EU LTD scanned samples extract every invoice and credit note without importing statements or return forms',{skip:process.env.CLEARCOUNT_RUN_EU_LTD_OCR!=='1'||!['EU 1.pdf','EU Ltd.pdf','EU3.pdf'].every(file=>fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/EU LTD',file)))},()=>{
+  const root=path.resolve(__dirname,'..'),helper=path.join(root,'extractor','ocr-helper.ps1'),files=['EU 1.pdf','EU Ltd.pdf','EU3.pdf'],allRows=[];
+  for(const file of files){
+    const source=path.resolve(root,'samples','extractor','Invoices','EU LTD',file),raw=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',source,'-Scale','2.5'],{encoding:'utf8',windowsHide:true,maxBuffer:100*1024*1024}),pages=raw.replace(/^\uFEFF/,'').split(/\r?\n/).filter(line=>line.startsWith('PAGE:')).map(line=>JSON.parse(line.slice(5))),lines=pages.flatMap(page=>page.lines||[]),rows=P.parseInvoiceBatch(pages.map(page=>page.text||'').join('\n'),source,lines),invoicePages=pages.map((page,index)=>({page:index+1,text:String(page.text||'')})).filter(item=>/\bSales\s+Invoice\b/i.test(item.text)||/\bCredit\s+To\s*:/i.test(item.text)).map(item=>item.page),representedPages=new Set(rows.flatMap(row=>row.sourcePages||[row.page]));
+    assert.ok(invoicePages.length>0,`${file} should contain invoice pages`);
+    for(const page of invoicePages)assert.ok(representedPages.has(page),`${file} invoice page ${page} must produce an invoice row`);
+    assert.ok(rows.every(row=>row.profileId==='eu-ltd'&&row.supplier==='EU LTD'&&row.status==='ACCEPTED'&&/^\d{4}$/.test(String(row.invoiceNumber))&&row.date&&Number.isFinite(Number(row.vat))&&Number.isFinite(Number(row.total))),`${file} invoice and credit-note rows must have all required fields`);
+    assert.ok(rows.every(row=>row.documentType==='INVOICE'||row.documentType==='CREDIT NOTE'),`${file} statements and returns pages must not be emitted as invoices`);
+    allRows.push(...rows);
+  }
+  const {rows:uniqueRows}=P.deduplicateInvoiceRows(allRows),identities=uniqueRows.map(row=>`${row.supplier}|${row.originalInvoiceNumber||row.invoiceNumber}|${row.documentType}|${row.date}`);assert.equal(new Set(identities).size,identities.length,'duplicate scans of one invoice must be collapsed across the selected PDFs');
 });
 test('GSF profile reads printed invoice footer, tolerates shifted scans, and skips statement and promo pages',()=>{
   const line=(page,text,x,y,width=String(text).length*9,height=20)=>({page,text,x,y,width,height,confidence:1});

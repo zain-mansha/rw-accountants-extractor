@@ -3548,6 +3548,66 @@
     const otherLines=[...pageLines.values()].flat().filter(line=>!consumed.has(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];for(const row of records)delete row.gsfGroupKey;
     return [...otherRows,...records].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
   }
+  function isEuLtdText(value){
+    const text=String(value||'');
+    return /\bE\s*\.?\s*U\s*\.?\s+LTD\b/i.test(text)||/SPECIALIST\s+EXHAUST\s+(?:AND|&)\s+COMPONENT\s+DISTRIBUTORS/i.test(text)||/372\s*9612\s*33/.test(text);
+  }
+  function euLtdPageType(lines,text=''){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),flat=String(text||items.map(line=>String(line.text||'')).join(' '));
+    if(/RETURNS\s+COLLECTION\s+NOTE/i.test(flat))return '';
+    if(!items.length){
+      if(/\bSALES\s+INVOICE\b/i.test(flat))return 'INVOICE';
+      if(/\bCREDIT\s+TO\s*:/i.test(flat)&&/\bINVOICE\s+NO\.?\b/i.test(flat)&&/\bTOTAL\s+DUE\b/i.test(flat))return 'CREDIT NOTE';
+      return '';
+    }
+    const topY=Math.min(...items.map(line=>Number(line.y)||0)),bottomY=Math.max(...items.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),topY+1),contentHeight=Math.max(1,bottomY-topY),top=items.filter(line=>((Number(line.y)||0)-topY)/contentHeight<.24),compact=value=>String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,''),topWords=top.map(line=>compact(line.text));
+    if(topWords.includes('SALESINVOICE'))return 'INVOICE';
+    // A credit-note page has a prominent Credit heading and a Credit To field.
+    // The supplier's standard terms mention “No Credit” near the footer, so a
+    // document-wide search for the word Credit would misclassify sales invoices.
+    const creditHeading=topWords.includes('CREDIT')||topWords.includes('CREDITNOTE'),creditRecipient=items.some(line=>/^\s*Credit\s+To\s*:?\s*$/i.test(String(line.text||'')));
+    if(creditHeading&&creditRecipient)return 'CREDIT NOTE';
+    return '';
+  }
+  function euLtdFooterValue(lines,labelPattern){
+    const numeric=anchoredInvoiceSummaryValue(lines,[labelPattern],{minimumYRatio:.58,maximumValueDistanceRatio:.05});if(numeric)return numeric;
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),candidates=[];
+    for(const label of items){if(!labelPattern.test(String(label.text||'').trim()))continue;const page=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),pageHeight=Math.max(...page.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),labelY=Number(label.y)||0;if(labelY<pageHeight*.58)continue;const height=Math.max(Number(label.height)||16,16),right=(Number(label.x)||0)+(Number(label.width)||0),pageWidth=Math.max(...page.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),inline=String(label.text||'').replace(labelPattern,' ').trim();
+      const values=[...(inline?[{text:inline,x:Number(label.x)||0,y:labelY}]:[]),...page.filter(line=>line!==label&&Number(line.x)>=right-height*.35&&Math.abs((Number(line.y)||0)-labelY)<=Math.max(height*1.6,1)).map(line=>({text:String(line.text||'').trim(),x:Number(line.x)||0,y:Number(line.y)||0}))];
+      for(const value of values)if(/^F\s*\.?\s*O\s*\.?\s*C\s*\.?$/i.test(value.text)||/^FREE\s+OF\s+CHARGE$/i.test(value.text))candidates.push({value:0,raw:value.text,label:String(label.text||''),distanceY:Math.abs(value.y-labelY),score:Math.abs(value.y-labelY)/height+Math.max(0,value.x-right)/pageWidth*3});
+    }
+    candidates.sort((a,b)=>a.score-b.score);return candidates[0]||null;
+  }
+  function euLtdPrintedInvoiceNumber(lines,text=''){
+    const compact=value=>String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,''),items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),labels=items.filter(line=>/^INVOIC(?:E|S)N[O0]$/.test(compact(line.text)));
+    for(const label of labels){
+      const samePage=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),pageWidth=Math.max(...samePage.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),height=Math.max(Number(label.height)||16,16),labelX=Number(label.x)||0,labelY=Number(label.y)||0;
+      const candidates=samePage.filter(line=>line!==label&&Math.abs((Number(line.x)||0)-labelX)<=Math.max(pageWidth*.07,height*3)&&(Number(line.y)||0)>=labelY-height*.8&&(Number(line.y)||0)-labelY<=Math.max(height*6,48)).map(line=>({line,match:String(line.text||'').trim().match(/\b\d{3}[SD]\d{6}\b/i)})).filter(item=>item.match).sort((a,b)=>Math.abs((Number(a.line.y)||0)-labelY)-Math.abs((Number(b.line.y)||0)-labelY));
+      if(candidates.length)return candidates[0].match[0].toUpperCase();
+    }
+    if(items.length)return '';
+    return String(text||'').match(/\bInvoice\s+No\.?\s*[:#-]?\s*(\d{3}[SD]\d{6})\b/i)?.[1]?.toUpperCase()||'';
+  }
+  function parseEuLtdInvoice(flat,source='',ocrLines){
+    const lines=Array.isArray(ocrLines)?ocrLines.filter(line=>line&&String(line.text||'').trim()):[],text=String(flat||lines.map(line=>String(line.text||'')).join(' ')),documentType=euLtdPageType(lines,text),invoiceDocument=Boolean(documentType),originalInvoiceNumber=invoiceDocument?euLtdPrintedInvoiceNumber(lines,text):'',date=invoiceDocument?anchoredInvoiceDate(text,lines):'',net=invoiceDocument?euLtdFooterValue(lines,/^\s*Net\s+Total\s*$/i):null,vat=invoiceDocument?euLtdFooterValue(lines,/^\s*VAT\s*$/i):null,total=invoiceDocument?euLtdFooterValue(lines,/^\s*Total\s+Due\s*$/i):null,complete=Boolean(invoiceDocument&&originalInvoiceNumber&&date&&vat&&total),reason=complete?'':!invoiceDocument?'This page is not an EU LTD invoice or credit note.':!originalInvoiceNumber?'EU LTD invoice number could not be confirmed from the printed document.':!date?'EU LTD invoice date could not be confirmed from the printed document.':!total?'Printed EU LTD Total Due could not be confirmed.':'Printed EU LTD VAT could not be confirmed.';
+    return {invoiceNumber:originalInvoiceNumber,originalInvoiceNumber,date,supplier:'EU LTD',subtotal:net?.value??'',vat:vat?.value??'',vatUnverified:!vat,vatMentioned:Boolean(vat),total:total?.value??'',currency:'GBP',source,documentType,isInvoiceDocument:invoiceDocument,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(invoiceDocument&&!complete),review:false,layoutId:'eu-ltd-printed-footer',profileId:'eu-ltd'};
+  }
+  function parseEuLtdBatch(pageLines,source,options={}){
+    const pages=[...pageLines.keys()].sort((a,b)=>a-b),euPages=new Set(pages.filter(page=>isEuLtdText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')))),returnPages=new Set(pages.filter(page=>/RETURNS\s+COLLECTION\s+NOTE/i.test((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')))),records=[],consumed=new Set([...euPages,...returnPages]),byInvoice=new Map();
+    for(const page of [...euPages].sort((a,b)=>a-b)){
+      const lines=pageLines.get(page)||[],text=lines.map(line=>String(line.text||'')).join('\n'),type=euLtdPageType(lines,text);if(!type)continue;
+      const row=parseInvoiceRobust(text,source,lines,options);row.page=page;row.sourcePages=[page];row.profileId='eu-ltd';
+      const key=row.originalInvoiceNumber&&row.date?`${row.originalInvoiceNumber}|${row.date}`:'';
+      if(key&&byInvoice.has(key)){
+        const previous=byInvoice.get(key);previous.sourcePages=[...new Set([...(previous.sourcePages||[previous.page]),page])].sort((a,b)=>a-b);previous.page=Math.min(previous.page,page);
+        if(previous.vat!==row.vat||previous.total!==row.total){previous.status='REJECTED';previous.accepted=false;previous.rejected=true;previous.rejectedReason='Repeated EU LTD invoice pages contain conflicting printed VAT or Total Due values.';previous.retryOcr=false;}
+        continue;
+      }
+      records.push(row);if(key)byInvoice.set(key,row);
+    }
+    const otherLines=[...pageLines.values()].flat().filter(line=>!consumed.has(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
+    return [...otherRows,...records].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
+  }
   function isRacMotoringText(value){return /\bRAC\s+MOTORING\s+SERVICES\b/i.test(String(value||''));}
   function racNearbyLabelValue(lines,labelPattern,acceptValue,{maxHorizontalRatio=.2,maxVerticalRatio=.015}={}){
     const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),pages=new Map();
@@ -3631,6 +3691,7 @@
     {id:'polish-village-bread',name:'Polish Village Bread',kind:'supplier',detect:isPolishVillageBreadText,parse:(flat,source,lines,options)=>parseWzInvoice(flat,source,lines,options)},
     {id:'gsf-car-parts',name:'GSF Car Parts Limited',kind:'supplier',status:'Review',category:'Invoices',detect:isGsfCarPartsText,parse:(flat,source,lines)=>parseGsfCarPartsInvoice(flat,source,lines)},
     {id:'rac-motoring-services',name:'RAC Motoring Services',kind:'supplier',status:'Review',category:'Invoices',detect:isRacMotoringText,parse:(flat,source,lines)=>parseRacInvoice(flat,source,lines)},
+    {id:'eu-ltd',name:'EU LTD',kind:'supplier',status:'Review',category:'Invoices',detect:isEuLtdText,parse:(flat,source,lines)=>parseEuLtdInvoice(flat,source,lines)},
     anchoredInvoiceProfile('acre-aesthetics','Acre Aesthetics Limited',text=>/\bACRE\s+AESTHETICS\s+LIMITED\b|acre-aesthetics/i.test(text)),
     anchoredInvoiceProfile('abbvie','AbbVie Ltd',text=>/\bABBVIE\s+(?:LTD|LIMITED)\b|\bABBVIE\s+HOUSE\b/i.test(text)),
     anchoredInvoiceProfile('siemens-finance','Siemens Financial Services Limited',text=>/\bSIEMENS\s+FINANCIAL\s+SERVICES\s+LIMITED\b/i.test(text)),
@@ -3734,6 +3795,7 @@
     if(kinPages.length)return parseKinKmProfileBatch(pageLines,source,'kin-global',options);
     const kmPages=pages.filter(page=>isKmDistributionText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
     if(kmPages.length)return parseKinKmProfileBatch(pageLines,source,'km-distribution',options);
+    if(pages.some(page=>isEuLtdText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))))return parseEuLtdBatch(pageLines,source,options);
     if(pages.some(page=>isRacMotoringText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))))return parseRacBatch(pageLines,source,options);
     const amazonPages=pages.filter(page=>isAmazonInvoiceText(amazonPositionedText(pageLines.get(page))));
     if(amazonPages.length){
