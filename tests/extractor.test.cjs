@@ -129,6 +129,59 @@ test('EU LTD scanned samples extract every invoice and credit note without impor
   }
   const {rows:uniqueRows}=P.deduplicateInvoiceRows(allRows),identities=uniqueRows.map(row=>`${row.supplier}|${row.originalInvoiceNumber||row.invoiceNumber}|${row.documentType}|${row.date}`);assert.equal(new Set(identities).size,identities.length,'duplicate scans of one invoice must be collapsed across the selected PDFs');
 });
+test('Parts Plus profile reads its printed footer, keeps credits negative, and skips statements',()=>{
+  const line=(page,text,x,y,width=String(text).length*9,height=20)=>({page,text,x,y,width,height,confidence:1});
+  const make=(page,{number='35029292',date='15/07/2026',net='45.97',vat='9.19',total='55.16',title='CASH INVOICE'}={})=>[
+    line(page,'Peterborough PartsPlus',80,35),line(page,'PartsPlus Accounts Payable',80,65),line(page,title,730,100),
+    line(page,'Date',930,300),line(page,date,930,330),line(page,'Invoice No.',580,300),line(page,number,580,330),
+    line(page,'Service/Goods',500,760),line(page,'42.31',800,760),line(page,'Net',700,800),line(page,net,1040,800),
+    line(page,'V.A.T.',700,840),...(vat===''?[]:[line(page,vat,1040,840)]),line(page,'Total',700,880),line(page,total,1040,880),
+    line(page,'Paid',700,920),line(page,'0.00',1040,920),line(page,'Owing',700,960),line(page,total,1040,960),line(page,'PartsPlus terms and conditions',80,1000)
+  ];
+  const credit=make(2,{number:'3769535',net:'20.90',vat:'4.18',total:'25.08',title:'CASH CREDIT NOTE'}),duplicate=make(4),shifted=make(5).map(item=>({...item,x:item.x*1.7+260,y:item.y*1.6+180,width:item.width*1.7,height:item.height*1.6})),missingVat=make(6,{number:'35029293',vat:''}),sameTotalDifferentInvoice=make(7,{number:'35029199'}),statement=[line(3,'PartsPlus Statement of Account',80,35),line(3,'Balance Due',700,800),line(3,'500.00',1040,800)],lines=[...make(1),...credit,...statement,...duplicate,...shifted,...missingVat,...sameTotalDifferentInvoice],rows=P.parseInvoiceBatch(lines.map(item=>item.text).join('\n'),'partsplus-mixed.pdf',lines);
+  assert.equal(P.identifyInvoiceProfile('PartsPlus Peterborough PartsPlus Accounts Payable partsplusuk.com').id,'parts-plus');
+  assert.ok(P.compatibleCompanies.some(company=>company.id==='parts-plus'&&company.name==='Parts Plus'&&company.category==='Invoices'&&company.status==='Review'&&company.formatTag===undefined));
+  assert.deepEqual(rows.map(row=>[row.page,row.sourcePages,row.profileId,row.invoiceNumber,row.originalInvoiceNumber,row.date,row.supplier,row.subtotal,row.vat,row.total,row.documentType,row.status]),[
+    [1,[1,4,5],'parts-plus','9292','35029292','2026-07-15','Parts Plus',45.97,9.19,55.16,'INVOICE','ACCEPTED'],
+    [2,[2],'parts-plus','9535','3769535','2026-07-15','Parts Plus',-20.9,-4.18,-25.08,'CREDIT NOTE','ACCEPTED'],
+    [6,[6],'parts-plus','9293','35029293','2026-07-15','Parts Plus',45.97,'',55.16,'INVOICE','REJECTED'],
+    [7,[7],'parts-plus','9199','35029199','2026-07-15','Parts Plus',45.97,9.19,55.16,'INVOICE','ACCEPTED']
+  ]);
+  assert.equal(rows.find(row=>row.page===6).retryOcr,true,'an unreadable VAT stays blank and is sent for retry; it is never calculated');
+  assert.equal(rows.some(row=>row.page===3),false,'a Parts Plus statement must not create an invoice row');
+});
+test('Parts Plus scanned sample keeps each printed invoice separate and retries an unreadable date',{skip:process.env.CLEARCOUNT_RUN_PARTS_PLUS_OCR!=='1'||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/PartsPlus/Parts Plus.pdf'))},()=>{
+  const root=path.resolve(__dirname,'..'),source=path.resolve(root,'samples','extractor','Invoices','PartsPlus','Parts Plus.pdf'),helper=path.join(root,'extractor','ocr-helper.ps1'),decode=raw=>raw.replace(/^\uFEFF/,'').split(/\r?\n/).filter(line=>line.startsWith('PAGE:')).map(line=>JSON.parse(line.slice(5))),read=(scale,regions)=>execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',source,'-Scale',String(scale),...(regions?.length?['-PageList',[...new Set(regions.map(region=>region.page))].join(','),'-InvoiceRetryRegions',JSON.stringify(regions)]:[])],{encoding:'utf8',windowsHide:true,maxBuffer:100*1024*1024}),pages=decode(read(2.5)),lines=pages.flatMap(page=>page.lines||[]),rows=P.parseInvoiceBatch(pages.map(page=>page.text||'').join('\n'),source,lines),needsRetry=rows.filter(row=>row.retryOcr);
+  assert.equal(pages.length,15);
+  assert.equal(rows.length,15,'all cash invoice and credit-note pages should produce one row');
+  assert.ok(rows.every(row=>row.profileId==='parts-plus'&&row.supplier==='Parts Plus'&&['INVOICE','CREDIT NOTE'].includes(row.documentType)));
+  assert.deepEqual(rows.filter(row=>row.status==='REJECTED').map(row=>[row.page,row.rejectedReason]),[[5,'Parts Plus invoice date could not be confirmed from the printed document.']]);
+  assert.equal(needsRetry.length,1,'only the page with an unreadable date needs a retry');
+  const firstPass=rows.find(row=>row.page===5),regions=P.invoiceRetryRegionsForRow(firstPass,lines);
+  assert.equal(regions.length,1,'a date-only retry should make one focused crop');
+  assert.deepEqual([regions[0].page,regions[0].profileId,regions[0].regionType],[5,'parts-plus','invoice-date']);
+  assert.ok(regions[0].height<Math.max(...lines.filter(line=>line.page===5).map(line=>line.y+line.height))*.15,'the date retry should crop a small text-anchored area, not the full page');
+  const retryPages=decode(read(5,regions)),retryLines=retryPages.flatMap(page=>page.lines||[]);
+  const overlaps=line=>{
+    const region=regions[0],x=Number(line.x)||0,y=Number(line.y)||0,width=Number(line.width)||0,height=Number(line.height)||0;
+    return Number(line.page)===region.page&&x<region.left+region.width&&x+width>region.left&&y<region.top+region.height&&y+height>region.top;
+  };
+  const contextLines=[...lines.filter(line=>!overlaps(line)),...retryLines],retryRows=P.parseInvoiceBatch(contextLines.map(line=>line.text||'').join('\n'),source,contextLines),retry=retryRows.find(row=>row.page===5),merged=P.mergeInvoiceRetryCandidate(firstPass,retry);
+  assert.deepEqual([retry.invoiceNumber,retry.originalInvoiceNumber,retry.date,retry.vat,retry.total,retry.status],['9881','34699881','2026-06-11',1.11,6.66,'ACCEPTED']);
+  const retried=P.invoiceRetryAccepted(rows.find(row=>row.page===5),retry,Boolean(merged.invoiceNumber&&merged.date&&merged.vat!==''&&merged.total!==''));assert.equal(retried,true);
+  const completed=rows.map(row=>row.page===5?{...merged,status:retried?'ACCEPTED':'REJECTED'}:row),expected=[
+    [1,'9292','35029292','2026-07-15',9.19,55.16,'INVOICE'],[2,'9199','35029199','2026-07-15',3.71,22.25,'INVOICE'],
+    [3,'5768','34925768','2026-07-04',9.08,54.47,'INVOICE'],[4,'8345','34878345','2026-06-30',8.46,50.77,'INVOICE'],
+    [5,'9881','34699881','2026-06-11',1.11,6.66,'INVOICE'],[6,'5482','34665482','2026-06-09',5.11,30.64,'INVOICE'],
+    [7,'1185','34571185','2026-05-30',17.67,106.03,'INVOICE'],[8,'8976','34298976','2026-05-01',1.24,7.44,'INVOICE'],
+    [9,'4153','33244153','2026-01-24',0.62,3.72,'INVOICE'],[10,'1512','35161512','2026-07-28',18.94,113.66,'INVOICE'],
+    [11,'9538','35129538','2026-07-24',2.59,15.54,'INVOICE'],[12,'9537','35129537','2026-07-24',14.5,86.98,'INVOICE'],
+    [13,'9535','3769535','2026-07-15',-4.18,-25.08,'CREDIT NOTE'],[14,'2879','35032879','2026-07-15',10.39,62.33,'INVOICE'],
+    [15,'9948','35059948','2026-07-17',3.31,19.85,'INVOICE']
+  ];
+  assert.deepEqual(completed.map(row=>[row.page,row.invoiceNumber,row.originalInvoiceNumber,row.date,row.vat,row.total,row.documentType,row.status]),expected.map(row=>[...row,'ACCEPTED']));
+  assert.equal(new Set(completed.map(row=>row.originalInvoiceNumber)).size,completed.length,'different invoice references stay distinct even when amounts repeat');
+});
 test('GSF profile reads printed invoice footer, tolerates shifted scans, and skips statement and promo pages',()=>{
   const line=(page,text,x,y,width=String(text).length*9,height=20)=>({page,text,x,y,width,height,confidence:1});
   const make=(page=1,{number='7431125627',date='03/06/26',vat='4.71',total='28.27'}={})=>[

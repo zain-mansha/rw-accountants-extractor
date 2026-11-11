@@ -3038,6 +3038,27 @@
     return null;
   }
   function invoiceRetryRegionsForRow(row,ocrLines){
+    if(row?.profileId==='parts-plus'){
+      const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),pages=[...new Set((row.sourcePages||[row.page]).map(Number).filter(page=>Number.isInteger(page)&&page>0))],regions=[];
+      const missingNumber=!row.originalInvoiceNumber,missingDate=!row.date,missingAmounts=row.total===''||row.total===null||row.total===undefined||row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified;
+      for(const page of pages){
+        const pageLines=lines.filter(line=>(Number(line.page)||1)===page);if(!pageLines.length)continue;
+        const heights=pageLines.map(line=>Number(line.height)||0).filter(height=>height>0&&height<100).sort((a,b)=>a-b),lineHeight=heights.length?heights[Math.floor(heights.length/2)]:18,pageRight=Math.max(...pageLines.map(line=>(Number(line.x)||0)+(Number(line.width)||0))),pageBottom=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),targets=[];
+        const addTargets=(pattern,{minimumY=0,maximumY=pageBottom}={})=>{for(const line of pageLines){const y=Number(line.y)||0;if(pattern.test(String(line.text||'').trim())&&y>=minimumY&&y<=maximumY)targets.push(line);}};
+        if(missingNumber)addTargets(/^\s*Invoice\s*(?:No\.?|Number|#)\s*:?\s*$/i,{maximumY:pageBottom*.62});
+        if(missingDate)addTargets(/^\s*Date\s*:?\s*$/i,{maximumY:pageBottom*.62});
+        if(missingAmounts){const footerY=pageBottom*.62;addTargets(/^\s*Net\s*$/i,{minimumY:footerY});addTargets(/^\s*V\s*\.?\s*A\s*\.?\s*T\s*\.?\s*$/i,{minimumY:footerY});addTargets(/^\s*Total\s*$/i,{minimumY:footerY});}
+        if(!targets.length)continue;
+        const rowTolerance=Math.max(lineHeight*2.2,pageBottom*.018,18),boxes=[];
+        for(const label of targets){
+          const x=Number(label.x)||0,y=Number(label.y)||0,height=Math.max(Number(label.height)||0,lineHeight),nearby=pageLines.filter(line=>line!==label&&Math.abs((Number(line.y)||0)-y)<=rowTolerance&&(Number(line.x)||0)>=x-lineHeight*1.5&&(Number(line.x)||0)<=pageRight);
+          const left=Math.max(0,Math.min(x,...nearby.map(line=>Number(line.x)||0))-lineHeight*2);let right=Math.min(pageRight,Math.max(x+(Number(label.width)||lineHeight),...nearby.map(line=>(Number(line.x)||0)+(Number(line.width)||lineHeight)))+lineHeight*2);if(missingDate&&!missingNumber&&!missingAmounts&&/^\s*Date\s*:?\s*$/i.test(String(label.text||'')))right=pageRight;const top=Math.max(0,Math.min(y,...nearby.map(line=>Number(line.y)||0))-lineHeight*2),bottom=Math.min(pageBottom,Math.max(y+height,...nearby.map(line=>(Number(line.y)||0)+(Number(line.height)||lineHeight)))+lineHeight*2);
+          if(right>left&&bottom>top)boxes.push({left,top,right,bottom});
+        }
+        if(boxes.length){const left=Math.min(...boxes.map(box=>box.left)),top=Math.min(...boxes.map(box=>box.top)),right=Math.max(...boxes.map(box=>box.right)),bottom=Math.max(...boxes.map(box=>box.bottom));regions.push({page,left,top,width:right-left,height:bottom-top,profileId:'parts-plus',regionType:missingAmounts?'invoice-footer':missingDate?'invoice-date':'invoice-number'});}
+      }
+      return regions;
+    }
     if(row?.profileId==='gsf-car-parts'){
       const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),pages=[...new Set((row.sourcePages||[row.page]).map(Number).filter(page=>Number.isInteger(page)&&page>0))],regions=[];
       const missingAmounts=row.total===''||row.total===null||row.total===undefined||row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified;
@@ -3608,6 +3629,41 @@
     const otherLines=[...pageLines.values()].flat().filter(line=>!consumed.has(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
     return [...otherRows,...records].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
   }
+  function isPartsPlusText(value){const text=String(value||'');return /\bPARTS\s*P[LI1]US\b/i.test(text)||/partsplusuk\.com/i.test(text);}
+  function partsPlusPageType(lines,text=''){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),flat=String(text||items.map(line=>String(line.text||'')).join(' '));
+    if(!items.length){if(/\bCASH\s+CREDIT\s+NOTE\b/i.test(flat))return 'CREDIT NOTE';if(/\bCASH\s+INVOICE\b/i.test(flat))return 'INVOICE';return '';}
+    const topY=Math.min(...items.map(line=>Number(line.y)||0)),bottomY=Math.max(...items.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),topY+1),height=Math.max(1,bottomY-topY),compact=value=>String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,''),top=items.filter(line=>((Number(line.y)||0)-topY)/height<.42).map(line=>compact(line.text));
+    if(top.some(value=>value==='CASHCREDITNOTE'))return 'CREDIT NOTE';
+    if(top.some(value=>value==='CASHINVOICE'))return 'INVOICE';
+    return '';
+  }
+  function partsPlusPrintedInvoiceNumber(lines,text=''){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),labels=items.filter(line=>/\binvoice\s*(?:no\.?|number|#)\s*:?\s*\d{0,9}/i.test(String(line.text||'')));
+    for(const label of labels){
+      const inline=String(label.text||'').match(/\binvoice\s*(?:no\.?|number|#)\s*:?\s*(\d{6,9})\b/i);if(inline)return inline[1];
+      const page=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),pageWidth=Math.max(...page.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),height=Math.max(Number(label.height)||16,16),x=Number(label.x)||0,y=Number(label.y)||0,candidates=page.filter(line=>line!==label&&/^\d{6,9}$/.test(String(line.text||'').trim())&&Math.abs((Number(line.x)||0)-x)<=Math.max(pageWidth*.07,height*2)&&(Number(line.y)||0)>y&&(Number(line.y)||0)-y<=Math.max(height*6,pageWidth*.06)).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0));
+      if(candidates.length)return String(candidates[0].text).trim();
+    }
+    if(items.length)return '';
+    return String(text||'').match(/\binvoice\s*(?:no\.?|number|#)\s*:?\s*(\d{6,9})\b/i)?.[1]||'';
+  }
+  function partsPlusFooterValue(lines,labelPattern){return anchoredInvoiceSummaryValue(lines,[labelPattern],{minimumYRatio:.68,maximumValueDistanceRatio:.045});}
+  function parsePartsPlusInvoice(flat,source='',ocrLines){
+    const lines=Array.isArray(ocrLines)?ocrLines.filter(line=>line&&String(line.text||'').trim()):[],text=String(flat||lines.map(line=>String(line.text||'')).join(' ')),documentType=partsPlusPageType(lines,text),invoiceDocument=Boolean(documentType),credit=documentType==='CREDIT NOTE',originalInvoiceNumber=invoiceDocument?partsPlusPrintedInvoiceNumber(lines,text):'',date=invoiceDocument?anchoredInvoiceDate(text,lines):'',net=invoiceDocument?partsPlusFooterValue(lines,/^\s*Net\s*$/i):null,vat=invoiceDocument?partsPlusFooterValue(lines,/^\s*V\s*\.?\s*A\s*\.?\s*T\s*\.?\s*$/i):null,total=invoiceDocument?partsPlusFooterValue(lines,/^\s*Total\s*$/i):null,withPolarity=value=>value===null||value===undefined?null:credit?-Math.abs(Number(value)):Number(value),signedVat=withPolarity(vat?.value??null),signedTotal=withPolarity(total?.value??null),signedNet=withPolarity(net?.value??null),complete=Boolean(invoiceDocument&&originalInvoiceNumber&&date&&signedVat!==null&&signedTotal!==null&&Number.isFinite(signedVat)&&Number.isFinite(signedTotal)),reason=complete?'':!invoiceDocument?'This page is not a Parts Plus invoice or credit note.':!originalInvoiceNumber?'Parts Plus invoice number could not be confirmed from the printed document.':!date?'Parts Plus invoice date could not be confirmed from the printed document.':signedTotal===null?'Printed Parts Plus Total could not be confirmed.':'Printed Parts Plus V.A.T. could not be confirmed.';
+    return {invoiceNumber:originalInvoiceNumber,originalInvoiceNumber,date,supplier:'Parts Plus',subtotal:signedNet??'',vat:signedVat??'',vatUnverified:signedVat===null,vatMentioned:signedVat!==null,total:signedTotal??'',currency:'GBP',source,documentType,isInvoiceDocument:invoiceDocument,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(invoiceDocument&&!complete),review:false,layoutId:'parts-plus-footer',profileId:'parts-plus'};
+  }
+  function parsePartsPlusBatch(pageLines,source,options={}){
+    const pages=[...pageLines.keys()].sort((a,b)=>a-b),partsPages=new Set(pages.filter(page=>isPartsPlusText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')))),records=[],consumed=new Set(partsPages),byInvoice=new Map();
+    for(const page of [...partsPages].sort((a,b)=>a-b)){
+      const lines=pageLines.get(page)||[],text=lines.map(line=>String(line.text||'')).join('\n'),type=partsPlusPageType(lines,text);if(!type)continue;
+      const row=parseInvoiceRobust(text,source,lines,options);row.page=page;row.sourcePages=[page];row.profileId='parts-plus';const key=row.originalInvoiceNumber&&row.date?`${row.originalInvoiceNumber}|${row.date}|${row.documentType}`:'';
+      if(key&&byInvoice.has(key)){const previous=byInvoice.get(key);previous.sourcePages=[...new Set([...(previous.sourcePages||[previous.page]),page])].sort((a,b)=>a-b);previous.page=Math.min(previous.page,page);if(previous.vat!==row.vat||previous.total!==row.total){previous.status='REJECTED';previous.accepted=false;previous.rejected=true;previous.rejectedReason='Repeated Parts Plus invoice pages contain conflicting printed V.A.T. or Total values.';previous.retryOcr=false;}continue;}
+      records.push(row);if(key)byInvoice.set(key,row);
+    }
+    const otherLines=[...pageLines.values()].flat().filter(line=>!consumed.has(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
+    return [...otherRows,...records].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
+  }
   function isRacMotoringText(value){return /\bRAC\s+MOTORING\s+SERVICES\b/i.test(String(value||''));}
   function racNearbyLabelValue(lines,labelPattern,acceptValue,{maxHorizontalRatio=.2,maxVerticalRatio=.015}={}){
     const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),pages=new Map();
@@ -3690,6 +3746,7 @@
     {id:'maspo',name:'Maspo',kind:'supplier',detect:flat=>/\bMASPO(?:\s+FOOD)?\s+LTD\b/i.test(flat)||maspoFooterInvoice(flat),parse:(flat,source,lines)=>parseMaspoInvoice(flat,source,lines)},
     {id:'polish-village-bread',name:'Polish Village Bread',kind:'supplier',detect:isPolishVillageBreadText,parse:(flat,source,lines,options)=>parseWzInvoice(flat,source,lines,options)},
     {id:'gsf-car-parts',name:'GSF Car Parts Limited',kind:'supplier',status:'Review',category:'Invoices',detect:isGsfCarPartsText,parse:(flat,source,lines)=>parseGsfCarPartsInvoice(flat,source,lines)},
+    {id:'parts-plus',name:'Parts Plus',kind:'supplier',status:'Review',category:'Invoices',detect:isPartsPlusText,parse:(flat,source,lines)=>parsePartsPlusInvoice(flat,source,lines)},
     {id:'rac-motoring-services',name:'RAC Motoring Services',kind:'supplier',status:'Review',category:'Invoices',detect:isRacMotoringText,parse:(flat,source,lines)=>parseRacInvoice(flat,source,lines)},
     {id:'eu-ltd',name:'EU LTD',kind:'supplier',status:'Review',category:'Invoices',detect:isEuLtdText,parse:(flat,source,lines)=>parseEuLtdInvoice(flat,source,lines)},
     anchoredInvoiceProfile('acre-aesthetics','Acre Aesthetics Limited',text=>/\bACRE\s+AESTHETICS\s+LIMITED\b|acre-aesthetics/i.test(text)),
@@ -3795,6 +3852,7 @@
     if(kinPages.length)return parseKinKmProfileBatch(pageLines,source,'kin-global',options);
     const kmPages=pages.filter(page=>isKmDistributionText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
     if(kmPages.length)return parseKinKmProfileBatch(pageLines,source,'km-distribution',options);
+    if(pages.some(page=>isPartsPlusText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))))return parsePartsPlusBatch(pageLines,source,options);
     if(pages.some(page=>isEuLtdText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))))return parseEuLtdBatch(pageLines,source,options);
     if(pages.some(page=>isRacMotoringText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))))return parseRacBatch(pageLines,source,options);
     const amazonPages=pages.filter(page=>isAmazonInvoiceText(amazonPositionedText(pageLines.get(page))));
