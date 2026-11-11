@@ -107,6 +107,8 @@ test('EU LTD profile reads label-relative invoice and credit totals, skips non-i
   ]);
   assert.equal(byNumber.get('090S462703').retryOcr,true,'a missing printed VAT amount must be left blank and rejected, never calculated');
   assert.equal(rows.some(row=>[3,4].includes(row.page)),false,'statements and returns forms must not create invoice rows');
+  const noisyReference=invoice(10,{number:"090S4'61704"}).map(item=>item.text==='Invoice No.'?{...item,text:'InvoiÃ© Ã„NO.'}:item),[recoveredReference]=P.parseInvoiceBatch(noisyReference.map(item=>item.text).join('\n'),'mixed-EU-LTD-scan.pdf',noisyReference);
+  assert.deepEqual([recoveredReference.originalInvoiceNumber,recoveredReference.invoiceNumber,recoveredReference.status],['090S461704','1704','ACCEPTED'],'a noisy printed label and punctuation inside the invoice reference are normalized without reading the filename');
 });
 test('RAC scanned sample extracts each summary invoice once and skips repair-detail pages',{skip:process.env.CLEARCOUNT_RUN_RAC_OCR!=='1'||!fs.existsSync(path.resolve(__dirname,'../samples/extractor/Invoices/RAC/RAC.pdf'))},()=>{
   const fixture=path.resolve(__dirname,'../samples/extractor/Invoices/RAC/RAC.pdf'),helper=path.resolve(__dirname,'../extractor/ocr-helper.ps1'),raw=execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',helper,'-Path',fixture,'-Scale','2.5'],{encoding:'utf8',windowsHide:true,maxBuffer:100*1024*1024}),pages=raw.replace(/^\uFEFF/,'').split(/\r?\n/).filter(line=>line.startsWith('PAGE:')).map(line=>JSON.parse(line.slice(5))),lines=pages.flatMap(page=>page.lines||[]),rows=P.parseInvoiceBatch(pages.map(page=>page.text||'').join('\n'),fixture,lines),expected=[
@@ -206,6 +208,10 @@ test('GSF profile reads printed invoice footer, tolerates shifted scans, and ski
   assert.equal(firstPass.status,'REJECTED','a first pass without the printed summary remains rejected and queues the retry');
   assert.deepEqual([retryCandidate.vat,retryCandidate.total,retryCandidate.status],[3.29,19.75,'ACCEPTED'],'the focused footer retry reads printed VAT and Total values');
   assert.equal(P.invoiceRetryAccepted(merged,retryCandidate,retryComplete),true,'a complete, invoice-number-matched GSF retry is accepted');
+  const incompleteFocusedFooter=[...retryIdentity,...[
+    line(10,'XYAT%q',650,2400),line(10,'Ã†ODE GOODS',850,2400),line(10,'20.00',690,2450),line(10,'16.46',1120,2450),line(10,'3.29',1360,2450)
+  ].map(item=>({...item,gsfRetryFocused:true}))],[incompleteRetry]=parse([incompleteFocusedFooter]);
+  assert.deepEqual([incompleteRetry.vat,incompleteRetry.total,incompleteRetry.status],['','', 'REJECTED'],'a partial focused crop cannot substitute net or item-table figures for the printed footer VAT and Total');
   const focusedIdentity=make(13,{number:'7431130364',date:'10/07/26',vat:'',total:''}).filter(item=>item.y<500),focusedFooter=[line(13,'CODE.',911,2377),line(13,'GOODS',1086,2377),line(13,'20.00',723,2425),line(13,'68.61',1105,2429),line(13,'13.72',1310,2429),line(13,'GOODS',1819,2408),line(13,'13.72',2130,2478),line(13,'82.33',2128,2553)].map(item=>({...item,gsfRetryFocused:true})),[focusedStack]=parse([[...focusedIdentity,...focusedFooter]]);
   assert.deepEqual([focusedStack.vat,focusedStack.total,focusedStack.status],[13.72,82.33,'ACCEPTED'],'a retry uses the printed VAT breakdown and aligned footer total even when first-pass labels were garbled');
   const focusedThreeRow=[...make(14,{number:'7431130365',date:'10/07/26',vat:'',total:''}).filter(item=>item.y<500),...[
@@ -236,6 +242,13 @@ test('PowerShell retry JSON is parsed as a flat list of page regions',()=>{
   const script="$regions=ConvertFrom-Json -InputObject '[{\"page\":2},{\"page\":3},{\"page\":10}]'; if($regions.Count -ne 3 -or @($regions | Where-Object { $_.page -isnot [int] }).Count -ne 0){throw 'retry regions were nested or their page values were not integers'}; $regions | ForEach-Object { [int]$_.page }";
   const output=execFileSync('powershell.exe',['-NoProfile','-Command',script],{encoding:'utf8',windowsHide:true}).trim().split(/\r?\n/);
   assert.deepEqual(output,['2','3','10']);
+});
+test('PowerShell OCR line coordinates are normalized from the decoded bitmap size',()=>{
+  const helper=fs.readFileSync(path.join(__dirname,'..','extractor','ocr-helper.ps1'),'utf8');
+  assert.ok(helper.includes('$geometryScaleX=([double]$page.Size.Width*2.5)/[double]$bitmap.PixelWidth'));
+  assert.ok(helper.includes('$cropGeometryScaleX=([double]$sourceWidth*2.5)/[double]$software.PixelWidth'));
+  assert.ok(helper.includes('$cropGeometryScaleY=([double]$sourceHeight*2.5)/[double]$software.PixelHeight'));
+  assert.ok(!helper.includes('$geometryScale=2.0/$Scale'));
 });
 test('Parkers profile reads invoice identity and printed footer cells without using VAT rate or item prices',()=>{
   const line=(page,text,x,y,width=String(text).length*9,height=20)=>({page,text,x,y,width,height,confidence:1});

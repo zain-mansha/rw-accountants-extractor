@@ -3070,7 +3070,7 @@
         if(missingAmounts){
           const footerAnchor=pageLines.filter(line=>/please\s+(?:remit\s+to\s+the\s+below\s+bank\s+details|make\s+cheques\s+payable)|account\s+name\s*:/i.test(String(line.text||''))).sort((a,b)=>(Number(b.y)||0)-(Number(a.y)||0))[0];
           const summaryEvidence=pageLines.filter(line=>(Number(line.y)||0)>=pageBottom*.7&&(gsfSummaryLabelKind(line)||anchoredInvoiceMoneyValues(line.text).length)),evidenceLeft=summaryEvidence.length?Math.max(0,Math.min(...summaryEvidence.map(line=>Number(line.x)||0))-lineHeight*14):0,evidenceTop=summaryEvidence.length?Math.max(0,Math.min(...summaryEvidence.map(line=>Number(line.y)||0))-lineHeight*6):0,evidenceBottom=summaryEvidence.length?Math.min(pageBottom,Math.max(...summaryEvidence.map(line=>(Number(line.y)||0)+(Number(line.height)||lineHeight)))+lineHeight*7):0;
-          const anchorY=footerAnchor?Number(footerAnchor.y)||0:pageBottom-lineHeight*12,top=summaryEvidence.length?evidenceTop:Math.max(0,anchorY-lineHeight*15),bottom=summaryEvidence.length?evidenceBottom:Math.min(pageBottom,anchorY+lineHeight*7),left=summaryEvidence.length?evidenceLeft:0,right=pageRight;
+          const anchorY=footerAnchor?Number(footerAnchor.y)||0:pageBottom-lineHeight*12,top=summaryEvidence.length?evidenceTop:Math.max(0,anchorY-lineHeight*15),bottom=summaryEvidence.length?evidenceBottom:Math.min(pageBottom,anchorY+lineHeight*7),left=summaryEvidence.length?evidenceLeft:0,right=pageRight+lineHeight*8;
           if(right>left&&bottom>top)regions.push({page,left,top,width:right-left,height:bottom-top,profileId:'gsf-car-parts',regionType:'footer-summary'});
         }else if(missingIdentity){
           const accountDateAnchor=!row.date?pageLines.find(line=>(Number(line.y)||0)<pageBottom*.52&&/(?:^|\D)743\d{4}(?=\D|$)/.test(String(line.text||''))):null;
@@ -3525,10 +3525,11 @@
         if(rightAligned&&focusedRows.length===3&&focusedRows.every(row=>row.value===0)&&focusedFocCount>=3){results.push({page,total:0,vat:0,totalEvidence:'printed F.O.C. total row in GSF footer summary',vatEvidence:'printed F.O.C. VAT row in GSF footer summary'});continue;}
         if(rightAligned&&focusedLabels.length&&focusedRows.length>=3){const vatRow=focusedRows.at(-2),totalRow=focusedRows.at(-1);results.push({page,total:totalRow.value,vat:vatRow.value,totalEvidence:'last printed row in focused GSF footer summary',vatEvidence:'preceding printed row in focused GSF footer summary'});continue;}
         if(rightAligned&&focusedLabels.length&&focusedRows.length===2&&focusedVat!==null&&Math.abs(focusedRows[0].value-focusedVat)<0.005){results.push({page,total:focusedRows.at(-1).value,vat:focusedVat,totalEvidence:'last printed row in focused GSF footer summary',vatEvidence:'matching printed GSF VAT breakdown cell'});continue;}
-        // Fall through to the existing label/table parser. It may still have
-        // a fully confirmed tax breakdown even when the focused crop missed
-        // one of the summary-box rows. Partial legacy matches are discarded
-        // below so a damaged label cannot overwrite a first-pass value.
+        // Do not fall back to the large item/tax table when a focused footer
+        // crop is incomplete. Partial OCR can otherwise pair the printed net
+        // amount and VAT with a nearby VAT cell as if they were the footer
+        // VAT and total. Leave both unconfirmed for manual review instead.
+        results.push({page,total:null,vat:null,totalEvidence:'',vatEvidence:''});continue;
       }
       const totalLabels=labels.filter(item=>item.kind==='total').map(item=>({...item,found:gsfLineMoney(items,item.line)})).filter(item=>item.found).sort((a,b)=>(Number(b.line.y)||0)-(Number(a.line.y)||0)||(Number(b.line.x)||0)-(Number(a.line.x)||0));
       let total=totalLabels[0]||null;
@@ -3600,10 +3601,10 @@
     candidates.sort((a,b)=>a.score-b.score);return candidates[0]||null;
   }
   function euLtdPrintedInvoiceNumber(lines,text=''){
-    const compact=value=>String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,''),items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),labels=items.filter(line=>/^INVOIC(?:E|S)N[O0]$/.test(compact(line.text)));
+    const compact=value=>String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,''),items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),labels=items.filter(line=>{const value=compact(line.text);return value.length<=20&&/INVOI/.test(value)&&/N[O0]/.test(value);});
     for(const label of labels){
       const samePage=items.filter(line=>(Number(line.page)||1)===(Number(label.page)||1)),pageWidth=Math.max(...samePage.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),height=Math.max(Number(label.height)||16,16),labelX=Number(label.x)||0,labelY=Number(label.y)||0;
-      const candidates=samePage.filter(line=>line!==label&&Math.abs((Number(line.x)||0)-labelX)<=Math.max(pageWidth*.07,height*3)&&(Number(line.y)||0)>=labelY-height*.8&&(Number(line.y)||0)-labelY<=Math.max(height*6,48)).map(line=>({line,match:String(line.text||'').trim().match(/\b\d{3}[SD]\d{6}\b/i)})).filter(item=>item.match).sort((a,b)=>Math.abs((Number(a.line.y)||0)-labelY)-Math.abs((Number(b.line.y)||0)-labelY));
+      const candidates=samePage.filter(line=>line!==label&&Math.abs((Number(line.x)||0)-labelX)<=Math.max(pageWidth*.07,height*3)&&(Number(line.y)||0)>=labelY-height*.8&&(Number(line.y)||0)-labelY<=Math.max(height*6,48)).map(line=>({line,match:compact(line.text).match(/\d{3}[SD]\d{6}/i)})).filter(item=>item.match).sort((a,b)=>Math.abs((Number(a.line.y)||0)-labelY)-Math.abs((Number(b.line.y)||0)-labelY));
       if(candidates.length)return candidates[0].match[0].toUpperCase();
     }
     if(items.length)return '';
