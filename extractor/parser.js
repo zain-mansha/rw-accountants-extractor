@@ -1297,6 +1297,113 @@
     const text=String(value||'');
     return /\bPARKERS\b/i.test(text)||/Parker\s+Motor\s+Services\s+Ltd/i.test(text)||/thepartspeople\.co\.uk/i.test(text);
   }
+  function isBanozeText(value){
+    const text=String(value||'');
+    return /\bBANOZE\b/i.test(text)||/banoze\.co\.uk|info\s*@\s*banoze/i.test(text)||/421\s*756\s*895/.test(text)||(/\bBNZ\s*20\d{6,}\b/i.test(text)&&/\b(?:GOODS\s+)?TOTAL\b/i.test(text));
+  }
+  function banozeInvoicePage(lines,text=''){
+    const content=String(text||lines.map(line=>String(line.text||'')).join(' '));
+    if(!isBanozeText(content))return false;
+    const invoiceHeading=/\bINVOICE\b/i.test(content)||/\bKEEP\s+INVOICE\s+AS\s+PROOF\s+OF\s+DELIVERY\b/i.test(content),identifiedInvoice=/\bINVOICE\s*(?:TO|NO\.?|NUMBER|N[O0])\b|\bKEEP\s+INVOICE\s+AS\s+PROOF\s+OF\s+DELIVERY\b/i.test(content),number=/\bBNZ\s*20\d{6,}\b/i.test(content),summaryPage=/\b(?:invoice|account|customer|delivery|order)\s+summary\b|\bsummary\s+(?:of|for|page)\b/i.test(content);
+    if(summaryPage&&!identifiedInvoice&&!number)return false;
+    return invoiceHeading||number;
+  }
+  function banozeInvoiceNumber(text,lines){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim());
+    if(!items.length){const direct=String(text||'').match(/BNZ\s*[-:#.]?\s*([0-9OIL|]{7,})/i);return direct?`BNZ${direct[1].replace(/[Oo]/g,'0').replace(/[Il|]/g,'1')}`:'';}
+    const pages=new Map();for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}
+    const found=[];
+    for(const pageLines of pages.values()){
+      const pageHeight=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),header=pageLines.filter(line=>(Number(line.y)||0)<pageHeight*.3),labels=header.filter(line=>/invoi|nvoice|rnvoice|1nvoice/i.test(String(line.text||''))||/\b(?:BNZ|NZ\s*20)/i.test(String(line.text||'')));
+      for(const label of labels){
+        const height=Math.max(Number(label.height)||16,16),labelY=Number(label.y)||0,row=header.filter(line=>Math.abs((Number(line.y)||0)-labelY)<=Math.max(height*1.25,20)).sort((a,b)=>(Number(a.x)||0)-(Number(b.x)||0)),compact=row.map(line=>String(line.text||'')).join(' ').replace(/[^A-Z0-9]/gi,'');
+        const candidates=[];
+        for(const match of compact.matchAll(/BNZ([0-9OIL|]{7,})/gi))candidates.push(`BNZ${match[1]}`);
+        // OCR can drop the first B or split digits. Repair that prefix only
+        // on the same header row as the printed invoice label.
+        for(const match of compact.matchAll(/NZ(20[0-9OIL|]{6,})/gi))candidates.push(`BNZ${match[1]}`);
+        for(const match of compact.matchAll(/(?:INVO|NVOICE|RNVOICE|1NVOICE)[A-Z0-9]*?(20[0-9OIL|]{6,})/gi))candidates.push(`BNZ${match[1]}`);
+        for(const raw of candidates){const normalized=raw.replace(/[Oo]/g,'0').replace(/[Il|]/g,'1');if(/^BNZ(?:20\d{6,}|\d{7,})$/.test(normalized))found.push(normalized);}
+      }
+    }
+    const unique=[...new Set(found)];return unique.length===1?unique[0]:'';
+  }
+  function banozeLabelMatches(text,kind){
+    const raw=String(text||'').trim().toUpperCase();if(kind==='TOTAL'&&/\bGOODS\b/i.test(raw))return false;
+    const label=raw.replace(/0/g,'O').replace(/[^A-Z]/g,'');
+    if(kind==='VAT')return ['VAT','VA','VAI'].includes(label);
+    return ['TOTAL','TOTA','TOTL','TOAL'].includes(label);
+  }
+  function banozeMoneyValues(value){
+    const raw=String(value||'')
+      .replace(/\bE\s*[Il|]{2}(?=[.,]\s*[0-9OIl|]{2}\b)/gi,'£11')
+      .replace(/\bC\s*[Il|]O(?=[.,]\s*[0-9OIl|]{2}\b)/gi,'£10')
+      .replace(/^\s*[fF]\s*(?=\d)/,'£')
+      .replace(/(?<=\.)[Ss](?=\d{1,2}\b)/g,'5')
+      // Faint footer decimal points can be recognized as dashes. Normalize
+      // only a complete two-digit cents suffix, e.g. OCR `118-33` -> `118.33`.
+      .replace(/(^|[^\d])([0-9OIl|]{1,3})\s*[-–—]\s*([0-9OIl|]{2})(?!\d)/g,(_match,prefix,major,cents)=>`${prefix}${major}.${cents}`)
+      .replace(/^\s*C\s*(\d{3,})[Ss](\d)\s*$/i,(_match,major,_centsFirst,centsLast)=>`£${major}.5${centsLast}`);
+    return anchoredInvoiceMoneyValues(raw);
+  }
+  function banozeFooterAmount(lines,kind,variantPass=false){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),pages=new Map();
+    for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}
+    if(!variantPass){
+      for(const pageLines of pages.values()){
+        const variants=[...new Set(pageLines.filter(line=>line.banozeVariant!==undefined&&line.banozeVariant!==null).map(line=>String(line.banozeVariant)))];if(!variants.length)continue;
+        const readings=variants.map(variant=>banozeFooterAmount(pageLines.filter(line=>line.banozeVariant===undefined||line.banozeVariant===null||String(line.banozeVariant)===variant),kind,true)).filter(value=>value!==null),unique=[...new Set(readings.map(value=>Number(value).toFixed(2)))];return unique.length===1?Number(unique[0]):null;
+      }
+    }
+    for(const pageLines of pages.values()){
+      const pageHeight=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),pageWidth=Math.max(...pageLines.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),minimumY=pageHeight*.58;
+      const labels=pageLines.filter(line=>banozeLabelMatches(line.text,kind)&&(Number(line.y)||0)>=minimumY).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0));
+      const candidates=[];
+      for(const label of labels){
+        const inline=banozeMoneyValues(String(label.text||''));
+        for(const money of inline)candidates.push({value:money.value,distance:0,horizontal:0});
+        const labelY=Number(label.y)||0,labelX=Number(label.x)||0,labelHeight=Math.max(Number(label.height)||16,16),maxDistance=Math.max(pageHeight*.035,labelHeight*3,24),maxHorizontal=Math.max(pageWidth*.075,labelHeight*3,24);
+        for(const line of pageLines){const y=Number(line.y)||0,x=Number(line.x)||0,distance=y-labelY;if(line===label||distance<=0||distance>maxDistance)continue;const lineText=String(line.text||'');if(kind==='TOTAL'&&/\d[.,]\s*\d{2}\s*[-–—]\s*$/.test(lineText))continue;const moneyValues=banozeMoneyValues(lineText),lineWidth=Math.max(Number(line.width)||0,0),labelCenter=labelX+Math.max(Number(label.width)||0,0)/2;if(!moneyValues.length)continue;if(moneyValues.length===1){const money=moneyValues[0],tokenCenter=x+((money.index+String(money.raw||'').length/2)/Math.max(lineText.length,1))*lineWidth,horizontal=Math.abs(tokenCenter-labelCenter);if(horizontal<=maxHorizontal)candidates.push({value:money.value,distance,horizontal});continue;}if(!lineWidth||labelCenter<x-maxHorizontal||labelCenter>x+lineWidth+maxHorizontal)continue;const positioned=moneyValues.map(money=>({value:money.value,distance,horizontal:Math.abs((x+((money.index+String(money.raw||'').length/2)/Math.max(lineText.length,1))*lineWidth)-labelCenter)})).sort((a,b)=>a.horizontal-b.horizontal);if(positioned[0].horizontal<=maxHorizontal)candidates.push(positioned[0]);}
+      }
+      const values=[...new Set(candidates.map(item=>Number(item.value).toFixed(2)))];
+      if(values.length===1)return Number(values[0]);
+      if(candidates.length){candidates.sort((a,b)=>a.distance-b.distance||a.horizontal-b.horizontal);const best=candidates[0],ties=candidates.filter(item=>Math.abs(item.distance-best.distance)<=Math.max(Number(labels[0]?.height)||16,1)&&Math.abs(item.horizontal-best.horizontal)<=pageWidth*.01);if(new Set(ties.map(item=>Number(item.value).toFixed(2))).size===1)return Number(best.value);}
+    }
+    return null;
+  }
+  function parseBanozeInvoice(text,source='',ocrLines){
+    const lines=Array.isArray(ocrLines)?ocrLines.filter(line=>line&&String(line.text||'').trim()):[],content=String(text||lines.map(line=>String(line.text||'')).join('\n')),isInvoiceDocument=banozeInvoicePage(lines,content);
+    let originalInvoiceNumber=isInvoiceDocument?banozeInvoiceNumber(content,lines):'',printedDate=isInvoiceDocument?anchoredInvoiceDate(content,lines):'';
+    const headerVariants=[...new Set(lines.filter(line=>line.banozeHeaderVariant!==undefined&&line.banozeHeaderVariant!==null).map(line=>String(line.banozeHeaderVariant)))];
+    if(headerVariants.length){
+      const untagged=lines.filter(line=>line.banozeHeaderVariant===undefined||line.banozeHeaderVariant===null);originalInvoiceNumber=banozeInvoiceNumber('',untagged);printedDate=anchoredInvoiceDate('',untagged);const numberYear=String(originalInvoiceNumber).match(/^BNZ(20\d{2})/i)?.[1]||'';
+      if(!originalInvoiceNumber){const candidates=headerVariants.map(variant=>banozeInvoiceNumber('',[...untagged,...lines.filter(line=>String(line.banozeHeaderVariant)===variant)])).filter(Boolean),counts=new Map();for(const candidate of candidates)counts.set(candidate,(counts.get(candidate)||0)+1);const agreed=[...counts].filter(([,count])=>count>=2);if(agreed.length===1)originalInvoiceNumber=agreed[0][0];}
+      if(!printedDate||numberYear&&printedDate.slice(0,4)!==numberYear){const candidates=headerVariants.map(variant=>anchoredInvoiceDate('',[...untagged,...lines.filter(line=>String(line.banozeHeaderVariant)===variant)])).filter(Boolean),counts=new Map();for(const candidate of candidates)counts.set(candidate,(counts.get(candidate)||0)+1);const agreed=[...counts].filter(([,count])=>count>=2);if(agreed.length===1)printedDate=agreed[0][0];}
+    }
+    const numberYear=String(originalInvoiceNumber).match(/^BNZ(20\d{2})/i)?.[1]||'',date=numberYear&&printedDate&&printedDate.slice(0,4)!==numberYear?'':printedDate,readVat=isInvoiceDocument?banozeFooterAmount(lines,'VAT'):null,total=isInvoiceDocument?banozeFooterAmount(lines,'TOTAL'):null;
+    // A VAT candidate at least as large as the printed gross amount is almost
+    // certainly an OCR splice from the rules/adjacent columns (for example,
+    // a horizontal rule joined to the VAT digits). Do not post it as VAT.
+    const vatLooksSpliced=readVat!==null&&total!==null&&Math.abs(readVat)>=Math.abs(total)&&Math.abs(total)>0,vat=vatLooksSpliced?null:readVat,supplier='Banoze Ltd',invoiceNumberGenerated=Boolean(isInvoiceDocument&&!originalInvoiceNumber),referencePage=lines.length?Math.min(...lines.map(line=>Number(line.page)||1)):1,generatedNumber=invoiceNumberGenerated?generatedInvoiceReference('banoze',date,`${source}|PAGE:${referencePage}|${content}`):'',invoiceNumber=originalInvoiceNumber||generatedNumber,complete=Boolean(isInvoiceDocument&&invoiceNumber&&date&&vat!==null&&total!==null&&Number.isFinite(vat)&&Number.isFinite(total)),reason=complete?'':!isInvoiceDocument?'This page is not a Banoze invoice.':!date?'Banoze invoice date could not be confirmed from the printed document.':total===null?'Printed Banoze TOTAL could not be confirmed.':'Printed Banoze VAT could not be confirmed independently from the invoice footer.';
+    return {invoiceNumber,originalInvoiceNumber:originalInvoiceNumber||generatedNumber,invoiceNumberGenerated,invoiceNumberGeneratedReason:invoiceNumberGenerated?`No readable invoice number was printed; generated unique internal reference ${generatedNumber}.`:'',date,supplier,subtotal:'',vat:vat??'',vatUnverified:vat===null,vatMentioned:vat!==null,total:total??'',currency:'GBP',source,documentType:isInvoiceDocument?'INVOICE':'NON-INVOICE',isInvoiceDocument,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(isInvoiceDocument&&!complete),review:false,layoutId:'banoze-footer-summary',profileId:'banoze'};
+  }
+  function parseBanozeBatch(pageLines,source,options={}){
+    const pages=[...pageLines.keys()].sort((a,b)=>a-b),banozePages=new Set(pages.filter(page=>isBanozeText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')))),records=[],consumed=new Set(banozePages);
+    for(const page of [...banozePages].sort((a,b)=>a-b)){
+      const items=pageLines.get(page)||[],text=items.map(line=>String(line.text||'')).join('\n');if(!banozeInvoicePage(items,text))continue;
+      const row=parseInvoiceRobust(text,source,items,options);row.page=page;row.sourcePages=[page];row.profileId='banoze';records.push(row);
+    }
+    const otherLines=pages.filter(page=>!consumed.has(page)).flatMap(page=>{const items=pageLines.get(page)||[],text=items.map(line=>String(line.text||'').trim()).filter(Boolean).join(' '),summaryPage=/\b(?:invoice|account|customer|delivery|order)\s+summary\b|\bsummary\s+(?:of|for|page)\b/i.test(text),hasDocumentCue=/\b(?:invoice|bill|credit\s+note|receipt|order|delivery\s+note)\b/i.test(text);return summaryPage||!hasDocumentCue?[]:items;}),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
+    return [...otherRows,...records].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
+  }
+  function matchBanozeFullPageRetryCandidate(row,candidates){
+    const compact=value=>String(value||'').replace(/[^A-Z0-9]/gi,'').toUpperCase(),page=Number(row?.page),currentRef=compact(row?.originalInvoiceNumber),matches=(Array.isArray(candidates)?candidates:[]).filter(candidate=>{
+      if(candidate?.profileId!=='banoze'||candidate.accepted!==true||Number(candidate.page)!==page)return false;
+      if(!row?.invoiceNumberGenerated){const retryRef=compact(candidate.originalInvoiceNumber);if(!retryRef||currentRef&&!(retryRef===currentRef||retryRef.startsWith(currentRef)))return false;}
+      return !row?.date||row.date===candidate.date;
+    });
+    return matches.length===1?matches[0]:null;
+  }
   function parkersInvoicePage(pageLines,text=''){
     const content=String(text||pageLines.map(line=>String(line.text||'')).join(' '));
     return isParkersText(content)&&/\bINVOICE\b/i.test(content)&&/\bTax\s+Point\b/i.test(content)&&/\bDocument\s+No\.?\b/i.test(content)&&
@@ -3038,6 +3145,23 @@
     return null;
   }
   function invoiceRetryRegionsForRow(row,ocrLines){
+    if(row?.profileId==='banoze'){
+      const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),pages=[...new Set((row.sourcePages||[row.page]).map(Number).filter(page=>Number.isInteger(page)&&page>0))],regions=[];
+      const missingNumber=!row.originalInvoiceNumber,missingDate=!row.date,missingAmounts=row.total===''||row.total===null||row.total===undefined||row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified;
+      for(const page of pages){
+        const pageLines=lines.filter(line=>(Number(line.page)||1)===page);if(!pageLines.length)continue;
+        const heights=pageLines.map(line=>Number(line.height)||0).filter(height=>height>0&&height<100).sort((a,b)=>a-b),lineHeight=heights.length?heights[Math.floor(heights.length/2)]:18,pageRight=Math.max(...pageLines.map(line=>(Number(line.x)||0)+(Number(line.width)||0))),pageBottom=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1);
+        if(missingNumber||missingDate){
+          const header=pageLines.filter(line=>{const y=Number(line.y)||0,x=Number(line.x)||0,text=String(line.text||'');return y<pageBottom*.4&&(/^\s*(?:date|ate)\b/i.test(text)||x>pageRight*.7&&(/invoi|nvoice|rnvoice/i.test(text)||/\b(?:BNZ|NZ)\s*20/i.test(text)||/\b20\d(?:[\s\-]?[0-9]){5,}/i.test(text)));});
+          if(header.length){const left=Math.max(0,Math.min(...header.map(line=>Number(line.x)||0))-lineHeight*3),right=Math.min(pageRight,Math.max(...header.map(line=>(Number(line.x)||0)+(Number(line.width)||0)))+lineHeight*3),top=Math.max(0,Math.min(...header.map(line=>Number(line.y)||0))-lineHeight*3),bottom=Math.min(pageBottom,Math.max(...header.map(line=>(Number(line.y)||0)+(Number(line.height)||lineHeight)))+lineHeight*3);if(right>left&&bottom>top)regions.push({page,left,top,width:right-left,height:bottom-top,profileId:'banoze',regionType:'invoice-header'});}
+        }
+        if(missingAmounts){
+          const labels=pageLines.filter(line=>Number(line.y)>=pageBottom*.5&&(banozeLabelMatches(line.text,'TOTAL')||/\bGOODS\s+TOTAL\b/i.test(String(line.text||''))||banozeLabelMatches(line.text,'VAT')));
+          if(labels.length){const labelTop=Math.min(...labels.map(line=>Number(line.y)||0)),labelBottom=Math.max(...labels.map(line=>(Number(line.y)||0)+(Number(line.height)||lineHeight))),rowTolerance=Math.max(pageBottom*.045,lineHeight*4),nearby=pageLines.filter(line=>{const y=Number(line.y)||0;return y>=labelTop-lineHeight&&y<=labelBottom+rowTolerance&&labels.some(label=>Math.abs(y-(Number(label.y)||0))<=rowTolerance&&Math.abs((Number(line.x)||0)-(Number(label.x)||0))<=pageRight*.08);}),bounds=[...labels,...nearby],left=Math.max(0,Math.min(...bounds.map(line=>Number(line.x)||0))-lineHeight*3),right=Math.min(pageRight,Math.max(...bounds.map(line=>(Number(line.x)||0)+(Number(line.width)||lineHeight)))+lineHeight*3),top=Math.max(0,labelTop-lineHeight*3),bottom=Math.min(pageBottom,Math.max(labelBottom,...nearby.map(line=>(Number(line.y)||0)+(Number(line.height)||lineHeight)))+lineHeight*2);if(right>left&&bottom>top)regions.push({page,left,top,width:right-left,height:bottom-top,profileId:'banoze',regionType:'invoice-footer'});}
+        }
+      }
+      return regions;
+    }
     if(row?.profileId==='parts-plus'){
       const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),pages=[...new Set((row.sourcePages||[row.page]).map(Number).filter(page=>Number.isInteger(page)&&page>0))],regions=[];
       const missingNumber=!row.originalInvoiceNumber,missingDate=!row.date,missingAmounts=row.total===''||row.total===null||row.total===undefined||row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified;
@@ -3295,7 +3419,7 @@
     const normalize=value=>String(value||'').replace(/\b([A-Za-z]{3,9})\.\s*/g,'$1 ').replace(/\s*([/.\-])\s*/g,'$1').replace(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|demand\s+date|order\s+date|issue\s+date|issued|dated|date\s+paid|date)\b\s*[:#-]?/ig,' ').replace(/(\d)\s+(?=\d[/.\-])/g,'$1');
     const parseCandidate=value=>{const source=normalize(value),match=source.match(/\b(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s*\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s*\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4})\b/i);if(!match)return '';const monthFirst=match[0].match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})$/i);return parseDate(monthFirst?`${monthFirst[2]} ${monthFirst[1]} ${monthFirst[3]}`:match[0]);};
     const ordered=Array.isArray(lines)?lines.filter(line=>line&&String(line.text||'').trim()).slice().sort((a,b)=>(Number(a.page)||1)-(Number(b.page)||1)||(Number(a.y)||0)-(Number(b.y)||0)||(Number(a.x)||0)-(Number(b.x)||0)):[];
-    for(const line of ordered){const raw=String(line.text||'').trim();if(/\b(?:due\s+date|payment\s+date|statement\s+date)\b/i.test(raw))continue;if(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|demand\s+date|order\s+date|issue\s+date|date\s+paid|\bissued\b|dated)\b/i.test(raw)||/^date\s*:?$/i.test(raw)){const direct=parseCandidate(raw);if(direct)return direct;const samePage=ordered.filter(candidate=>candidate!==line&&(Number(candidate.page)||1)===(Number(line.page)||1)).map(candidate=>({candidate,date:parseCandidate(candidate.text),dy:Math.abs((Number(candidate.y)||0)-(Number(line.y)||0)),dx:(Number(candidate.x)||0)-((Number(line.x)||0)+(Number(line.width)||0)),xGap:Math.abs((Number(candidate.x)||0)-(Number(line.x)||0))})).filter(item=>item.date&&item.dy<=Math.max((Number(line.height)||20)*3,20)&&(item.dx>=-8||item.xGap<=Math.max((Number(line.height)||20)*2,80))).sort((a,b)=>a.dy-b.dy||a.dx-b.dx);if(samePage.length)return samePage[0].date;}}
+    for(const line of ordered){const raw=String(line.text||'').trim();if(/\b(?:due\s+date|payment\s+date|statement\s+date)\b/i.test(raw))continue;if(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|demand\s+date|order\s+date|issue\s+date|date\s+paid|\bissued\b|dated)\b/i.test(raw)||/^date\s*[.:#-]?$/i.test(raw)){const direct=parseCandidate(raw);if(direct)return direct;const samePage=ordered.filter(candidate=>candidate!==line&&(Number(candidate.page)||1)===(Number(line.page)||1)).map(candidate=>({candidate,date:parseCandidate(candidate.text),dy:Math.abs((Number(candidate.y)||0)-(Number(line.y)||0)),dx:(Number(candidate.x)||0)-((Number(line.x)||0)+(Number(line.width)||0)),xGap:Math.abs((Number(candidate.x)||0)-(Number(line.x)||0))})).filter(item=>item.date&&item.dy<=Math.max((Number(line.height)||20)*3,20)&&(item.dx>=-8||item.xGap<=Math.max((Number(line.height)||20)*2,80))).sort((a,b)=>a.dy-b.dy||a.dx-b.dx);if(samePage.length)return samePage[0].date;}}
     const labelled=String(text||'').match(/\b(?:invoice\s+date|date\s+of\s+issue|tax\s+point|date\s+issued|demand\s+date|order\s+date|issue\s+date|date\s+paid|issued|dated)\b\s*[:#-]?\s*((?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s*,?\s*\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?\s*,?\s*\d{4}|\d{4}[/.\-]\d{1,2}[/.\-]\d{1,2}|\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}))/i);if(labelled){const direct=parseCandidate(labelled[1]);if(direct)return direct;}
     for(const line of ordered){const raw=String(line.text||'').trim();if(/\b(?:due\s+date|payment\s+date|statement\s+date|billing\s+period|period)\b/i.test(raw)||/\d{4}\s*[-–]\s*\d{4}/.test(raw))continue;const date=parseCandidate(raw);if(!date)continue;const page=Number(line.page)||1,h=Math.max(Number(line.height)||16,16),related=ordered.filter(other=>(Number(other.page)||1)===page&&other!==line&&Math.abs((Number(other.y)||0)-(Number(line.y)||0))<=h*3);if(related.some(other=>/\b(?:due\s+date|payment\s+date|statement\s+date|billing\s+period|period)\b/i.test(String(other.text||''))))continue;return date;}return '';
   }
@@ -3838,6 +3962,7 @@
     anchoredInvoiceProfile('anthropic','Anthropic Ireland Limited',text=>/\bANTHROPIC\s+IRELAND\s*,?\s*LIMITED\b|\bIE4276970QH\b/i.test(text)),
     anchoredInvoiceProfile('arabella-johnson','Arabella Johnson',text=>/\bARABELLA\s+JOHNSON\b/i.test(text)),
     anchoredInvoiceProfile('light-hub','The Light Hub (Forward Distribution)',text=>/\bFORWARD\s+DISTRIBUTION\b|\bLIGHT\s+HUB\b|the-lighthub/i.test(text)),
+    {id:'banoze',name:'Banoze Ltd',kind:'supplier',status:'Review',category:'Invoices',detect:isBanozeText,parse:(flat,source,lines)=>parseBanozeInvoice(flat,source,lines)},
     anchoredInvoiceProfile('sylton','Sylton International',text=>/\bSYLTON\s+INTERNATIONAL\b|\bSTR-\d{3,}\b/i.test(text)),
     anchoredInvoiceProfile('bpce','BPCE Equipment Solutions',text=>/\bBPCE\s+EQUIPMENT\s+SOLUTIONS\b/i.test(text)),
     anchoredInvoiceProfile('mailchimp','Intuit Mailchimp',text=>/\bINTUIT\s+MAILCHIMP\b|\bMAILCHIMP\s+RECEIPT\b/i.test(text)),
@@ -3946,6 +4071,7 @@
       return [...otherRows,...eagleRows].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
     }
     if(isDairyFreshText(text)||pages.some(page=>isDairyFreshText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))))return parseDairyFreshBatch(pageLines,source);
+    if(pages.some(page=>isBanozeText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))))return parseBanozeBatch(pageLines,source,options);
     // Find invoice boundaries using document identifiers, then detect the
     // supplier in each isolated invoice group before selecting its parser.
     const starts=[];
@@ -4079,9 +4205,9 @@
     return Boolean(complete&&!row?.freshwaysVatOcrAmbiguous&&!row?.eagleSummaryConflict&&!row?.eagleSummaryAmbiguousReference&&!Object.keys(row?.ocrAmountConflicts||{}).length&&(row?.profileId==='bestway'||kinFooterRetry||candidate?.accepted||row?.freshwaysVatOcrRetryResolved||eaglePageMatch));
   }
   function mergeInvoiceRetryCandidate(row,candidate,{preserveGeneratedReference=false}={}){
-    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','date','supplier','subtotal','vat','vatUnverified','vatMentioned','total','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured','ocrConflictReason'];
+    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','invoiceNumberGenerated','invoiceNumberGeneratedReason','date','supplier','subtotal','vat','vatUnverified','vatMentioned','total','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured','ocrConflictReason'];
     for(const key of fields){
-      if(preserveGeneratedReference&&(key==='invoiceNumber'||key==='originalInvoiceNumber'))continue;
+      if(preserveGeneratedReference&&['invoiceNumber','originalInvoiceNumber','invoiceNumberGenerated','invoiceNumberGeneratedReason'].includes(key))continue;
       const value=candidate?.[key];if(value===''||value===null||value===undefined)continue;
       // If the 5x scan was requested only because a Freshways Â£0.00 may have
       // become "20.00", keep already readable first-pass totals. The higher
@@ -4115,7 +4241,7 @@
     if(candidate?.ocrConflictReason){merged.ocrConflictReason=candidate.ocrConflictReason;merged.total='';merged.accepted=false;merged.rejectedReason=candidate.ocrConflictReason;}
     return merged;
   }
-  return {extractText,extractStarlingPdfText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),underDevelopmentSuppliers,parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
+  return {extractText,extractStarlingPdfText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),underDevelopmentSuppliers,parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,matchBanozeFullPageRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
 });
 
 

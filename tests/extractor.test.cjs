@@ -2105,3 +2105,144 @@ test('one under-development decision is shown after all selected files and block
   assert.match(app,/data-download="invoice-all" \$\{isExtracting\|\|!rows\.length\?'disabled':''\}/);
   assert.match(html,/Cancel upload/);assert.match(html,/Continue to review/);assert.match(html,/supplier-development-list/);
 });
+test('Banoze source and packaged runtime scripts have valid JavaScript syntax',()=>{
+  const vm=require('node:vm'),root=path.resolve(__dirname,'..');for(const file of ['extractor/app.js','extractor/parser.js','release/Extractor-Network/resources/app/app.js','release/Extractor-Network/resources/app/parser.js'])new vm.Script(fs.readFileSync(path.join(root,file),'utf8'),{filename:file});
+});
+test('Banoze is registered for review and reads its printed invoice fields from nearby labels',()=>{
+  const makeLines=(scale=1,offsetX=0,offsetY=0)=>[
+    ['BANOZE LTD',80,30],['INVOICE',890,100],['InvoiceNo. BNZ2099123456',1480,185],['Date. 03/04/2099',1650,232],
+    ['Code BNZ0099',150,850],['GOODS TOTAL',1198,1910],['£12.00',1260,1958],['VAT',1536,1910],['£2.40',1525,1958],['TOTAL',1740,1910],['£14.40',1744,1958],
+    ['Web: www.banoze.co.uk',230,2630]
+  ].map(([text,x,y])=>({page:1,text,x:x*scale+offsetX,y:y*scale+offsetY,width:text.length*8*scale,height:20*scale}));
+  const parse=lines=>P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'renamed.pdf',lines);
+  const profile=P.compatibleCompanies.find(item=>item.id==='banoze');assert.ok(profile);assert.equal(profile.name,'Banoze Ltd');assert.equal(profile.category,'Invoices');assert.equal(profile.status,'Review');
+  for(const lines of [makeLines(),makeLines(1.7,280,180)]){const rows=parse(lines);assert.equal(rows.length,1);assert.deepEqual([rows[0].invoiceNumber,rows[0].originalInvoiceNumber,rows[0].date,rows[0].supplier,rows[0].vat,rows[0].total,rows[0].status,rows[0].profileId],['3456','BNZ2099123456','2099-04-03','Banoze Ltd',2.4,14.4,'ACCEPTED','banoze']);}
+});
+test('Banoze generates a unique internal invoice reference when the printed ID is missing',()=>{
+  const base=[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'InvoiceNo.',x:1480,y:185,width:120,height:24},{page:1,text:'Date.',x:1650,y:232,width:60,height:24},{page:1,text:'05/03/2099',x:1715,y:232,width:120,height:24},
+    {page:1,text:'Code BNZ0099',x:150,y:850,width:150,height:24},{page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:'£12.00',x:1260,y:1958,width:80,height:24},
+    {page:1,text:'VAT',x:1536,y:1910,width:70,height:24},{page:1,text:'£2.40',x:1525,y:1958,width:80,height:24},{page:1,text:'TOTAL',x:1740,y:1910,width:117,height:24},{page:1,text:'£14.40',x:1744,y:1958,width:90,height:24}
+  ];
+  const parse=lines=>P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze missing ID.pdf',lines),[first]=parse(base),[second]=parse(base.map(line=>({...line,page:2}))),[missingDate]=parse(base.filter(line=>line.text!=='Date.'&&line.text!=='05/03/2099'));
+  assert.deepEqual([first.status,first.date,first.vat,first.total,first.invoiceNumberGenerated],['ACCEPTED','2099-03-05',2.4,14.4,true]);
+  assert.match(first.invoiceNumber,/^AUTO-20990305-[A-Z0-9]{7}$/);assert.equal(first.originalInvoiceNumber,first.invoiceNumber);
+  assert.notEqual(first.invoiceNumber,second.invoiceNumber,'page-scoped references distinguish otherwise identical invoice pages');
+  assert.deepEqual([missingDate.status,missingDate.date,missingDate.invoiceNumberGenerated],['REJECTED','',true],'a generated reference does not excuse a missing date');
+});
+test('Banoze summary-only and unreadable pages are ignored instead of exported as rejected invoices',()=>{
+  const summary=[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE SUMMARY',x:890,y:100,width:220,height:24},
+    {page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:'£12.00',x:1260,y:1958,width:80,height:24},
+    {page:1,text:'VAT',x:1536,y:1910,width:70,height:24},{page:1,text:'£2.40',x:1525,y:1958,width:80,height:24},
+    {page:1,text:'TOTAL',x:1740,y:1910,width:117,height:24},{page:1,text:'£14.40',x:1744,y:1958,width:90,height:24}
+  ];
+  assert.deepEqual(P.parseInvoiceBatch(summary.map(line=>line.text).join('\n'),'Banoze summary.pdf',summary),[],'a Banoze summary with footer totals is not an invoice record');
+  const invoice=[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'InvoiceNo. BNZ2099123456',x:1480,y:185,width:250,height:24},{page:1,text:'Date. 03/04/2099',x:1650,y:232,width:180,height:24},
+    {page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:'£12.00',x:1260,y:1958,width:80,height:24},
+    {page:1,text:'VAT',x:1536,y:1910,width:70,height:24},{page:1,text:'£2.40',x:1525,y:1958,width:80,height:24},{page:1,text:'TOTAL',x:1740,y:1910,width:117,height:24},{page:1,text:'£14.40',x:1744,y:1958,width:90,height:24}
+  ];
+  const mixed=[...invoice,{page:2,text:'Invoice Summary - July',x:200,y:120,width:220,height:30},{page:3,text:'stoo-toug 09TYS9/s€z oxog •4.129 •',x:800,y:840,width:360,height:30}],rows=P.parseInvoiceBatch(mixed.map(line=>line.text).join('\n'),'Banoze mixed.pdf',mixed);
+  assert.deepEqual(rows.map(row=>[row.page,row.status]),[[1,'ACCEPTED']],'summary pages and OCR noise outside invoices do not create rejected rows');
+});
+test('Banoze footer OCR aliases are read as printed currency amounts, without deriving VAT or total',()=>{
+  const lines=[
+    {page:1,text:'BANOZE LTD',x:80,y:30,width:100,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'rnvoiceNo. BNZ2099123456',x:1480,y:185,width:250,height:24},{page:1,text:'Date. 03/04/2099',x:1650,y:232,width:180,height:24},
+    {page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:'£40.00',x:1260,y:1958,width:70,height:24},
+    {page:1,text:'VA',x:1536,y:1910,width:70,height:24},{page:1,text:'Ell.08',x:1525,y:1958,width:60,height:24},
+    {page:1,text:'TOTA',x:1740,y:1910,width:110,height:24},{page:1,text:'£51.08',x:1744,y:1958,width:80,height:24},
+    {page:1,text:'www.banoze.co.uk',x:230,y:2630,width:150,height:20}
+  ];
+  const [row]=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze scan.pdf',lines);
+  assert.deepEqual([row.invoiceNumber,row.vat,row.total,row.status],['3456',11.08,51.08,'ACCEPTED']);
+  const noPrintedTotal=lines.filter(line=>line.text!=='£51.08'),[rejected]=P.parseInvoiceBatch(noPrintedTotal.map(line=>line.text).join('\n'),'Banoze scan.pdf',noPrintedTotal);
+  assert.deepEqual([rejected.vat,rejected.total,rejected.status,rejected.retryOcr],[11.08,'','REJECTED',true],'VAT remains the printed footer value and a missing total is never calculated');
+});
+test('Banoze maps amounts in a merged footer line by the printed column labels and rejects spliced VAT text',()=>{
+  const make=vatText=>[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'InvoiceNo. BNZ2099123499',x:1480,y:185,width:250,height:24},{page:1,text:'Date. 03/04/2099',x:1650,y:232,width:180,height:24},
+    {page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:'VAT',x:1536,y:1910,width:70,height:24},{page:1,text:'TOTAL',x:1740,y:1910,width:117,height:24},
+    {page:1,text:vatText,x:1202,y:1958,width:414,height:25},{page:1,text:'£48.00',x:1744,y:1958,width:90,height:24}
+  ];
+  const parse=lines=>P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze.pdf',lines)[0];
+  const merged=parse(make('—---£40.00--------—£8.00'));
+  assert.deepEqual([merged.invoiceNumber,merged.vat,merged.total,merged.status],['3499',8,48,'ACCEPTED']);
+  const spliced=parse(make('---------------£69.00--------------------------413.99'));
+  assert.deepEqual([spliced.vat,spliced.total,spliced.status,spliced.retryOcr],['',48,'REJECTED',true],'an impossible joined VAT token is not accepted or exported as a confirmed amount');
+});
+test('Banoze aligns amount tokens to the center of each printed column and rejects malformed total suffixes',()=>{
+  const lines=[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'InvoiceNo. BNZ2099123499',x:1480,y:185,width:250,height:24},{page:1,text:'Date. 03/04/2099',x:1650,y:232,width:180,height:24},
+    {page:1,text:'GOODS TOTAL',x:1202,y:1910,width:245,height:24},{page:1,text:'VAT',x:1540,y:1910,width:70,height:24},{page:1,text:'TOTAL',x:1744,y:1910,width:116,height:24},
+    {page:1,text:'Â£10.00',x:1270,y:1958,width:108,height:24},{page:1,text:'Â£2.00',x:1521,y:1958,width:107,height:24},{page:1,text:'----------Â£12.00',x:1654,y:1958,width:197,height:24}
+  ];
+  const [row]=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze.pdf',lines);
+  assert.deepEqual([row.vat,row.total,row.status],[2,12,'ACCEPTED'],'a neighboring total cell must not be assigned as VAT when their text boxes overlap horizontally');
+  const malformed=lines.map(line=>line.text==='----------Â£12.00'?{...line,text:'48.80-'}:line),[rejected]=P.parseInvoiceBatch(malformed.map(line=>line.text).join('\n'),'Banoze.pdf',malformed);
+  assert.deepEqual([rejected.total,rejected.status,rejected.retryOcr],['','REJECTED',true],'a footer number fused to a trailing rule is left for retry instead of accepted as a total');
+  const faintDecimal=lines.map(line=>/12\.00/.test(line.text)?{...line,text:'*18-33'}:line),[recoveredDecimal]=P.parseInvoiceBatch(faintDecimal.map(line=>line.text).join('\n'),'Banoze.pdf',faintDecimal);
+  assert.equal(recoveredDecimal.total,18.33,'a two-digit cents value with an OCR dash decimal is normalized from its printed total cell');
+  const equalVat=lines.map(line=>line.text==='Â£2.00'?{...line,text:'Â£12.00'}:line),[sameValue]=P.parseInvoiceBatch(equalVat.map(line=>line.text).join('\n'),'Banoze.pdf',equalVat);
+  assert.deepEqual([sameValue.vat,sameValue.total,sameValue.status],['',12,'REJECTED'],'a VAT OCR token that duplicates the gross is not accepted as an independently read VAT figure');
+});
+test('Banoze retry crops follow the invoice header and footer labels instead of page coordinates',()=>{
+  const lines=[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'InvoiceNo. BNZ2099123456',x:1480,y:185,width:250,height:24},{page:1,text:'Date.',x:1650,y:232,width:80,height:24},
+    {page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:'Â£12.00',x:1260,y:1958,width:80,height:24},
+    {page:1,text:'VAT',x:1536,y:1910,width:70,height:24},{page:1,text:'Â£2.40',x:1525,y:1958,width:80,height:24},
+    {page:1,text:'TOTAL',x:1740,y:1910,width:117,height:24},{page:1,text:'',x:1744,y:1958,width:90,height:24}
+  ];
+  const row={profileId:'banoze',page:1,sourcePages:[1],originalInvoiceNumber:'BNZ2099123456',date:'',vat:20,total:'',retryOcr:true},regions=P.invoiceRetryRegionsForRow(row,lines);
+  assert.deepEqual(regions.map(region=>region.regionType),['invoice-header','invoice-footer']);
+  assert.ok(regions.every(region=>region.profileId==='banoze'&&region.width>0&&region.height>0));
+  assert.ok(regions[0].left<1650&&regions[0].top<232&&regions[0].top+regions[0].height>232,'the date retry follows the detected header text');
+  assert.ok(regions[1].left<1198&&regions[1].top<1910&&regions[1].top+regions[1].height>1958,'the amount retry follows the detected footer labels and values');
+});
+test('Banoze rejects a printed date that conflicts with the year in its own invoice number',()=>{
+  const lines=[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'InvoiceNo. BNZ209908869',x:1480,y:185,width:250,height:24},{page:1,text:'Date. 03/06/2021',x:1650,y:232,width:180,height:24},
+    {page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:'Â£12.00',x:1260,y:1958,width:80,height:24},
+    {page:1,text:'VAT',x:1536,y:1910,width:70,height:24},{page:1,text:'Â£2.40',x:1525,y:1958,width:80,height:24},
+    {page:1,text:'TOTAL',x:1740,y:1910,width:117,height:24},{page:1,text:'Â£14.40',x:1744,y:1958,width:90,height:24}
+  ];
+  const [row]=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze.pdf',lines);
+  assert.deepEqual([row.date,row.status,row.retryOcr],['','REJECTED',true],'the profile must request a document read instead of inferring the date from the invoice number');
+});
+test('Banoze only uses header retry fields when independent contrast reads agree',()=>{
+  const base=[{page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},{page:1,text:'GOODS TOTAL',x:1198,y:1910,width:130,height:24},{page:1,text:'£12.00',x:1260,y:1958,width:80,height:24},{page:1,text:'VAT',x:1536,y:1910,width:40,height:24},{page:1,text:'£2.40',x:1525,y:1958,width:80,height:24},{page:1,text:'TOTAL',x:1740,y:1910,width:60,height:24},{page:1,text:'£14.40',x:1744,y:1958,width:80,height:24}];
+  const variant=(tag,number,date)=>[{page:1,text:`InvoiceNo. ${number}`,x:1480,y:185,width:250,height:24,banozeHeaderVariant:tag},{page:1,text:`Date. ${date}`,x:1650,y:232,width:180,height:24,banozeHeaderVariant:tag}],parse=lines=>P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze scan.pdf',lines)[0];
+  const agreed=parse([...base,...variant('base','BNZ2099123456','03/04/2099'),...variant('160','BNZ2099123456','03/04/2099'),...variant('200','BNZ2099123456','03/04/2099')]);
+  assert.deepEqual([agreed.originalInvoiceNumber,agreed.date,agreed.status],['BNZ2099123456','2099-04-03','ACCEPTED']);
+  const conflict=parse([...base,...variant('base','BNZ2099123456','03/04/2099'),...variant('160','BNZ2099123457','03/04/2099'),...variant('200','BNZ2099123458','03/04/2099')]);
+  assert.match(conflict.invoiceNumber,/^AUTO-20990403-[A-Z0-9]{7}$/);assert.deepEqual([conflict.originalInvoiceNumber,conflict.invoiceNumberGenerated,conflict.status],[conflict.invoiceNumber,true,'ACCEPTED'],'conflicting unreadable IDs are replaced with an internal reference while date and printed amounts remain required');
+});
+test('Banoze full-page recovery requires a unique same-page invoice identity and a non-conflicting date',()=>{
+  const row={profileId:'banoze',page:4,originalInvoiceNumber:'BNZ2099123',date:'2099-03-04'},candidate={profileId:'banoze',page:4,originalInvoiceNumber:'BNZ2099123456',date:'2099-03-04',accepted:true};
+  assert.equal(P.matchBanozeFullPageRetryCandidate(row,[candidate]),candidate,'a complete same-page read can extend a truncated header reference');
+  assert.equal(P.matchBanozeFullPageRetryCandidate({...row,originalInvoiceNumber:'BNZ2099999'},[candidate]),null,'a different printed invoice reference is not substituted');
+  assert.equal(P.matchBanozeFullPageRetryCandidate({...row,date:'2099-03-05'},[candidate]),null,'a conflicting printed date blocks recovery');
+  assert.equal(P.matchBanozeFullPageRetryCandidate(row,[{...candidate,page:5}]),null,'a candidate from another page cannot be used');
+  assert.equal(P.matchBanozeFullPageRetryCandidate(row,[candidate,{...candidate,originalInvoiceNumber:'BNZ2099123457'}]),null,'competing full-page reads are left unresolved');
+  const generatedRow={...row,invoiceNumber:'AUTO-20990304-0000001',originalInvoiceNumber:'AUTO-20990304-0000001',invoiceNumberGenerated:true},generatedCandidate={...candidate,invoiceNumber:'AUTO-20990304-0000002',originalInvoiceNumber:'AUTO-20990304-0000002',invoiceNumberGenerated:true};
+  assert.equal(P.matchBanozeFullPageRetryCandidate(generatedRow,[generatedCandidate]),generatedCandidate,'a generated ID is matched by unique PDF page and matching date');
+  assert.equal(P.matchBanozeFullPageRetryCandidate(generatedRow,[{...generatedCandidate,date:'2099-03-05'}]),null,'page match cannot override a conflicting date');
+});
+test('Banoze ignores OCR speckles and does not treat a product code as an invoice number',()=>{
+  const invoice=[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'InvoiceNo.',x:1480,y:185,width:120,height:24},{page:1,text:'Date. 03/04/2099',x:1650,y:232,width:180,height:24},
+    {page:1,text:'Code BNZ0099',x:150,y:850,width:150,height:24},{page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:'£12.00',x:1260,y:1958,width:80,height:24},
+    {page:1,text:'VAT',x:1536,y:1910,width:70,height:24},{page:1,text:'£2.40',x:1525,y:1958,width:80,height:24},{page:1,text:'TOTAL',x:1740,y:1910,width:117,height:24},{page:1,text:'£14.40',x:1744,y:1958,width:90,height:24}
+  ];
+  const lines=[...invoice,{page:2,text:'.50 •e.',x:604,y:543,width:55,height:20}],rows=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze batch.pdf',lines);
+  assert.equal(rows.length,1,'a nearly blank scan back must not become a rejected invoice row');
+  assert.match(rows[0].invoiceNumber,/^AUTO-20990403-[A-Z0-9]{7}$/);assert.deepEqual([rows[0].status,rows[0].invoiceNumberGenerated,rows[0].vat,rows[0].total],['ACCEPTED',true,2.4,14.4]);
+});

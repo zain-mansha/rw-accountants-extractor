@@ -362,7 +362,7 @@
           const exact=compact(row.originalInvoiceNumber);
           const candidate=row.profileId==='eagle-foods'?P.matchEagleRetryCandidate(row,candidates):candidates.find(item=>exact&&compact(item.originalInvoiceNumber)===exact)||candidates.find(item=>Number(item.page)===Number(row.page)&&(!row.date||item.date===row.date))||candidates.find(item=>compact(item.invoiceNumber)===compact(row.invoiceNumber)&&(!row.date||item.date===row.date))||(job.rows.length===1&&candidates.length===1?candidates[0]:null);
           if(!candidate)continue;foundRows.add(row);
-          const preserveGeneratedReference=row.profileId==='shahid-halal-poultry'&&row.invoiceNumberGenerated&&candidate.invoiceNumberGenerated;
+            const preserveGeneratedReference=['shahid-halal-poultry','banoze'].includes(row.profileId)&&row.invoiceNumberGenerated&&candidate.invoiceNumberGenerated;
           Object.assign(row,P.mergeInvoiceRetryCandidate(row,candidate,{preserveGeneratedReference}));
           if(isPolishDelivery(row)){resolvePolishRetry(row,candidate.total);recovered++;continue;}
           row.retryOcr=false;row.accepted=P.invoiceRetryAccepted(row,candidate,invoiceFieldsComplete(row));row.rejected=!row.accepted;row.confidence=row.accepted?'ACCEPTED':'REJECTED';
@@ -378,6 +378,35 @@
       }catch(error){if(!cancelRequested)notes.push(`${file.name}: the 5\u00D7 retry for ${job.rows.map(row=>row.invoiceNumber||'an unreadable invoice').join(', ')} failed (${error.message}).`);}
       for(const row of job.rows)if(!foundRows.has(row)){if(isPolishDelivery(row)){resolvePolishRetry(row,'');recovered++;continue;}row.accepted=false;row.rejected=true;row.retryOcr=false;row.confidence='REJECTED';row.rejectedReason=row.rejectedReason||'Required invoice details could not be confirmed after OCR retry.';}
       renderResult();await new Promise(resolve=>setTimeout(resolve,0));
+    }
+    // Banoze's footer is sometimes too faint for the text-anchored crop. Only
+    // unresolved Banoze rows get one final full-page 5x read. A candidate is
+    // used only when it is independently complete, belongs to the same PDF
+    // page, and agrees with any readable first-pass date. Printed IDs must
+    // match when available; generated IDs are matched by unique page and date.
+    const banozePending=targets.filter(row=>row.profileId==='banoze'&&!invoiceFieldsComplete(row)&&Number(row.page)>0),banozePageGroups=[];
+    if(banozePending.length&&!cancelRequested){
+      const byPage=new Map();for(const row of banozePending){const page=Number(row.page);if(!byPage.has(page))byPage.set(page,[]);byPage.get(page).push(row);}
+      const entries=[...byPage.entries()].sort((a,b)=>a[0]-b[0]);for(let index=0;index<entries.length;index+=MAX_RETRY_PAGES_PER_SCAN)banozePageGroups.push(entries.slice(index,index+MAX_RETRY_PAGES_PER_SCAN));
+      let fullPageRecovered=0;
+      for(let batchIndex=0;batchIndex<banozePageGroups.length;batchIndex++){
+        if(cancelRequested)break;const batch=banozePageGroups[batchIndex],pages=batch.map(([page])=>page),batchRows=batch.flatMap(([,items])=>items),requestId=`banoze-full-page-${fileIndex}-${batchIndex}-${Date.now()}`;
+        setProgress(processedFiles+0.9,totalFiles,`Banoze full-page 5x confirmation ${batchIndex+1} of ${banozePageGroups.length}`,`${processedFiles} / ${totalFiles} PDFs`);
+        const removeOcrListener=native.onOcrProgress?native.onOcrProgress(progress=>{if(progress.requestId!==requestId)return;const page=Number(progress.page)||1,done=Math.max(0,pages.indexOf(page)+1);setProgress(processedFiles+0.9+(Math.min(done,pages.length)/Math.max(pages.length,1))*0.09,totalFiles,`Banoze full-page 5x confirmation · page ${page}`,`${processedFiles} / ${totalFiles} PDFs · confirmation page ${done} / ${pages.length}`);}):()=>{};
+        try{
+          let scan;try{scan=await requestOcrPdf(run.path,run.password,{scale:5,pages,requestId,auditStage:'invoice-full-page-confirmation'});}finally{removeOcrListener();}
+          if(scan.ocrLanguage)run.ocrLanguage=scan.ocrLanguage;const candidates=P.parseInvoiceBatch?P.parseInvoiceBatch(scan.text||'',file.name,scan.lines||[],{ocrScale:5}):[],byCandidatePage=new Map();
+          for(const candidate of candidates){if(candidate.profileId!=='banoze')continue;const page=Number(candidate.page);if(!byCandidatePage.has(page))byCandidatePage.set(page,[]);byCandidatePage.get(page).push(candidate);}
+          for(const row of batchRows){
+            const candidate=P.matchBanozeFullPageRetryCandidate?.(row,byCandidatePage.get(Number(row.page))||[]);if(!candidate||!invoiceFieldsComplete(candidate))continue;
+            const preserveGeneratedReference=row.invoiceNumberGenerated&&candidate.invoiceNumberGenerated,merged=P.mergeInvoiceRetryCandidate(row,candidate,{preserveGeneratedReference}),complete=invoiceFieldsComplete(merged);if(!P.invoiceRetryAccepted(merged,candidate,complete))continue;
+            Object.assign(row,merged,{accepted:true,rejected:false,status:'ACCEPTED',confidence:'ACCEPTED',retryOcr:false,rejectedReason:'',banozeFullPageConfirmed:true});foundRows.add(row);recovered++;fullPageRecovered++;
+          }
+          run.lines=[...(run.lines||[]),...(scan.lines||[])];
+        }catch(error){if(!cancelRequested)notes.push(`${file.name}: Banoze full-page 5x confirmation failed for pages ${pages.join(', ')} (${error.message}).`);}
+        renderResult();await new Promise(resolve=>setTimeout(resolve,0));
+      }
+      if(fullPageRecovered)notes.push(`${file.name}: a separate Banoze full-page 5x confirmation recovered ${fullPageRecovered} additional invoice${fullPageRecovered===1?'':'s'} after the label-anchored retry.`);
     }
     const completeAfterRetry=targets.filter(invoiceFieldsComplete).length,incompleteAfterRetry=targets.length-completeAfterRetry;
     const activeRun=ocrRuns.get(fileIndex),recognizer=activeRun?.ocrLanguage?` Windows OCR recognizer: ${activeRun.ocrLanguage}.`:'';

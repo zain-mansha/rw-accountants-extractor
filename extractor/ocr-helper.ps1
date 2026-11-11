@@ -357,6 +357,38 @@ function Read-FocusedPdfRegion($page,$region,$pageNumber,$engine){
     Await($page.RenderToStreamAsync($stream,$options))|Out-Null;$stream.Seek(0)|Out-Null;$decoder=Await ([Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]);$software=Await($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap,Windows.Graphics,ContentType=WindowsRuntime]);$result=Await($engine.RecognizeAsync($software)) ([Windows.Media.Ocr.OcrResult,Windows,ContentType=WindowsRuntime]);$lines=New-Object System.Collections.Generic.List[object]
     $cropGeometryScaleX=([double]$sourceWidth*2.5)/[double]$software.PixelWidth;$cropGeometryScaleY=([double]$sourceHeight*2.5)/[double]$software.PixelHeight
     foreach($line in $result.Lines){$words=@($line.Words);if(!$words.Count){continue};$lefts=@($words|ForEach-Object{[double]$_.BoundingRect.X});$tops=@($words|ForEach-Object{[double]$_.BoundingRect.Y});$rights=@($words|ForEach-Object{[double]$_.BoundingRect.X+[double]$_.BoundingRect.Width});$bottoms=@($words|ForEach-Object{[double]$_.BoundingRect.Y+[double]$_.BoundingRect.Height});$minX=($lefts|Measure-Object -Minimum).Minimum;$minY=($tops|Measure-Object -Minimum).Minimum;$maxX=($rights|Measure-Object -Maximum).Maximum;$maxY=($bottoms|Measure-Object -Maximum).Maximum;$lines.Add([pscustomobject]@{page=$pageNumber;text=[string]$line.Text;x=$left+[double]$minX*$cropGeometryScaleX;y=$top+[double]$minY*$cropGeometryScaleY;width=[double]($maxX-$minX)*$cropGeometryScaleX;height=[double]($maxY-$minY)*$cropGeometryScaleY;confidence=(Get-OcrLineConfidence $line)})}
+    if([string]$region.profileId -eq 'banoze' -and [string]$region.regionType -eq 'invoice-footer'){
+      # Banoze's printed footer can be faint. Keep a few binarized readings
+      # separate so the parser can reject any competing amount readings.
+      foreach($line in $lines){$line|Add-Member -NotePropertyName banozeVariant -NotePropertyValue 'base' -Force}
+      $copy=Copy-SoftwareBitmapToDrawingBitmap $software;$drawing=$copy.Bitmap;$variantTexts=New-Object System.Collections.Generic.List[string];$variantTexts.Add([string]$result.Text)
+      foreach($threshold in @(175,215)){
+        $thresholdBitmap=$null
+        try{
+          $thresholdBitmap=[InkGapRepair]::Threshold($drawing,$threshold);$variantResult=Read-BitmapOcrResult $thresholdBitmap $engine
+          if($variantResult.Text){$variantTexts.Add([string]$variantResult.Text)}
+          foreach($variantLine in $variantResult.Lines){$words=@($variantLine.Words);if(!$words.Count){continue};$lefts=@($words|ForEach-Object{[double]$_.BoundingRect.X});$tops=@($words|ForEach-Object{[double]$_.BoundingRect.Y});$rights=@($words|ForEach-Object{[double]$_.BoundingRect.X+[double]$_.BoundingRect.Width});$bottoms=@($words|ForEach-Object{[double]$_.BoundingRect.Y+[double]$_.BoundingRect.Height});$minX=($lefts|Measure-Object -Minimum).Minimum;$minY=($tops|Measure-Object -Minimum).Minimum;$maxX=($rights|Measure-Object -Maximum).Maximum;$maxY=($bottoms|Measure-Object -Maximum).Maximum;$lines.Add([pscustomobject]@{page=$pageNumber;text=[string]$variantLine.Text;x=$left+[double]$minX*$cropGeometryScaleX;y=$top+[double]$minY*$cropGeometryScaleY;width=[double]($maxX-$minX)*$cropGeometryScaleX;height=[double]($maxY-$minY)*$cropGeometryScaleY;confidence=(Get-OcrLineConfidence $variantLine);banozeVariant=[string]$threshold})}
+        }catch{}finally{if($thresholdBitmap){$thresholdBitmap.Dispose()}}
+      }
+      return @{Text=($variantTexts -join "`n");Lines=$lines.ToArray()}
+    }
+    if([string]$region.profileId -eq 'banoze' -and [string]$region.regionType -eq 'invoice-header'){
+      # Faint or broken invoice metadata can be difficult for Windows OCR.
+      # Read only this label-anchored header crop at a few contrast levels;
+      # the parser accepts recovered identifiers/dates only when independent
+      # variants agree, and otherwise leaves the field rejected.
+      foreach($line in $lines){$line|Add-Member -NotePropertyName banozeHeaderVariant -NotePropertyValue 'base' -Force}
+      $copy=Copy-SoftwareBitmapToDrawingBitmap $software;$drawing=$copy.Bitmap;$variantTexts=New-Object System.Collections.Generic.List[string];$variantTexts.Add([string]$result.Text)
+      foreach($threshold in @(160,200,235)){
+        $thresholdBitmap=$null
+        try{
+          $thresholdBitmap=[InkGapRepair]::Threshold($drawing,$threshold);$variantResult=Read-BitmapOcrResult $thresholdBitmap $engine
+          if($variantResult.Text){$variantTexts.Add([string]$variantResult.Text)}
+          foreach($variantLine in $variantResult.Lines){$words=@($variantLine.Words);if(!$words.Count){continue};$lefts=@($words|ForEach-Object{[double]$_.BoundingRect.X});$tops=@($words|ForEach-Object{[double]$_.BoundingRect.Y});$rights=@($words|ForEach-Object{[double]$_.BoundingRect.X+[double]$_.BoundingRect.Width});$bottoms=@($words|ForEach-Object{[double]$_.BoundingRect.Y+[double]$_.BoundingRect.Height});$minX=($lefts|Measure-Object -Minimum).Minimum;$minY=($tops|Measure-Object -Minimum).Minimum;$maxX=($rights|Measure-Object -Maximum).Maximum;$maxY=($bottoms|Measure-Object -Maximum).Maximum;$lines.Add([pscustomobject]@{page=$pageNumber;text=[string]$variantLine.Text;x=$left+[double]$minX*$cropGeometryScaleX;y=$top+[double]$minY*$cropGeometryScaleY;width=[double]($maxX-$minX)*$cropGeometryScaleX;height=[double]($maxY-$minY)*$cropGeometryScaleY;confidence=(Get-OcrLineConfidence $variantLine);banozeHeaderVariant=[string]$threshold})}
+        }catch{}finally{if($thresholdBitmap){$thresholdBitmap.Dispose()}}
+      }
+      return @{Text=($variantTexts -join "`n");Lines=$lines.ToArray()}
+    }
     if([string]$region.profileId -eq 'gsf-car-parts' -and [string]$region.regionType -eq 'invoice-date'){
       # The GSF tax-point date is faint on some scans. On this small,
       # text-anchored crop, compare a few binary contrast passes and emit the
@@ -438,13 +470,17 @@ try {
   foreach($index in $pageIndexes) {
     $page=$pdf.GetPage($index)
     $pageLines=New-Object System.Collections.Generic.List[object]
-    $invoiceRegion=$parsedInvoiceRetryRegions|Where-Object{[int]$_.page -eq ($index+1)}|Select-Object -First 1
-    if($invoiceRegion){
-      $focused=Read-FocusedPdfRegion $page $invoiceRegion ($index+1) $engine
-      if($focused.Text){$parts.Add([string]$focused.Text)}
-      foreach($line in $focused.Lines){$ocrLines.Add($line);$pageLines.Add($line)}
+    $invoiceRegions=@($parsedInvoiceRetryRegions|Where-Object{[int]$_.page -eq ($index+1)})
+    if($invoiceRegions.Count){
+      $focusedTexts=New-Object System.Collections.Generic.List[string]
+      foreach($invoiceRegion in $invoiceRegions){
+        $focused=Read-FocusedPdfRegion $page $invoiceRegion ($index+1) $engine
+        if($focused.Text){$focusedTexts.Add([string]$focused.Text)}
+        foreach($line in $focused.Lines){$ocrLines.Add($line);$pageLines.Add($line)}
+      }
+      if($focusedTexts.Count){$parts.Add(($focusedTexts -join "`n"))}
       if($pageLines.Count){$visualPages.Add($index+1)}
-      [Console]::WriteLine('PAGE:'+(@{page=$index+1;pageCount=$pdf.PageCount;ocrLanguage=$ocrLanguage;ocrEngine='Windows.Media.Ocr';text=$focused.Text;lines=$pageLines.ToArray()}|ConvertTo-Json -Compress -Depth 5))
+      [Console]::WriteLine('PAGE:'+(@{page=$index+1;pageCount=$pdf.PageCount;ocrLanguage=$ocrLanguage;ocrEngine='Windows.Media.Ocr';text=($focusedTexts -join "`n");lines=$pageLines.ToArray()}|ConvertTo-Json -Compress -Depth 5))
       $page.Dispose();$processedPageCount++
       if($processedPageCount%3 -eq 0){[GC]::Collect();[GC]::WaitForPendingFinalizers()}
       continue
