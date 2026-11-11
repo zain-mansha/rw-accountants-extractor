@@ -222,14 +222,29 @@ test('GSF profile reads printed invoice footer, tolerates shifted scans, and ski
     line(15,'OdobF',1810,2410),line(15,'F.O.C',1974,2420),line(15,'F.O.C',1974,2482),line(15,'F.O.C',1974,2557)
   ].map(item=>({...item,gsfRetryFocused:true}))],[focRow]=parse([focusedFoc]);
   assert.deepEqual([focRow.vat,focRow.total,focRow.status],[0,0,'ACCEPTED'],'three printed F.O.C. summary rows are represented as explicit zero values');
+  const noisyVatFooter=[...make(16,{number:'7430001111',date:'07/08/26',vat:'',total:''}).filter(item=>item.y<500),
+    line(16,'Operator: AB1234',80,2368),line(16,'12.50',1824,2384),...[
+    line(16,'FVATO/...er90DE',667,2344,275,34),line(16,'2&.00',698,2370,85,34),line(16,'12.50',1006,2380),line(16,'2.50',1176,2389),
+    line(16,'TOTAL',1578,2492),line(16,'15.00',1824,2493)
+  ].map(item=>({...item,gsfRetryFocused:true}))],[noisyVatRow]=parse([noisyVatFooter]);
+  assert.deepEqual([noisyVatRow.vat,noisyVatRow.total,noisyVatRow.status],[2.50,15.00,'ACCEPTED'],'a merged, noisy VAT table heading anchors the printed rightmost VAT cell while the summary Total is read separately');
+  const retryOnlyTotal=[...make(17,{number:'7430002222',date:'07/05/26',vat:'',total:''}).filter(item=>item.y<500),
+    line(17,'QGOODSS',1585,2376),line(17,'60.00',1853,2377),line(17,'12.00',1872,2427),
+    ...[line(17,'GOODS@',1612,2370),line(17,'12.00',1873,2427),line(17,'TOTÃ…LÃ†',1614,2488),line(17,'72.00',1853,2487)].map(item=>({...item,gsfRetryFocused:true}))],[mergedFooterRow]=parse([retryOnlyTotal]);
+  assert.deepEqual([mergedFooterRow.vat,mergedFooterRow.total,mergedFooterRow.status],[12.00,72.00,'ACCEPTED'],'first-pass and retry rows combine into a labeled three-value footer stack without calculating amounts');
+  const noisyVatTable=[...make(18,{number:'7430003333',date:'30/06/26',vat:'',total:''}).filter(item=>item.y<500),...[
+    line(18,'iiYATO/S',672,2343),line(18,'20.00',703,2373),line(18,'5.00',1018,2384),line(18,'1.00',1180,2385),
+    line(18,'5.00',1844,2377),line(18,'TOTAL',1574,2485),line(18,'6.00',1845,2485)
+  ].map(item=>({...item,gsfRetryFocused:true}))],[zeroPointFiveVat]=parse([noisyVatTable]);
+  assert.deepEqual([zeroPointFiveVat.vat,zeroPointFiveVat.total,zeroPointFiveVat.status],[1.00,6.00,'ACCEPTED'],'a short OCR-garbled VAT table heading still anchors a small printed VAT value');
   const mixed=[...make(1),line(2,'GSF Car Parts Limited Stateqent of Account From Customer Account No 7439774 Last Payment received 18 Jun 26 INVOICE 7431123001',70,80),line(3,'GSF Car Parts Limited CUSTOMER GOODS RETURNS NOTE INVOICE 7431123002',70,80),line(4,'GSF Car Parts Limited WEEKLY OFFERS Invoice specials',70,80)],rows=parse([mixed]);
   assert.equal(rows.length,1,'statement, returns-note and promotional pages do not create invoice records');
   const unreadable=make(5,{number:'',date:'03/06/26',vat:'',total:''}).filter(item=>item.text!=='Invoice No'&&item.text!=='VAT'&&item.text!=='TOTAL'),[rejected]=parse([unreadable]);
   assert.deepEqual([rejected.status,rejected.retryOcr,rejected.total,rejected.vat],['REJECTED',true,'',''],'missing printed details stay blank and enter OCR retry instead of being guessed');
   const garbledDate=make(12,{number:'7431125650',date:'7439774 0±5/07126',vat:'4.25',total:'25.48'}),[dateRejected]=parse([garbledDate]);
   assert.deepEqual([dateRejected.invoiceNumber,dateRejected.date,dateRejected.vat,dateRejected.total,dateRejected.status,dateRejected.retryOcr],['5650','',4.25,25.48,'REJECTED',true],'a GSF tax-point string damaged by OCR must not be guessed from adjacent account digits; readable printed amounts are kept and the row retries');
-  const retryLines=make(6,{date:'not readable',vat:'4.71',total:'28.27'}).filter(item=>item.text!=='not readable'),[needsDate]=parse([retryLines]),identityRegions=P.invoiceRetryRegionsForRow(needsDate,retryLines);
-  assert.equal(identityRegions.length,1);assert.equal(identityRegions[0].regionType,'invoice-date');assert.ok(identityRegions[0].top<1000&&identityRegions[0].height>0,'date retry is anchored to the invoice metadata text');
+  const retryLines=make(6,{date:'not readable',vat:'4.71',total:'28.27'}).filter(item=>item.text!=='not readable').map(item=>item.y===330?{...item,y:950}:item.y===370?{...item,y:990}:item),[needsDate]=parse([retryLines]),identityRegions=P.invoiceRetryRegionsForRow(needsDate,retryLines);
+  assert.equal(identityRegions.length,1);assert.equal(identityRegions[0].regionType,'invoice-date');assert.ok(identityRegions[0].top>800&&identityRegions[0].height>0,'date retry is anchored to the account/tax-point metadata instead of the earlier invoice number');
   const amountLines=make(8,{vat:'',total:''}).filter(item=>item.text!==''),[needsAmounts]=parse([amountLines]),footerRegions=P.invoiceRetryRegionsForRow(needsAmounts,amountLines);
   assert.equal(footerRegions.length,1);assert.equal(footerRegions[0].regionType,'footer-summary');assert.ok(footerRegions[0].top>1800,'amount retry is anchored to the invoice footer and remittance text');
   const profile=P.compatibleCompanies.find(company=>company.id==='gsf-car-parts');
