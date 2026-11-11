@@ -3548,6 +3548,68 @@
     const otherLines=[...pageLines.values()].flat().filter(line=>!consumed.has(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];for(const row of records)delete row.gsfGroupKey;
     return [...otherRows,...records].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
   }
+  function isRacMotoringText(value){return /\bRAC\s+MOTORING\s+SERVICES\b/i.test(String(value||''));}
+  function racNearbyLabelValue(lines,labelPattern,acceptValue,{maxHorizontalRatio=.2,maxVerticalRatio=.015}={}){
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),pages=new Map();
+    for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}
+    const candidates=[];
+    for(const [page,pageLines] of pages){
+      const width=Math.max(...pageLines.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),height=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),heights=pageLines.map(line=>Number(line.height)||0).filter(value=>value>0).sort((a,b)=>a-b),medianHeight=heights[Math.floor(heights.length/2)]||20;
+      for(const label of pageLines){
+        const labelText=String(label.text||'').trim();if(!labelPattern.test(labelText))continue;
+        const labelX=Number(label.x)||0,labelY=Number(label.y)||0,labelHeight=Math.max(Number(label.height)||0,medianHeight,1),labelRight=labelX+Math.max(Number(label.width)||0,labelText.length*labelHeight*.42),verticalTolerance=Math.max(labelHeight*1.7,height*maxVerticalRatio,18),horizontalTolerance=width*maxHorizontalRatio;
+        const inline=labelText.replace(labelPattern,'').replace(/^\s*[:#.-]?\s*/,'').trim();
+        if(inline){const value=acceptValue(inline);if(value!==null&&value!==undefined&&value!=='')candidates.push({value,score:0,page,label});}
+        for(const line of pageLines){if(line===label)continue;const raw=String(line.text||'').trim(),x=Number(line.x)||0,y=Number(line.y)||0,dx=x-labelRight,dy=Math.abs(y-labelY);if(dx< -labelHeight*.3||dx>horizontalTolerance||dy>verticalTolerance)continue;const value=acceptValue(raw);if(value===null||value===undefined||value==='')continue;candidates.push({value,score:dy/verticalTolerance+Math.max(0,dx)/width*2,page,label,line});}
+      }
+    }
+    candidates.sort((a,b)=>a.score-b.score);
+    if(!candidates.length)return null;
+    const first=candidates[0],equallyClose=candidates.filter(item=>Math.abs(item.score-first.score)<.12);
+    if(equallyClose.some(item=>String(item.value)!==String(first.value)))return null;
+    return first;
+  }
+  function racInlineOrFollowingValue(text,labelPattern,acceptValue){
+    const lines=String(text||'').split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
+    for(let index=0;index<lines.length;index++){
+      const current=lines[index],match=current.match(labelPattern);if(!match)continue;
+      const inline=current.slice(match.index+match[0].length).replace(/^\s*[:#.-]?\s*/,'').trim(),inlineValue=inline?acceptValue(inline):null;if(inlineValue!==null&&inlineValue!==undefined&&inlineValue!=='')return inlineValue;
+      for(const next of lines.slice(index+1,index+3)){const value=acceptValue(next);if(value!==null&&value!==undefined&&value!=='')return value;}
+    }
+    return null;
+  }
+  function racMoneyValue(lines,text,labelPattern){
+    const result=racNearbyLabelValue(lines,labelPattern,value=>{const values=anchoredInvoiceMoneyValues(value);return values.length===1?values[0].value:null;});
+    if(result)return result.value;
+    const plain=racInlineOrFollowingValue(text,labelPattern,value=>{const values=anchoredInvoiceMoneyValues(value);return values.length===1?values[0].value:null;});return plain;
+  }
+  function isRacSummaryPage(lines,text=''){
+    const flat=String(text|| (lines||[]).map(line=>String(line.text||'')).join(' '));
+    if(!isRacMotoringText(flat)||/\bINVOICE\s+DETAILS\b/i.test(flat)||!/\bInvoice\b/i.test(flat))return false;
+    const summaryLabelCount=[/\bNett\s+Total\b/i,/\bTotal\s+VAT\b/i,/\bTOTAL\b/i].filter(pattern=>pattern.test(flat)).length,invoiceHeader=/\bInvoice\s+Date\b/i.test(flat)&&/\bDue\s+Date\b/i.test(flat)&&/\bAccount\s+No\b/i.test(flat);
+    return summaryLabelCount>=1||invoiceHeader;
+  }
+  function isRacDetailPage(lines){
+    const text=(lines||[]).map(line=>String(line.text||'')).join(' ');
+    return /\bINVOICE\s+DETAILS\b/i.test(text)||/\bInvoice\s+To\b/i.test(text)&&/\bWork\s+Date\b/i.test(text);
+  }
+  function isRacSupportTablePage(lines){
+    const text=(lines||[]).map(line=>String(line.text||'')).join(' '),dates=[...text.matchAll(/\b\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*20\d{2}\b/g)].length,weekCodes=[...text.matchAll(/\bW\s*\/\s*C\s*\(/gi)].length;
+    return dates>=3&&weekCodes>=3&&!/\b(?:invoice|VAT|total)\b/i.test(text);
+  }
+  function parseRacInvoice(flat,source='',ocrLines){
+    const lines=Array.isArray(ocrLines)?ocrLines.filter(line=>line&&String(line.text||'').trim()):[],text=String(flat||lines.map(line=>String(line.text||'')).join('\n')),invoiceDocument=isRacSummaryPage(lines,text),numberValue=racNearbyLabelValue(lines,/^Invoice$/i,value=>/^\d{7,10}$/.test(String(value).trim())?String(value).trim():null),plainNumber=racInlineOrFollowingValue(text,/^Invoice$/i,value=>{const match=String(value||'').match(/\b\d{7,10}\b/);return match?.[0]||null;}),originalInvoiceNumber=numberValue?.value||plainNumber||'',dateValue=racNearbyLabelValue(lines,/^Invoice\s+Date\s*:?$/i,value=>parseDate(String(value).trim())),plainDate=racInlineOrFollowingValue(text,/\bInvoice\s+Date\b\s*:?/i,value=>{const match=String(value||'').match(/\b(?:\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*20\d{2}|20\d{2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{1,2})\b/);return match?parseDate(match[0].replace(/\s+/g,'')):null;}),date=dateValue?.value||plainDate||'',vat=racMoneyValue(lines,text,/^Total\s+VAT\s*$/i),total=racMoneyValue(lines,text,/^TOTAL\b(?!\s*VAT)/i),complete=Boolean(invoiceDocument&&originalInvoiceNumber&&date&&vat!==null&&total!==null),reason=complete?'':!invoiceDocument?'This page is not an RAC invoice summary.':!originalInvoiceNumber?'RAC invoice number could not be confirmed from the printed invoice.':!date?'RAC invoice date could not be confirmed from the printed invoice.':total===null?'Printed RAC invoice total could not be confirmed.':'Printed RAC VAT total could not be confirmed.';
+    return {invoiceNumber:originalInvoiceNumber,originalInvoiceNumber,date,supplier:'RAC Motoring Services',subtotal:'',vat:vat??'',vatUnverified:vat===null,vatMentioned:vat!==null,total:total??'',documentType:'INVOICE',isInvoiceDocument:invoiceDocument,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(invoiceDocument&&!complete),review:false,layoutId:'rac-invoice-summary',profileId:'rac-motoring-services'};
+  }
+  function parseRacBatch(pageLines,source,options={}){
+    const pages=[...pageLines.keys()].sort((a,b)=>a-b),pageText=page=>((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')),racPages=new Set(pages.filter(page=>isRacMotoringText(pageText(page)))),detailPages=new Set(pages.filter(page=>isRacDetailPage(pageLines.get(page)||[]))),supportPages=new Set(pages.filter(page=>isRacSupportTablePage(pageLines.get(page)||[]))),records=[],consumed=new Set([...racPages,...detailPages,...supportPages]);
+    for(const page of [...racPages].sort((a,b)=>a-b)){
+      const items=pageLines.get(page)||[],text=items.map(line=>String(line.text||'')).join('\n');if(!isRacSummaryPage(items,text))continue;
+      const row=parseInvoiceRobust(text,source,items,options);row.page=page;row.sourcePages=[page];row.profileId='rac-motoring-services';records.push(row);
+    }
+    const otherLines=[...pageLines.values()].flat().filter(line=>!consumed.has(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
+    return [...otherRows,...records].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
+  }
   function anchoredInvoiceProfile(id,name,detect){const profile={id,name,kind:'supplier',status:'Review',category:'Invoices',formatTag:'PDF only',detect};return {...profile,parse:(flat,source,lines)=>parseAnchoredInvoice(flat,source,lines,profile)};}
   const invoiceProfiles=[
     {id:'amazon',name:'Amazon',kind:'supplier',status:'Review',formatTag:'Online PDF',detect:isAmazonInvoiceText,parse:(flat,source,lines)=>parseAmazonInvoice(flat,source,lines)},
@@ -3568,6 +3630,7 @@
     {id:'maspo',name:'Maspo',kind:'supplier',detect:flat=>/\bMASPO(?:\s+FOOD)?\s+LTD\b/i.test(flat)||maspoFooterInvoice(flat),parse:(flat,source,lines)=>parseMaspoInvoice(flat,source,lines)},
     {id:'polish-village-bread',name:'Polish Village Bread',kind:'supplier',detect:isPolishVillageBreadText,parse:(flat,source,lines,options)=>parseWzInvoice(flat,source,lines,options)},
     {id:'gsf-car-parts',name:'GSF Car Parts Limited',kind:'supplier',status:'Review',category:'Invoices',detect:isGsfCarPartsText,parse:(flat,source,lines)=>parseGsfCarPartsInvoice(flat,source,lines)},
+    {id:'rac-motoring-services',name:'RAC Motoring Services',kind:'supplier',status:'Review',category:'Invoices',detect:isRacMotoringText,parse:(flat,source,lines)=>parseRacInvoice(flat,source,lines)},
     anchoredInvoiceProfile('acre-aesthetics','Acre Aesthetics Limited',text=>/\bACRE\s+AESTHETICS\s+LIMITED\b|acre-aesthetics/i.test(text)),
     anchoredInvoiceProfile('abbvie','AbbVie Ltd',text=>/\bABBVIE\s+(?:LTD|LIMITED)\b|\bABBVIE\s+HOUSE\b/i.test(text)),
     anchoredInvoiceProfile('siemens-finance','Siemens Financial Services Limited',text=>/\bSIEMENS\s+FINANCIAL\s+SERVICES\s+LIMITED\b/i.test(text)),
@@ -3671,6 +3734,7 @@
     if(kinPages.length)return parseKinKmProfileBatch(pageLines,source,'kin-global',options);
     const kmPages=pages.filter(page=>isKmDistributionText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')));
     if(kmPages.length)return parseKinKmProfileBatch(pageLines,source,'km-distribution',options);
+    if(pages.some(page=>isRacMotoringText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' '))))return parseRacBatch(pageLines,source,options);
     const amazonPages=pages.filter(page=>isAmazonInvoiceText(amazonPositionedText(pageLines.get(page))));
     if(amazonPages.length){
       const groups=[];
