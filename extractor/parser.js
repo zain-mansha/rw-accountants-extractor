@@ -3453,10 +3453,17 @@
     const raw=String(line?.text||'').trim();if(!raw||/%|REG(?:ISTRATION)?\b|\b(?:RATE|CODE|NUMBER|NO\.?|POINT)\b/i.test(raw))return '';
     const token=gsfNormalizedLabel(raw);if(token.length>=2&&token.length<=5&&receiptLevenshtein(token,'VAT')<=1)return 'vat';if(token.length>=3&&token.length<=9&&receiptLevenshtein(token,'TOTAL')<=2)return 'total';if(token.length>=3&&token.length<=10&&receiptLevenshtein(token,'GOODS')<=3)return 'goods';return '';
   }
+  function gsfMoneyValues(value){
+    // GSF's narrow footer digits are sometimes split by Windows OCR, e.g.
+    // "I .66" for the printed 1.66. Repair only a lone leading I/l/pipe and
+    // whitespace around the decimal in this supplier-specific summary.
+    const text=String(value||'').replace(/(^|[^\d])(?:[Il|])(?=\s*[.,]\s*\d{2}(?!\d))/g,(_match,prefix)=>`${prefix}1`).replace(/(\d)\s+([.,])\s*(\d{2})(?!\d)/g,'$1$2$3');
+    return anchoredInvoiceMoneyValues(text);
+  }
   function gsfLineMoney(lines,label){
-    const page=Number(label?.page)||1,items=(lines||[]).filter(line=>(Number(line.page)||1)===page),height=Math.max(Number(label?.height)||0,12),pageHeight=Math.max(...items.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),rowTolerance=Math.max(height*1.55,pageHeight*.009,18),lx=Number(label?.x)||0,ly=Number(label?.y)||0,labelRight=lx+Math.max(Number(label?.width)||0,String(label?.text||'').length*7),candidates=[];
+    const page=Number(label?.page)||1,items=(lines||[]).filter(line=>(Number(line.page)||1)===page),height=Math.max(Number(label?.height)||0,12),pageHeight=Math.max(...items.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),rowTolerance=Math.max(height*.75,pageHeight*.009,18),lx=Number(label?.x)||0,ly=Number(label?.y)||0,labelRight=lx+Math.max(Number(label?.width)||0,String(label?.text||'').length*7),candidates=[];
     const add=(line,inline=false)=>{
-      const raw=String(line?.text||'');for(const money of anchoredInvoiceMoneyValues(raw))candidates.push({value:money.value,raw:money.raw,line,score:inline?0:Math.abs((Number(line.y)||0)-ly)/rowTolerance+Math.max(0,(Number(line.x)||0)-labelRight)/Math.max(1,pageHeight)*.05});
+      const raw=String(line?.text||'');for(const money of gsfMoneyValues(raw))candidates.push({value:money.value,raw:money.raw,line,score:inline?0:Math.abs((Number(line.y)||0)-ly)/rowTolerance+Math.max(0,(Number(line.x)||0)-labelRight)/Math.max(1,pageHeight)*.05});
       if(/\bF\s*\.?\s*O\s*\.?\s*C\s*\.?\b/i.test(raw))candidates.push({value:0,raw:'F.O.C.',line,score:inline?0:Math.abs((Number(line.y)||0)-ly)/rowTolerance+Math.max(0,(Number(line.x)||0)-labelRight)/Math.max(1,pageHeight)*.05});
     };
     add(label,true);
@@ -3465,11 +3472,12 @@
   }
   function gsfPrintedDate(lines){
     const items=(lines||[]).filter(line=>line&&String(line.text||'').trim()),dates=[];
-    const consensusDates=[...new Set(items.filter(line=>line.gsfDateConsensus).flatMap(line=>[...String(line.text||'').matchAll(/\b\d{1,2}\s*[/.-]\s*\d{1,2}\s*[/.-]\s*\d{2,4}\b/g)].map(match=>parseDate(match[0].replace(/\s+/g,''))).filter(Boolean)))];if(consensusDates.length===1)return consensusDates[0];if(consensusDates.length>1)return '';
-    for(const line of items){const raw=String(line.text||'');if(/\b(?:due\s+date|statement\s+date|payment\s+date)\b/i.test(raw))continue;for(const match of raw.matchAll(/\b\d{1,2}\s*[/.\-]\s*\d{1,2}\s*[/.\-]\s*\d{2,4}\b/g)){const date=parseDate(match[0].replace(/\s+/g,''));if(date)dates.push({date,line});}}
+    // GSF prints dates as DD/MM/YY. A one-digit day or month is treated as a truncated OCR read and retried, never accepted as a different date.
+    const consensusDates=[...new Set(items.filter(line=>line.gsfDateConsensus).flatMap(line=>[...String(line.text||'').matchAll(/\b\d{2}\s*[/.-]\s*\d{2}\s*[/.-]\s*\d{2,4}\b/g)].map(match=>parseDate(match[0].replace(/\s+/g,''))).filter(Boolean)))];if(consensusDates.length===1)return consensusDates[0];if(consensusDates.length>1)return '';
+    for(const line of items){const raw=String(line.text||'');if(/\b(?:due\s+date|statement\s+date|payment\s+date)\b/i.test(raw))continue;for(const match of raw.matchAll(/\b\d{2}\s*[/.\-]\s*\d{2}\s*[/.\-]\s*\d{2,4}\b/g)){const date=parseDate(match[0].replace(/\s+/g,''));if(date)dates.push({date,line});}}
     const labels=items.filter(line=>/\b(?:tax\s*point|invoice\s+date|date\s+of\s+issue)\b/i.test(String(line.text||'')));
     if(dates.length){dates.sort((a,b)=>{const score=item=>{const label=labels.map(line=>({line,score:Math.abs((Number(line.y)||0)-(Number(item.line.y)||0))/Math.max(1,Number(line.height)||18)+Math.abs((Number(line.x)||0)-(Number(item.line.x)||0))/Math.max(1,Number(item.line.width)||80)*.02})).sort((left,right)=>left.score-right.score)[0];return label?.score??(Number(item.line.y)||0)/Math.max(1,...items.map(line=>(Number(line.y)||0)+(Number(line.height)||0)));};return score(a)-score(b);});return dates[0].date;}
-    const text=items.map(line=>String(line.text||'')).join(' '),matches=[...text.matchAll(/\b\d{1,2}\s*[/.\-]\s*\d{1,2}\s*[/.\-]\s*\d{2,4}\b/g)];for(const match of matches){const date=parseDate(match[0].replace(/\s+/g,''));if(date)return date;}return '';
+    const text=items.map(line=>String(line.text||'')).join(' '),matches=[...text.matchAll(/\b\d{2}\s*[/.\-]\s*\d{2}\s*[/.\-]\s*\d{2,4}\b/g)];for(const match of matches){const date=parseDate(match[0].replace(/\s+/g,''));if(date)return date;}return '';
   }
   function gsfPrintedNumber(text,lines){
     const candidates=[];for(const match of String(text||'').matchAll(/\b743(?:[\s-]*\d){7}\b/g)){const digits=match[0].replace(/\D/g,'');if(digits.length===10&&digits.startsWith('743')&&!candidates.includes(digits))candidates.push(digits);}
@@ -3477,7 +3485,7 @@
     return candidates.length===1?candidates[0]:'';
   }
   function gsfFooterAmountRows(items,pageHeight,pageWidth){
-    const candidates=[];for(const line of items){const x=Number(line.x)||0,y=Number(line.y)||0;if(y<pageHeight*.76||x<pageWidth*.70)continue;for(const money of anchoredInvoiceMoneyValues(line.text))candidates.push({line,value:money.value,raw:money.raw,x,y});if(/^\s*F\s*\.?\s*O\s*\.?\s*C\s*\.?\s*$/i.test(String(line.text||'')))candidates.push({line,value:0,raw:'F.O.C.',x,y});}
+    const candidates=[];for(const line of items){const x=Number(line.x)||0,y=Number(line.y)||0;if(y<pageHeight*.76||x<pageWidth*.70)continue;for(const money of gsfMoneyValues(line.text))candidates.push({line,value:money.value,raw:money.raw,x,y});if(/^\s*F\s*\.?\s*O\s*\.?\s*C\s*\.?\s*$/i.test(String(line.text||'')))candidates.push({line,value:0,raw:'F.O.C.',x,y});}
     const heights=items.map(line=>Number(line.height)||0).filter(height=>height>0).sort((a,b)=>a-b),rowTolerance=Math.max((heights[Math.floor(heights.length/2)]||18)*1.5,pageHeight*.009,18),rows=[];
     for(const candidate of candidates.sort((a,b)=>a.y-b.y||a.x-b.x)){let row=rows.find(item=>Math.abs(item.y-candidate.y)<=rowTolerance);if(!row){row={y:candidate.y,cells:[]};rows.push(row);}if(!row.cells.some(item=>Math.abs(item.x-candidate.x)<=rowTolerance*.5))row.cells.push(candidate);}
     return rows.map(row=>({y:row.y,value:row.cells.sort((a,b)=>b.x-a.x)[0]?.value??null,x:row.cells.sort((a,b)=>b.x-a.x)[0]?.x??0})).filter(row=>row.value!==null).sort((a,b)=>a.y-b.y);
@@ -3485,7 +3493,7 @@
   function gsfFooterVatBreakdown(items,pageHeight,pageWidth){
     const headers=items.filter(line=>{const text=String(line.text||''),flat=gsfNormalizedLabel(text);return (Number(line.y)||0)>=pageHeight*.7&&/V.?T/.test(flat)&&flat.includes('GOODS')&&(flat.includes('CODE')||/%/.test(text)||/RATE/i.test(text));});
     for(const header of headers){const y=Number(header.y)||0,h=Math.max(Number(header.height)||16,16),hx=Number(header.x)||0,hw=Math.max(Number(header.width)||0,h),maxY=y+Math.max(pageHeight*.035,h*4),rowTolerance=Math.max(h*1.5,pageHeight*.009,18),cells=[];
-      for(const line of items){const ly=Number(line.y)||0,x=Number(line.x)||0;if(ly<=y+h*.25||ly>maxY||x<hx+hw*.35)continue;for(const money of anchoredInvoiceMoneyValues(line.text))cells.push({line,value:money.value,x,y:ly});}
+      for(const line of items){const ly=Number(line.y)||0,x=Number(line.x)||0;if(ly<=y+h*.25||ly>maxY||x<hx+hw*.35)continue;for(const money of gsfMoneyValues(line.text))cells.push({line,value:money.value,x,y:ly});}
       const rows=[];for(const cell of cells.sort((a,b)=>a.y-b.y||a.x-b.x)){let row=rows.find(item=>Math.abs(item.y-cell.y)<=rowTolerance);if(!row){row={y:cell.y,cells:[]};rows.push(row);}if(!row.cells.some(item=>Math.abs(item.x-cell.x)<=rowTolerance*.5))row.cells.push(cell);}
       const qualified=rows.filter(row=>row.cells.length>=2).sort((a,b)=>a.y-b.y);if(qualified.length===1)return qualified[0].cells.sort((a,b)=>b.x-a.x)[0]?.value??null;
     }
@@ -3497,7 +3505,7 @@
     const lowerHeaders=items.filter(line=>(Number(line.y)||0)>=pageHeight*.7),rateHeaders=lowerHeaders.filter(line=>/%/.test(String(line.text||''))&&/(?:V|X|Y)?AT/i.test(gsfNormalizedLabel(line.text))),goodsHeaders=lowerHeaders.filter(line=>gsfNormalizedLabel(line.text).includes('GOODS'));
     const fallbackRows=[];
     for(const rate of rateHeaders)for(const goods of goodsHeaders){const rateY=Number(rate.y)||0,goodsY=Number(goods.y)||0,headerHeight=Math.max(Number(rate.height)||0,Number(goods.height)||0,16),headerTolerance=Math.max(headerHeight*1.5,pageHeight*.009,18);if(Math.abs(rateY-goodsY)>headerTolerance)continue;const headerY=Math.min(rateY,goodsY),tableLeft=Math.min(Number(rate.x)||0,Number(goods.x)||0)-headerHeight,tableRight=pageWidth*.78,maxY=headerY+Math.max(pageHeight*.035,headerHeight*4),rowTolerance=Math.max(headerHeight*1.5,pageHeight*.009,18),cells=[];
-      for(const line of items){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<=headerY+headerHeight*.25||y>maxY||x<tableLeft||x>tableRight)continue;for(const money of anchoredInvoiceMoneyValues(line.text))cells.push({value:money.value,x,y});}
+      for(const line of items){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<=headerY+headerHeight*.25||y>maxY||x<tableLeft||x>tableRight)continue;for(const money of gsfMoneyValues(line.text))cells.push({value:money.value,x,y});}
       const rows=[];for(const cell of cells.sort((a,b)=>a.y-b.y||a.x-b.x)){let row=rows.find(item=>Math.abs(item.y-cell.y)<=rowTolerance);if(!row){row={y:cell.y,cells:[]};rows.push(row);}if(!row.cells.some(item=>Math.abs(item.x-cell.x)<=rowTolerance*.5))row.cells.push(cell);}
       for(const row of rows.filter(item=>item.cells.length>=3))fallbackRows.push(row.cells.sort((a,b)=>a.x-b.x));
     }
@@ -3510,7 +3518,7 @@
     // separate invoice-total box.
     const codeHeaders=items.filter(line=>(Number(line.y)||0)>=pageHeight*.7&&/\bCODE\b/i.test(String(line.text||''))),goodsColumnHeaders=items.filter(line=>(Number(line.y)||0)>=pageHeight*.7&&gsfNormalizedLabel(line.text).includes('GOODS'));
     for(const code of codeHeaders)for(const goods of goodsColumnHeaders){const codeY=Number(code.y)||0,goodsY=Number(goods.y)||0,headerHeight=Math.max(Number(code.height)||0,Number(goods.height)||0,16),headerTolerance=Math.max(headerHeight*1.5,pageHeight*.009,18);if(Math.abs(codeY-goodsY)>headerTolerance)continue;const headerY=Math.min(codeY,goodsY),goodsX=Number(goods.x)||0,tableRight=pageWidth*.78,maxY=headerY+Math.max(pageHeight*.035,headerHeight*4),rowTolerance=Math.max(headerHeight*1.5,pageHeight*.009,18),cells=[];
-      for(const line of items){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<=headerY+headerHeight*.25||y>maxY||x<goodsX-headerHeight||x>tableRight)continue;for(const money of anchoredInvoiceMoneyValues(line.text))cells.push({value:money.value,x,y});if(/^\s*0[.,]0{2}\s*$/.test(String(line.text||'')))cells.push({value:0,x,y});}
+      for(const line of items){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<=headerY+headerHeight*.25||y>maxY||x<goodsX-headerHeight||x>tableRight)continue;for(const money of gsfMoneyValues(line.text))cells.push({value:money.value,x,y});if(/^\s*0[.,]0{2}\s*$/.test(String(line.text||'')))cells.push({value:0,x,y});}
       const rows=[];for(const cell of cells.sort((a,b)=>a.y-b.y||a.x-b.x)){let row=rows.find(item=>Math.abs(item.y-cell.y)<=rowTolerance);if(!row){row={y:cell.y,cells:[]};rows.push(row);}if(!row.cells.some(item=>Math.abs(item.x-cell.x)<=rowTolerance*.5))row.cells.push(cell);}
       const qualified=rows.filter(row=>row.cells.length>=2).sort((a,b)=>a.y-b.y);if(qualified.length===1)return qualified[0].cells.sort((a,b)=>b.x-a.x)[0]?.value??null;
     }
@@ -3527,7 +3535,7 @@
     const noisyVatRows=[];
     for(const header of noisyVatHeaders){
       const hx=Number(header.x)||0,hy=Number(header.y)||0,hh=Math.max(Number(header.height)||0,16),maxY=hy+Math.max(pageHeight*.04,hh*5,42),rowTolerance=Math.max(hh*1.5,pageHeight*.009,18),tableRight=pageWidth*.78,cells=[];
-      for(const line of items){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<=hy+hh*.2||y>maxY||x<hx+hh*.45||x>tableRight)continue;for(const money of anchoredInvoiceMoneyValues(line.text))cells.push({value:money.value,x,y});if(/^\s*0[.,]0{2}\s*$/.test(String(line.text||'')))cells.push({value:0,x,y});}
+      for(const line of items){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<=hy+hh*.2||y>maxY||x<hx+hh*.45||x>tableRight)continue;for(const money of gsfMoneyValues(line.text))cells.push({value:money.value,x,y});if(/^\s*0[.,]0{2}\s*$/.test(String(line.text||'')))cells.push({value:0,x,y});}
       const rows=[];for(const cell of cells.sort((a,b)=>a.y-b.y||a.x-b.x)){let row=rows.find(item=>Math.abs(item.y-cell.y)<=rowTolerance);if(!row){row={y:cell.y,cells:[]};rows.push(row);}if(!row.cells.some(item=>Math.abs(item.x-cell.x)<=rowTolerance*.5))row.cells.push(cell);}
       const qualified=rows.filter(row=>row.cells.length>=2).sort((a,b)=>a.y-b.y);if(qualified.length===1)noisyVatRows.push(qualified[0].cells.sort((a,b)=>a.x-b.x));
     }
@@ -3563,6 +3571,12 @@
         // VAT and total. Leave both unconfirmed for manual review instead.
         results.push({page,total:null,vat:null,totalEvidence:'',vatEvidence:''});continue;
       }
+      // The three right-aligned amounts at the bottom of a GSF invoice are
+      // the printed GOODS, VAT and TOTAL summary. OCR label recognition can
+      // attach a nearby net amount to a fuzzy VAT heading, so this explicit
+      // footer row order takes precedence over those less reliable matches.
+      const footerRows=gsfFooterAmountRows(items,pageHeight,pageWidth),rightAlignedFooterStack=footerRows.length===3&&Math.max(...footerRows.map(row=>row.x))-Math.min(...footerRows.map(row=>row.x))<=pageWidth*.045&&footerRows.slice(1).every((row,index)=>(row.y-footerRows[index].y)<=pageHeight*.04);
+      if(rightAlignedFooterStack){results.push({page,total:footerRows.at(-1).value,vat:footerRows.at(-2).value,totalEvidence:'last printed row in aligned GSF footer summary',vatEvidence:'middle printed row in aligned GSF footer summary'});continue;}
       const totalLabels=labels.filter(item=>item.kind==='total').map(item=>({...item,found:gsfLineMoney(items,item.line)})).filter(item=>item.found).sort((a,b)=>(Number(b.line.y)||0)-(Number(a.line.y)||0)||(Number(b.line.x)||0)-(Number(a.line.x)||0));
       let total=totalLabels[0]||null;
       const vatLabels=labels.filter(item=>item.kind==='vat'&&(!total||Math.abs((Number(item.line.x)||0)-(Number(total.line.x)||0))<=Math.max(pageWidth*.13,(Number(total.line.height)||18)*6))&&(!total||(Number(item.line.y)||0)<=(Number(total.line.y)||0))&&(!total||(Number(total.line.y)||0)-(Number(item.line.y)||0)<=Math.max(pageHeight*.05,(Number(total.line.height)||18)*5))).map(item=>({...item,found:gsfLineMoney(items,item.line)})).filter(item=>item.found).sort((a,b)=>total?Math.abs((Number(a.line.y)||0)-(Number(total.line.y)||0))-Math.abs((Number(b.line.y)||0)-(Number(total.line.y)||0)):(Number(b.line.y)||0)-(Number(a.line.y)||0));
@@ -3572,12 +3586,12 @@
       let breakdownVat=null;
       if(!vat){
         const vatHeaders=items.filter(line=>/^\s*VAT\s*$/i.test(String(line.text||''))),rateHeaders=items.filter(line=>/^\s*VAT\s*%\s*$/i.test(String(line.text||''))||/^\s*VAT\s+RATE\s*$/i.test(String(line.text||''))),goodsHeaders=items.filter(line=>/^\s*GOODS\s*$/i.test(String(line.text||'')));
-        for(const header of vatHeaders){const y=Number(header.y)||0,h=Math.max(Number(header.height)||16,16),sameHeader=rateHeaders.some(line=>Math.abs((Number(line.y)||0)-y)<=h*1.5&&(Number(line.x)||0)<(Number(header.x)||0))&&goodsHeaders.some(line=>Math.abs((Number(line.y)||0)-y)<=h*1.5&&(Number(line.x)||0)<(Number(header.x)||0));if(!sameHeader)continue;const cellX=Number(header.x)||0,rowValues=[];for(const line of items){const dy=(Number(line.y)||0)-y,x=Number(line.x)||0;if(dy<=h*.3||dy>Math.max(pageHeight*.025,h*3.5)||Math.abs(x-cellX)>Math.max(pageWidth*.035,h*4))continue;for(const amount of anchoredInvoiceMoneyValues(line.text))rowValues.push({value:amount.value,line,dy});if(/^\s*0[.,]0{2}\s*$/.test(String(line.text||'')))rowValues.push({value:0,line,dy});}rowValues.sort((a,b)=>a.dy-b.dy);if(rowValues.length===1)vat={found:rowValues[0],line:header,kind:'vat'};break;}
+        for(const header of vatHeaders){const y=Number(header.y)||0,h=Math.max(Number(header.height)||16,16),sameHeader=rateHeaders.some(line=>Math.abs((Number(line.y)||0)-y)<=h*1.5&&(Number(line.x)||0)<(Number(header.x)||0))&&goodsHeaders.some(line=>Math.abs((Number(line.y)||0)-y)<=h*1.5&&(Number(line.x)||0)<(Number(header.x)||0));if(!sameHeader)continue;const cellX=Number(header.x)||0,rowValues=[];for(const line of items){const dy=(Number(line.y)||0)-y,x=Number(line.x)||0;if(dy<=h*.3||dy>Math.max(pageHeight*.025,h*3.5)||Math.abs(x-cellX)>Math.max(pageWidth*.035,h*4))continue;for(const amount of gsfMoneyValues(line.text))rowValues.push({value:amount.value,line,dy});if(/^\s*0[.,]0{2}\s*$/.test(String(line.text||'')))rowValues.push({value:0,line,dy});}rowValues.sort((a,b)=>a.dy-b.dy);if(rowValues.length===1)vat={found:rowValues[0],line:header,kind:'vat'};break;}
       }
       breakdownVat=vat?.found?.value??gsfFooterVatBreakdown(items,pageHeight,pageWidth);
-      const footerRows=gsfFooterAmountRows(items,pageHeight,pageWidth),recognizedAnchors=labels.filter(item=>['goods','vat','total'].includes(item.kind)),rightAlignedStack=footerRows.length===3&&Math.max(...footerRows.map(row=>row.x))-Math.min(...footerRows.map(row=>row.x))<=pageWidth*.045&&footerRows.slice(1).every((row,index)=>(row.y-footerRows[index].y)<=pageHeight*.04),summaryStackIsAnchored=recognizedAnchors.length>=2||breakdownVat!==null;
+      const recognizedAnchors=labels.filter(item=>['goods','vat','total'].includes(item.kind)),rightAlignedStack=rightAlignedFooterStack,summaryStackIsAnchored=recognizedAnchors.length>=2||breakdownVat!==null;
       let stackedTotal=rightAlignedStack?footerRows.at(-1).value:null,stackedVat=rightAlignedStack?footerRows.at(-2).value:null;
-      if(footerRows.length===2&&breakdownVat!==null){const firstGoods=labels.some(item=>item.kind==='goods'&&Math.abs((Number(item.line.y)||0)-footerRows[0].y)<=Math.max(pageHeight*.025,(Number(item.line.height)||16)*4));const lastTotal=labels.some(item=>item.kind==='total'&&Math.abs((Number(item.line.y)||0)-footerRows.at(-1).y)<=Math.max(pageHeight*.025,(Number(item.line.height)||16)*4));if(firstGoods||lastTotal)stackedTotal=footerRows.at(-1).value;}
+      if(footerRows.length===2&&breakdownVat!==null){const lastTotal=labels.some(item=>item.kind==='total'&&Math.abs((Number(item.line.y)||0)-footerRows.at(-1).y)<=Math.max((Number(item.line.height)||16)*.65,pageHeight*.009,18));if(lastTotal)stackedTotal=footerRows.at(-1).value;}
       if(!total&&(summaryStackIsAnchored||rightAlignedStack)&&stackedTotal!==null)total={found:{value:stackedTotal,raw:'printed final value in GSF footer amount rows'},line:null,kind:'total'};
       if(!vat&&(summaryStackIsAnchored||rightAlignedStack)&&stackedVat!==null)vat={found:{value:stackedVat,raw:'printed middle value in GSF footer amount rows'},line:null,kind:'vat'};
       if(!vat&&breakdownVat!==null)vat={found:{value:breakdownVat,raw:'printed GSF VAT breakdown cell'},line:null,kind:'vat'};
@@ -3588,9 +3602,16 @@
     return results.sort((a,b)=>(Number(b.page)||0)-(Number(a.page)||0)).find(item=>item.total!==null||item.vat!==null)||null;
   }
   function isGsfInvoicePage(lines,text=''){
-    const flat=String(text|| (lines||[]).map(line=>String(line.text||'')).join(' '));if(!isGsfCarPartsText(flat)||! /\bINVOICE\b/i.test(flat))return false;
-    const statementTitle=/\bst[a-z]{0,5}ent\s+of\s+account\b|\baccount\s+statement\b/i.test(flat),statementLedger=/\bcustomer\s+account\s*(?:no|number)\b/i.test(flat)&&/\blast\s+payment\s+received\b/i.test(flat);
-    return !statementTitle&&!statementLedger&&!/\b(?:customer\s+goods\s+returns\s+note|returns?\s+note|weekly\s+offers|special\s+offers)\b/i.test(flat);
+    const items=Array.isArray(lines)?lines:[],flat=String(text||items.map(line=>String(line.text||'')).join(' '));if(!isGsfCarPartsText(flat))return false;
+    const statementTitle=/\bst[a-z]{0,5}ent\s+of\s+account\b|\baccount\s+statement\b/i.test(flat),statementLedger=/\bcustomer\s+account\s*(?:no|number)\b/i.test(flat)&&/\blast\s+payment\s+received\b/i.test(flat),excludedDocument=/\b(?:customer\s+goods\s+returns\s+note|returns?\s+note|weekly\s+offers|special\s+offers)\b/i.test(flat);
+    if(statementTitle||statementLedger||excludedDocument)return false;
+    if(/\bINVOICE\b/i.test(flat))return true;
+    // Windows OCR versions can read the printed 743… invoice reference and
+    // tax-point date while badly mangling the large INVOICE heading. The
+    // supplier-specific reference, date and invoice footer/body markers are
+    // stronger together than that single heading word.
+    const hasPrintedIdentity=Boolean(gsfPrintedNumber(flat,items)&&gsfPrintedDate(items)),hasInvoiceBody=/\bRECEIVED\s+BY\b/i.test(flat),pageHeight=Math.max(...items.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),pageWidth=Math.max(...items.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1),footerRows=gsfFooterAmountRows(items,pageHeight,pageWidth);
+    return hasPrintedIdentity&&(hasInvoiceBody||footerRows.length>=2);
   }
   function parseGsfCarPartsInvoice(flat,source='',ocrLines){
     const lines=Array.isArray(ocrLines)?ocrLines.filter(line=>line&&String(line.text||'').trim()):[],text=String(flat||lines.map(line=>String(line.text||'')).join(' ')),invoiceDocument=isGsfInvoicePage(lines,text),originalInvoiceNumber=gsfPrintedNumber(text,lines),date=gsfPrintedDate(lines),summary=gsfSummary(lines),total=summary?.total??null,vat=summary?.vat??null,complete=Boolean(invoiceDocument&&originalInvoiceNumber&&date&&total!==null&&vat!==null),reason=complete?'':!invoiceDocument?'This page is not a GSF invoice.':!originalInvoiceNumber?'GSF invoice number could not be confirmed from the printed document number.':!date?'GSF tax point date could not be confirmed.':total===null?'Printed GSF invoice Total could not be confirmed.':'Printed GSF invoice VAT could not be confirmed.';

@@ -196,6 +196,16 @@ test('GSF profile reads printed invoice footer, tolerates shifted scans, and ski
   const parse=pages=>P.parseInvoiceBatch(pages.flat().map(item=>item.text).join('\n'),'renamed-gsf.pdf',pages.flat());
   const [row]=parse([make()]);
   assert.deepEqual([row.profileId,row.invoiceNumber,row.originalInvoiceNumber,row.date,row.supplier,row.vat,row.total,row.status,row.retryOcr],['gsf-car-parts','5627','7431125627','2026-06-03','GSF Car Parts Limited',4.71,28.27,'ACCEPTED',false]);
+  const threeRowFooter=make(19,{number:'7431125619',date:'19/06/26',vat:'4.71',total:'28.27'}).map(item=>item.text==='23.56'?{...item,text:'8.28'}:item.text==='4.71'?{...item,text:'I .66'}:item.text==='28.27'?{...item,text:'9.94'}:item),[normalizedFooter]=parse([threeRowFooter]);
+  assert.deepEqual([normalizedFooter.vat,normalizedFooter.total,normalizedFooter.status],[1.66,9.94,'ACCEPTED'],'split leading digit OCR in the printed summary is normalized, and footer rows take precedence over the item table');
+  const partialFooter=make(20,{number:'7431125620',date:'20/06/26'}).filter(item=>!['CODE GOODS VAT TOTAL','20.00 23.56 4.71 28.27','GOODS','23.56','VAT','4.71','TOTAL','28.27'].includes(item.text));
+  partialFooter.push(line(20,'GOODS Z;',1599,2377),line(20,'4.13',1858,2379),line(20,'VAT',1576,2429),line(20,'0.83',1859,2429),line(20,'hTOTAL',1576,2489,139,47));
+  const [unconfirmedTotal]=parse([partialFooter]);
+  assert.deepEqual([unconfirmedTotal.vat,unconfirmedTotal.total,unconfirmedTotal.status],[0.83,'','REJECTED'],'a tall OCR box for a damaged Total label cannot reach up and reuse the VAT value as the invoice total');
+  const mangledTitle=make(21,{number:'7431125621',date:'21/06/26'}).map(item=>item.text==='INVOICE'?{...item,text:'INVO'}:item.text==='Invoice No'?{...item,text:'INVOI No'}:item),[recoveredTitle]=parse([mangledTitle]);
+  assert.deepEqual([recoveredTitle.invoiceNumber,recoveredTitle.date,recoveredTitle.vat,recoveredTitle.total,recoveredTitle.status],['5621','2026-06-21',4.71,28.27,'ACCEPTED'],'printed GSF invoice identity and summary recover the page when OCR mangles the word INVOICE');
+  const truncatedDay=make(22,{number:'7431125622',date:'1/08/26'}),[dateNeedsRetry]=parse([truncatedDay]);
+  assert.deepEqual([dateNeedsRetry.date,dateNeedsRetry.status,dateNeedsRetry.retryOcr],['','REJECTED',true],'a one-digit GSF day is treated as truncated OCR and retried rather than silently changed to the first of the month');
   const shifted=make(7).map(item=>({...item,x:item.x*1.55+430,y:item.y*1.55+280,width:item.width*1.55,height:item.height*1.55})),[shiftedRow]=parse([shifted]);
   assert.deepEqual([shiftedRow.invoiceNumber,shiftedRow.date,shiftedRow.vat,shiftedRow.total,shiftedRow.status],['5627','2026-06-03',4.71,28.27,'ACCEPTED'],'supplier fields follow the printed text when the page is shifted and resized');
   const [zeroVat]=parse([make(2,{number:'7431125638',date:'04/06/26',vat:'0.00',total:'23.56'})]);
