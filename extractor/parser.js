@@ -1332,6 +1332,7 @@
     const raw=String(text||'').trim().toUpperCase();if(kind==='TOTAL'&&/\bGOODS\b/i.test(raw))return false;
     const label=raw.replace(/0/g,'O').replace(/[^A-Z]/g,'');
     if(kind==='VAT')return ['VAT','VA','VAI'].includes(label);
+    if(kind==='GOODS TOTAL')return label.startsWith('GOODSTOT');
     return ['TOTAL','TOTA','TOTL','TOAL'].includes(label);
   }
   function banozeMoneyValues(value){
@@ -1352,7 +1353,8 @@
     if(!variantPass){
       for(const pageLines of pages.values()){
         const variants=[...new Set(pageLines.filter(line=>line.banozeVariant!==undefined&&line.banozeVariant!==null).map(line=>String(line.banozeVariant)))];if(!variants.length)continue;
-        const readings=variants.map(variant=>banozeFooterAmount(pageLines.filter(line=>line.banozeVariant===undefined||line.banozeVariant===null||String(line.banozeVariant)===variant),kind,true)).filter(value=>value!==null),unique=[...new Set(readings.map(value=>Number(value).toFixed(2)))];return unique.length===1?Number(unique[0]):null;
+        const readings=variants.map(variant=>banozeFooterAmount(pageLines.filter(line=>String(line.banozeVariant)===variant),kind,true)).filter(value=>value!==null).map(value=>Number(value).toFixed(2)),votes=new Map();for(const value of readings)votes.set(value,(votes.get(value)||0)+1);
+        const ranked=[...votes.entries()].sort((a,b)=>b[1]-a[1]);return ranked.length&&ranked[0][1]>=2&&ranked[0][1]*2>readings.length?Number(ranked[0][0]):null;
       }
     }
     for(const pageLines of pages.values()){
@@ -1371,6 +1373,12 @@
     }
     return null;
   }
+  function banozeFooterVariantConfirms(lines,kind,value){
+    if(value===null||value===undefined||!Number.isFinite(Number(value)))return false;
+    const items=(Array.isArray(lines)?lines:[]).filter(line=>line&&String(line.text||'').trim()),pages=new Map();for(const line of items){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}
+    return [...pages.values()].some(pageLines=>{if(!pageLines.some(line=>line.banozeVariant!==undefined&&line.banozeVariant!==null))return false;const confirmed=banozeFooterAmount(pageLines,kind);return confirmed!==null&&Math.round(Number(confirmed)*100)===Math.round(Number(value)*100);});
+  }
+  function banozeCents(value){if(value===null||value===undefined||String(value).trim()==='')return null;const amount=Number(value);return Number.isFinite(amount)?Math.round(amount*100):null;}
   function parseBanozeInvoice(text,source='',ocrLines){
     const lines=Array.isArray(ocrLines)?ocrLines.filter(line=>line&&String(line.text||'').trim()):[],content=String(text||lines.map(line=>String(line.text||'')).join('\n')),isInvoiceDocument=banozeInvoicePage(lines,content);
     let originalInvoiceNumber=isInvoiceDocument?banozeInvoiceNumber(content,lines):'',printedDate=isInvoiceDocument?anchoredInvoiceDate(content,lines):'';
@@ -1380,12 +1388,64 @@
       if(!originalInvoiceNumber){const candidates=headerVariants.map(variant=>banozeInvoiceNumber('',[...untagged,...lines.filter(line=>String(line.banozeHeaderVariant)===variant)])).filter(Boolean),counts=new Map();for(const candidate of candidates)counts.set(candidate,(counts.get(candidate)||0)+1);const agreed=[...counts].filter(([,count])=>count>=2);if(agreed.length===1)originalInvoiceNumber=agreed[0][0];}
       if(!printedDate||numberYear&&printedDate.slice(0,4)!==numberYear){const candidates=headerVariants.map(variant=>anchoredInvoiceDate('',[...untagged,...lines.filter(line=>String(line.banozeHeaderVariant)===variant)])).filter(Boolean),counts=new Map();for(const candidate of candidates)counts.set(candidate,(counts.get(candidate)||0)+1);const agreed=[...counts].filter(([,count])=>count>=2);if(agreed.length===1)printedDate=agreed[0][0];}
     }
-    const numberYear=String(originalInvoiceNumber).match(/^BNZ(20\d{2})/i)?.[1]||'',date=numberYear&&printedDate&&printedDate.slice(0,4)!==numberYear?'':printedDate,readVat=isInvoiceDocument?banozeFooterAmount(lines,'VAT'):null,total=isInvoiceDocument?banozeFooterAmount(lines,'TOTAL'):null;
-    // A VAT candidate at least as large as the printed gross amount is almost
-    // certainly an OCR splice from the rules/adjacent columns (for example,
-    // a horizontal rule joined to the VAT digits). Do not post it as VAT.
-    const vatLooksSpliced=readVat!==null&&total!==null&&Math.abs(readVat)>=Math.abs(total)&&Math.abs(total)>0,vat=vatLooksSpliced?null:readVat,supplier='Banoze Ltd',invoiceNumberGenerated=Boolean(isInvoiceDocument&&!originalInvoiceNumber),referencePage=lines.length?Math.min(...lines.map(line=>Number(line.page)||1)):1,generatedNumber=invoiceNumberGenerated?generatedInvoiceReference('banoze',date,`${source}|PAGE:${referencePage}|${content}`):'',invoiceNumber=originalInvoiceNumber||generatedNumber,complete=Boolean(isInvoiceDocument&&invoiceNumber&&date&&vat!==null&&total!==null&&Number.isFinite(vat)&&Number.isFinite(total)),reason=complete?'':!isInvoiceDocument?'This page is not a Banoze invoice.':!date?'Banoze invoice date could not be confirmed from the printed document.':total===null?'Printed Banoze TOTAL could not be confirmed.':'Printed Banoze VAT could not be confirmed independently from the invoice footer.';
-    return {invoiceNumber,originalInvoiceNumber:originalInvoiceNumber||generatedNumber,invoiceNumberGenerated,invoiceNumberGeneratedReason:invoiceNumberGenerated?`No readable invoice number was printed; generated unique internal reference ${generatedNumber}.`:'',date,supplier,subtotal:'',vat:vat??'',vatUnverified:vat===null,vatMentioned:vat!==null,total:total??'',currency:'GBP',source,documentType:isInvoiceDocument?'INVOICE':'NON-INVOICE',isInvoiceDocument,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(isInvoiceDocument&&!complete),review:false,layoutId:'banoze-footer-summary',profileId:'banoze'};
+    const numberYear=String(originalInvoiceNumber).match(/^BNZ(20\d{2})/i)?.[1]||'',date=numberYear&&printedDate&&printedDate.slice(0,4)!==numberYear?'':printedDate,goodsTotal=isInvoiceDocument?banozeFooterAmount(lines,'GOODS TOTAL'):null,readVat=isInvoiceDocument?banozeFooterAmount(lines,'VAT'):null,readTotal=isInvoiceDocument?banozeFooterAmount(lines,'TOTAL'):null;
+    // The Banoze footer prints Goods Total, VAT and Total together. These are
+    // the only values used for a derived amount; line items are never summed.
+    // If OCR values conflict, defer to the focused contrast retry instead of
+    // guessing which first-pass value lost or gained digits.
+    let vat=readVat,total=readTotal,vatCalculated=false,totalCalculated=false,footerNeedsReview=false;
+    const hasGoodsTotalLabel=isInvoiceDocument&&lines.some(line=>banozeLabelMatches(line.text,'GOODS TOTAL')),
+      hasContrastReads=lines.some(line=>line.banozeVariant!==undefined&&line.banozeVariant!==null),
+      goodsConfirmed=banozeFooterVariantConfirms(lines,'GOODS TOTAL',goodsTotal),
+      vatConfirmed=banozeFooterVariantConfirms(lines,'VAT',readVat),
+      totalConfirmed=banozeFooterVariantConfirms(lines,'TOTAL',readTotal),
+      footerCents={goods:banozeCents(goodsTotal),vat:banozeCents(readVat),total:banozeCents(readTotal)},
+      rawFooterReconciles=footerCents.goods!==null&&footerCents.vat!==null&&footerCents.total!==null&&Math.abs(footerCents.goods+footerCents.vat-footerCents.total)<=1;
+    if(hasContrastReads){
+      // A majority contrast reading confirms each footer cell independently.
+      // When two confirmed footer figures are available, use those to recover
+      // the third or correct a conflicting OCR read, all in integer pennies.
+      if(goodsConfirmed&&vatConfirmed&&!totalConfirmed){
+        total=(banozeCents(goodsTotal)+banozeCents(readVat))/100;
+        totalCalculated=true;
+        vat=readVat;
+      }else if(goodsConfirmed&&totalConfirmed&&!vatConfirmed){
+        vat=(banozeCents(readTotal)-banozeCents(goodsTotal))/100;
+        vatCalculated=true;
+        total=readTotal;
+      }else if(vatConfirmed&&totalConfirmed){
+        // Goods Total is useful corroboration, but not required to report the
+        // two directly confirmed amounts when that footer cell stays unreadable.
+        vat=readVat;total=readTotal;
+      }else{
+        footerNeedsReview=true;vat=null;total=null;
+      }
+      if(!footerNeedsReview&&goodsConfirmed&&vatConfirmed&&totalConfirmed){
+        const recoveredCents={goods:banozeCents(goodsTotal),vat:banozeCents(vat),total:banozeCents(total)};
+        if(Math.abs(recoveredCents.goods+recoveredCents.vat-recoveredCents.total)>1)footerNeedsReview=true;
+      }
+    }else if(footerCents.goods!==null&&footerCents.vat!==null&&footerCents.total!==null&&!rawFooterReconciles){
+      // Three inconsistent first-pass values do not establish which OCR cell
+      // is wrong. Hide both posting amounts and require a footer-only reread.
+      footerNeedsReview=true;vat=null;total=null;
+    }else if(total===null&&goodsTotal!==null&&readVat!==null){
+      total=(banozeCents(goodsTotal)+banozeCents(readVat))/100;totalCalculated=true;
+    }else if(readVat===null&&goodsTotal!==null&&readTotal!==null){
+      vat=(banozeCents(readTotal)-banozeCents(goodsTotal))/100;vatCalculated=true;
+    }
+    // A missing Goods Total on a document that clearly prints this footer
+    // still triggers one localized reread: it can expose a dropped leading
+    // digit in the apparently readable VAT or Total cell.
+    if(isInvoiceDocument&&hasGoodsTotalLabel&&goodsTotal===null&&!hasContrastReads){footerNeedsReview=true;total=null;}
+    const parsedCents={goods:banozeCents(goodsTotal),vat:banozeCents(vat),total:banozeCents(total)},amountsReconcile=parsedCents.goods!==null&&parsedCents.vat!==null&&parsedCents.total!==null&&Math.abs(parsedCents.goods+parsedCents.vat-parsedCents.total)<=1,
+      footerPairConfirmed=hasContrastReads&&(goodsConfirmed&&vatConfirmed||goodsConfirmed&&totalConfirmed||vatConfirmed&&totalConfirmed);
+    if(!footerNeedsReview&&parsedCents.goods!==null&&parsedCents.vat!==null&&parsedCents.total!==null&&!amountsReconcile)footerNeedsReview=true;
+    if(hasGoodsTotalLabel&&goodsTotal===null&&!footerPairConfirmed)footerNeedsReview=true;
+    if(footerNeedsReview&&!hasContrastReads){vat=null;total=null;}
+    const supplier='Banoze Ltd',invoiceNumberGenerated=Boolean(isInvoiceDocument&&!originalInvoiceNumber),referencePage=lines.length?Math.min(...lines.map(line=>Number(line.page)||1)):1,generatedNumber=invoiceNumberGenerated?generatedInvoiceReference('banoze',date,`${source}|PAGE:${referencePage}|${content}`):'',invoiceNumber=originalInvoiceNumber||generatedNumber,
+      complete=Boolean(isInvoiceDocument&&invoiceNumber&&date&&vat!==null&&total!==null&&Number.isFinite(vat)&&Number.isFinite(total)&&!footerNeedsReview),
+      reason=complete?'':!isInvoiceDocument?'This page is not a Banoze invoice.':!date?'Banoze invoice date could not be confirmed from the printed document.':footerNeedsReview?'Banoze footer values could not be confirmed; the printed Goods Total, VAT and Total need a focused reread.':total===null?'Printed Banoze TOTAL could not be confirmed.':'Printed Banoze VAT could not be confirmed independently from the invoice footer.';
+    return {invoiceNumber,originalInvoiceNumber:originalInvoiceNumber||generatedNumber,invoiceNumberGenerated,invoiceNumberGeneratedReason:invoiceNumberGenerated?`No readable invoice number was printed; generated unique internal reference ${generatedNumber}.`:'',date,supplier,subtotal:'',vat:vat??'',vatUnverified:vat===null,vatMentioned:vat!==null,total:total??'',banozeGoodsTotal:goodsTotal??'',banozeDerivedVat:vatCalculated,banozeDerivedTotal:totalCalculated,banozeFooterUnverified:footerNeedsReview,currency:'GBP',source,documentType:isInvoiceDocument?'INVOICE':'NON-INVOICE',isInvoiceDocument,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:Boolean(isInvoiceDocument&&(!complete||footerNeedsReview)),review:false,layoutId:'banoze-footer-summary',profileId:'banoze'};
   }
   function parseBanozeBatch(pageLines,source,options={}){
     const pages=[...pageLines.keys()].sort((a,b)=>a-b),banozePages=new Set(pages.filter(page=>isBanozeText((pageLines.get(page)||[]).map(line=>String(line.text||'')).join(' ')))),records=[],consumed=new Set(banozePages);
@@ -3147,7 +3207,7 @@
   function invoiceRetryRegionsForRow(row,ocrLines){
     if(row?.profileId==='banoze'){
       const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),pages=[...new Set((row.sourcePages||[row.page]).map(Number).filter(page=>Number.isInteger(page)&&page>0))],regions=[];
-      const missingNumber=!row.originalInvoiceNumber,missingDate=!row.date,missingAmounts=row.total===''||row.total===null||row.total===undefined||row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified;
+      const missingNumber=!row.originalInvoiceNumber,missingDate=!row.date,missingAmounts=row.total===''||row.total===null||row.total===undefined||row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified||row.banozeFooterUnverified;
       for(const page of pages){
         const pageLines=lines.filter(line=>(Number(line.page)||1)===page);if(!pageLines.length)continue;
         const heights=pageLines.map(line=>Number(line.height)||0).filter(height=>height>0&&height<100).sort((a,b)=>a-b),lineHeight=heights.length?heights[Math.floor(heights.length/2)]:18,pageRight=Math.max(...pageLines.map(line=>(Number(line.x)||0)+(Number(line.width)||0))),pageBottom=Math.max(...pageLines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1);
@@ -4011,7 +4071,7 @@
     // An unconfigured supplier can have its printed values extracted for review,
     // but it remains rejected until a supplier profile has been added.
     const profileConfigured=profile?.kind==='supplier',supportedProfile=profileConfigured&&Boolean(specialised),genericAcceptedForConfiguredProfile=profileConfigured&&row.accepted===true,unconfiguredSupplier=!profileConfigured&&row.isInvoiceDocument!==false;
-    const vatRequired=row.documentType!=='DELIVERY NOTE',complete=Boolean((supportedProfile||genericAcceptedForConfiguredProfile)&&row.isInvoiceDocument!==false&&!row.ocrConflictReason&&row.invoiceNumber&&row.date&&row.supplier&&row.total!==''&&row.total!==null&&row.total!==undefined&&Number.isFinite(Number(row.total))&&(!vatRequired||row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat)))&&(profile?.id!=='amazon'||String(row.itemName||'').trim())&&(row.documentType!=='CORRECTION'||row.correctedTotal!==''&&row.correctedTotal!==null&&row.correctedTotal!==undefined&&Number.isFinite(Number(row.correctedTotal))&&row.correctedVat!==''&&row.correctedVat!==null&&row.correctedVat!==undefined&&Number.isFinite(Number(row.correctedVat))));
+    const vatRequired=row.documentType!=='DELIVERY NOTE',complete=Boolean((supportedProfile||genericAcceptedForConfiguredProfile)&&row.isInvoiceDocument!==false&&!row.ocrConflictReason&&!row.banozeFooterUnverified&&row.invoiceNumber&&row.date&&row.supplier&&row.total!==''&&row.total!==null&&row.total!==undefined&&Number.isFinite(Number(row.total))&&(!vatRequired||row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat)))&&(profile?.id!=='amazon'||String(row.itemName||'').trim())&&(row.documentType!=='CORRECTION'||row.correctedTotal!==''&&row.correctedTotal!==null&&row.correctedTotal!==undefined&&Number.isFinite(Number(row.correctedTotal))&&row.correctedVat!==''&&row.correctedVat!==null&&row.correctedVat!==undefined&&Number.isFinite(Number(row.correctedVat))));
 
     row.status=complete?'ACCEPTED':'REJECTED';row.accepted=row.status==='ACCEPTED';row.rejected=row.status==='REJECTED';if(row.isInvoiceDocument===false){row.retryOcr=false;if(row.documentType!=='CREDIT NOTE')row.documentType='NON-INVOICE';}
     row.unconfiguredSupplier=unconfiguredSupplier;
@@ -4202,10 +4262,10 @@
   function invoiceRetryAccepted(row,candidate,complete){
     const first=String(row?.originalInvoiceNumber||'').replace(/\D/g,''),retry=String(candidate?.originalInvoiceNumber||'').replace(/\D/g,''),sameEaglePage=(candidate?.sourcePages||[candidate?.page]).map(Number).includes(Number(row?.page)),eaglePageMatch=row?.profileId==='eagle-foods'&&candidate?.profileId==='eagle-foods'&&sameEaglePage&&(!first||first===retry||first.length>=2&&first.length<6&&retry.endsWith(first));
     const kinFooterRetry=row?.profileId==='kin-global'&&candidate?.profileId==='kin-global';
-    return Boolean(complete&&!row?.freshwaysVatOcrAmbiguous&&!row?.eagleSummaryConflict&&!row?.eagleSummaryAmbiguousReference&&!Object.keys(row?.ocrAmountConflicts||{}).length&&(row?.profileId==='bestway'||kinFooterRetry||candidate?.accepted||row?.freshwaysVatOcrRetryResolved||eaglePageMatch));
+    return Boolean(complete&&!row?.freshwaysVatOcrAmbiguous&&!row?.eagleSummaryConflict&&!row?.eagleSummaryAmbiguousReference&&!row?.banozeFooterUnverified&&!candidate?.banozeFooterUnverified&&!Object.keys(row?.ocrAmountConflicts||{}).length&&(row?.profileId==='bestway'||kinFooterRetry||candidate?.accepted||row?.freshwaysVatOcrRetryResolved||eaglePageMatch));
   }
   function mergeInvoiceRetryCandidate(row,candidate,{preserveGeneratedReference=false}={}){
-    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','invoiceNumberGenerated','invoiceNumberGeneratedReason','date','supplier','subtotal','vat','vatUnverified','vatMentioned','total','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured','ocrConflictReason'];
+    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','invoiceNumberGenerated','invoiceNumberGeneratedReason','date','supplier','subtotal','vat','vatUnverified','vatMentioned','total','banozeGoodsTotal','banozeDerivedVat','banozeDerivedTotal','banozeFooterUnverified','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured','ocrConflictReason'];
     for(const key of fields){
       if(preserveGeneratedReference&&['invoiceNumber','originalInvoiceNumber','invoiceNumberGenerated','invoiceNumberGeneratedReason'].includes(key))continue;
       const value=candidate?.[key];if(value===''||value===null||value===undefined)continue;

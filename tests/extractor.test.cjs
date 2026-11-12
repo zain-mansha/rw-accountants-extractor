@@ -2148,7 +2148,7 @@ test('Banoze summary-only and unreadable pages are ignored instead of exported a
   const mixed=[...invoice,{page:2,text:'Invoice Summary - July',x:200,y:120,width:220,height:30},{page:3,text:'stoo-toug 09TYS9/s€z oxog •4.129 •',x:800,y:840,width:360,height:30}],rows=P.parseInvoiceBatch(mixed.map(line=>line.text).join('\n'),'Banoze mixed.pdf',mixed);
   assert.deepEqual(rows.map(row=>[row.page,row.status]),[[1,'ACCEPTED']],'summary pages and OCR noise outside invoices do not create rejected rows');
 });
-test('Banoze footer OCR aliases are read as printed currency amounts, without deriving VAT or total',()=>{
+test('Banoze footer OCR aliases are read and a missing footer total is derived from printed summary values',()=>{
   const lines=[
     {page:1,text:'BANOZE LTD',x:80,y:30,width:100,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
     {page:1,text:'rnvoiceNo. BNZ2099123456',x:1480,y:185,width:250,height:24},{page:1,text:'Date. 03/04/2099',x:1650,y:232,width:180,height:24},
@@ -2160,7 +2160,7 @@ test('Banoze footer OCR aliases are read as printed currency amounts, without de
   const [row]=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze scan.pdf',lines);
   assert.deepEqual([row.invoiceNumber,row.vat,row.total,row.status],['3456',11.08,51.08,'ACCEPTED']);
   const noPrintedTotal=lines.filter(line=>line.text!=='£51.08'),[rejected]=P.parseInvoiceBatch(noPrintedTotal.map(line=>line.text).join('\n'),'Banoze scan.pdf',noPrintedTotal);
-  assert.deepEqual([rejected.vat,rejected.total,rejected.status,rejected.retryOcr],[11.08,'','REJECTED',true],'VAT remains the printed footer value and a missing total is never calculated');
+  assert.deepEqual([rejected.vat,rejected.total,rejected.banozeDerivedTotal,rejected.status,rejected.retryOcr],[11.08,51.08,true,'ACCEPTED',false],'a missing total is derived only from the printed Goods Total and VAT footer values');
 });
 test('Banoze maps amounts in a merged footer line by the printed column labels and rejects spliced VAT text',()=>{
   const make=vatText=>[
@@ -2173,7 +2173,7 @@ test('Banoze maps amounts in a merged footer line by the printed column labels a
   const merged=parse(make('—---£40.00--------—£8.00'));
   assert.deepEqual([merged.invoiceNumber,merged.vat,merged.total,merged.status],['3499',8,48,'ACCEPTED']);
   const spliced=parse(make('---------------£69.00--------------------------413.99'));
-  assert.deepEqual([spliced.vat,spliced.total,spliced.status,spliced.retryOcr],['',48,'REJECTED',true],'an impossible joined VAT token is not accepted or exported as a confirmed amount');
+  assert.deepEqual([spliced.vat,spliced.total,spliced.status,spliced.retryOcr],['','','REJECTED',true],'conflicting footer values are withheld for reread instead of exporting an OCR splice');
 });
 test('Banoze aligns amount tokens to the center of each printed column and rejects malformed total suffixes',()=>{
   const lines=[
@@ -2185,11 +2185,44 @@ test('Banoze aligns amount tokens to the center of each printed column and rejec
   const [row]=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze.pdf',lines);
   assert.deepEqual([row.vat,row.total,row.status],[2,12,'ACCEPTED'],'a neighboring total cell must not be assigned as VAT when their text boxes overlap horizontally');
   const malformed=lines.map(line=>line.text==='----------Â£12.00'?{...line,text:'48.80-'}:line),[rejected]=P.parseInvoiceBatch(malformed.map(line=>line.text).join('\n'),'Banoze.pdf',malformed);
-  assert.deepEqual([rejected.total,rejected.status,rejected.retryOcr],['','REJECTED',true],'a footer number fused to a trailing rule is left for retry instead of accepted as a total');
-  const faintDecimal=lines.map(line=>/12\.00/.test(line.text)?{...line,text:'*18-33'}:line),[recoveredDecimal]=P.parseInvoiceBatch(faintDecimal.map(line=>line.text).join('\n'),'Banoze.pdf',faintDecimal);
-  assert.equal(recoveredDecimal.total,18.33,'a two-digit cents value with an OCR dash decimal is normalized from its printed total cell');
+  assert.deepEqual([rejected.total,rejected.status,rejected.retryOcr],[12,'ACCEPTED',false],'a missing printed Total is derived from the Goods Total and VAT footer cells');
+  const faintDecimal=lines.map(line=>line.x===1521?{...line,text:'2.33'}:line.x===1654?{...line,text:'----------*12-33'}:line),[recoveredDecimal]=P.parseInvoiceBatch(faintDecimal.map(line=>line.text).join('\n'),'Banoze.pdf',faintDecimal);
+  assert.equal(recoveredDecimal.total,12.33,'a two-digit cents value with an OCR dash decimal is normalized from its printed total cell');
   const equalVat=lines.map(line=>line.text==='Â£2.00'?{...line,text:'Â£12.00'}:line),[sameValue]=P.parseInvoiceBatch(equalVat.map(line=>line.text).join('\n'),'Banoze.pdf',equalVat);
-  assert.deepEqual([sameValue.vat,sameValue.total,sameValue.status],['',12,'REJECTED'],'a VAT OCR token that duplicates the gross is not accepted as an independently read VAT figure');
+  assert.deepEqual([sameValue.vat,sameValue.total,sameValue.status,sameValue.retryOcr],['','', 'REJECTED',true],'conflicting footer VAT and Total readings are withheld for a focused reread');
+});
+test('Banoze footer mismatches trigger a retry and contrast votes select only printed summary values',()=>{
+  const header=[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'InvoiceNo. BNZ2099123456',x:1480,y:185,width:250,height:24},{page:1,text:'Date. 03/04/2099',x:1650,y:232,width:180,height:24}
+  ],footer=(goods,vat,total,variant)=>[
+    {page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:goods,x:1260,y:1958,width:80,height:24},
+    {page:1,text:'VAT',x:1536,y:1910,width:70,height:24},{page:1,text:vat,x:1525,y:1958,width:80,height:24},
+    {page:1,text:'TOTAL',x:1740,y:1910,width:117,height:24},{page:1,text:total,x:1744,y:1958,width:90,height:24}
+  ].map(line=>variant?{...line,banozeVariant:variant}:line),parse=lines=>P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze.pdf',lines)[0];
+  const firstPass=parse([...header,...footer('£40.00','£6.00','£48.00')]);
+  assert.deepEqual([firstPass.vat,firstPass.total,firstPass.status,firstPass.retryOcr,firstPass.banozeFooterUnverified],['','','REJECTED',true,true],'a printed-summary mismatch is never silently accepted or exported as posting amounts');
+  const contrasted=parse([...header,...footer('£40.00','£6.00','£48.00','base'),...footer('£40.00','£8.00','£48.00','175'),...footer('£40.00','£8.00','£48.00','215')]);
+  assert.deepEqual([contrasted.banozeGoodsTotal,contrasted.vat,contrasted.total,contrasted.status,contrasted.banozeFooterUnverified], [40,8,48,'ACCEPTED',false], 'two agreeing contrast reads recover the printed footer VAT without using line items');
+  const merged=P.mergeInvoiceRetryCandidate(firstPass,contrasted),complete=Boolean(merged.invoiceNumber&&merged.date&&merged.supplier&&Number.isFinite(Number(merged.vat))&&Number.isFinite(Number(merged.total))&&!merged.banozeFooterUnverified);
+  assert.equal(P.invoiceRetryAccepted(merged,contrasted,complete),true,'the corrected label-focused OCR candidate replaces the rejected first-pass amounts in the app retry flow');
+  const unreadableGoods=parse([...header,...footer('.00','£21.39','El 28.33','base'),...footer('.00','£21.39','*128.33','175'),...footer('.00','£21.39','','215')]);
+  assert.deepEqual([unreadableGoods.banozeGoodsTotal,unreadableGoods.vat,unreadableGoods.total,unreadableGoods.status],['',21.39,128.33,'ACCEPTED'],'two independently confirmed footer amounts are usable when the Goods Total remains unreadable');
+});
+test('Banoze may derive one missing footer amount only from the other printed summary figures',()=>{
+  const lines=[
+    {page:1,text:'BANOZE LTD www.banoze.co.uk',x:80,y:30,width:250,height:20},{page:1,text:'INVOICE',x:890,y:100,width:100,height:24},
+    {page:1,text:'InvoiceNo. BNZ2099123456',x:1480,y:185,width:250,height:24},{page:1,text:'Date. 03/04/2099',x:1650,y:232,width:180,height:24},
+    {page:1,text:'GOODS TOTAL',x:1198,y:1910,width:120,height:24},{page:1,text:'£40.00',x:1260,y:1958,width:80,height:24},
+    {page:1,text:'VAT',x:1536,y:1910,width:70,height:24},{page:1,text:'£8.00',x:1525,y:1958,width:80,height:24},
+    {page:1,text:'TOTAL',x:1740,y:1910,width:117,height:24},{page:1,text:'',x:1744,y:1958,width:90,height:24}
+  ];
+  const [row]=P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'Banoze.pdf',lines);
+  assert.deepEqual([row.vat,row.total,row.banozeDerivedTotal,row.status],[8,48,true,'ACCEPTED'],'a missing invoice total can be derived from the labelled Goods Total and VAT footer values');
+  const withTotal=[...lines,{page:1,text:'48.00',x:1744,y:1958,width:90,height:24}],noVat=withTotal.filter(line=>line.x!==1525),[derivedVat]=P.parseInvoiceBatch(noVat.map(line=>line.text).join('\n'),'Banoze.pdf',noVat);
+  assert.deepEqual([derivedVat.vat,derivedVat.total,derivedVat.banozeDerivedVat,derivedVat.status],[8,48,true,'ACCEPTED'],'a missing VAT amount can be derived only from the printed Goods Total and Total footer values');
+  const noGoods=lines.map(line=>line.text==='£40.00'?{...line,text:'.00'}:line),[unresolved]=P.parseInvoiceBatch(noGoods.map(line=>line.text).join('\n'),'Banoze.pdf',noGoods);
+  assert.deepEqual([unresolved.vat,unresolved.total,unresolved.status,unresolved.retryOcr],['','','REJECTED',true],'the parser does not invent a missing Goods Total or use invoice line items when the footer is incomplete');
 });
 test('Banoze retry crops follow the invoice header and footer labels instead of page coordinates',()=>{
   const lines=[
