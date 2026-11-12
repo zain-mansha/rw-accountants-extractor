@@ -941,7 +941,6 @@
     // OCR can fuse a comma and decimal digit into a confusable glyph.
     // OCR can fuse a comma and decimal digit into one confusable glyph.
     // Interpret it as six only when nearby printed cells confirm its width.
-
     const normalizedRaw=raw.replace(/^(-?\d{1,2})[Ee\u00DF\u1E9E](\d)$/,(match,whole,last)=>`${whole}6${last}`).replace(/[\u00DF\u1E9E]/g,'6');
     const digits=normalizedRaw.match(/^(-?)(\d{3,6})$/),width=Number(line?.width);
     if(!digits||!Number.isFinite(width)||width<=0)return null;
@@ -1042,7 +1041,6 @@
       const totalVatRow=vatRows.find(item=>Math.abs(Number(item.line.y)-Number(label.y))<=20&&item.money?.value!==null&&item.money?.value!==undefined);
       if(totalVatRow)return totalVatRow.money.value;
       if(vatRows.length){const finalVatRow=vatRows.at(-1);return finalVatRow.money?.value??null;}
-
       // The summary table can break at a page boundary: `Total in GBP` and
       // the net figure may be at the foot of one page while the VAT column is
       // printed on the next. Follow only the immediately following page, and
@@ -1556,7 +1554,6 @@
   }
   function eaglePrintedAmount(value){
     let raw=String(value??'').trim().replace(/[Â£$â‚¬]/g,'').replace(/\bGBP\b/ig,'').trim();
-
     if(/^\d{1,3}[.,]\d{3}[.,]\d{2}$/.test(raw))raw=raw.replace(/[.,](?=\d{3}[.,]\d{2}$)/,'');
     if(!/^[+-]?\s*\(?\s*\d[\d\s,]*[.,]\s*\d{2}\s*\)?$/.test(raw))return null;
     return invoiceAmount(raw);
@@ -3973,35 +3970,97 @@
     const otherLines=[...pageLines.values()].flat().filter(line=>!consumed.has(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];
     return [...otherRows,...records].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
   }
-  function isMillfieldAutopartsText(value){const text=String(value||'');if(/\bMILLFIELD\s+AUTOPARTS?\b|\bMILLFIELD\s+AUTO\s+PARTS\b/i.test(text))return true;const compact=millfieldCompact(text);return compact.includes('MILLFIELDAUTOPART');}
+  function isMillfieldAutopartsText(value){const text=String(value||'');if(/\bMILLFIELD\s+AUTOPARTS?\b|\bMILLFIELD\s+AUTO\s+PARTS\b|\bMILLFIELD\s*AUTO\s*ARTS\b/i.test(text))return true;const compact=millfieldCompact(text);return compact.includes('MILLFIELDAUTOPART');}
   function millfieldCompact(value){return String(value||'').normalize('NFKC').toUpperCase().replace(/[^A-Z0-9]/g,'');}
   function millfieldReferenceDigits(value){const digits=String(value||'').replace(/[^0-9]/g,'');return digits.length>=5&&digits.length<=8?digits:'';}
-  function millfieldDate(value){const source=String(value||'').replace(/[Oo](?=\d)/g,'0').replace(/[Il|]/g,'1'),match=source.match(/\b\d{1,2}\s*[/\.\-]\s*\d{1,2}\s*[/\.\-]\s*\d{2,4}\b|\b20\d{2}\s*[/\.\-]\s*\d{1,2}\s*[/\.\-]\s*\d{1,2}\b/);if(!match)return '';const parsed=parseDate(match[0].replace(/\s+/g,'')),year=Number(String(parsed||'').slice(0,4));return !parsed||year>new Date().getFullYear()+1?'':parsed;}
-  function millfieldPageMetrics(items){const lines=(Array.isArray(items)?items:[]).filter(line=>line&&String(line.text||'').trim()),heights=lines.map(line=>Number(line.height)||0).filter(value=>value>0&&value<100).sort((a,b)=>a-b),height=heights[Math.floor(heights.length/2)]||18,pageHeight=Math.max(...lines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),pageWidth=Math.max(...lines.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1);return {lines,height,pageHeight,pageWidth};}
-  function millfieldNearbyMoney(items,labelPattern,{minimumYRatio=.58,maximumYRatio=.94,verticalRatio=.045,rightRatio=.04}={}){
-    const {lines,pageHeight,pageWidth,height}=millfieldPageMetrics(items),labels=lines.filter(line=>(Number(line.y)||0)>=pageHeight*minimumYRatio&&(Number(line.y)||0)<=pageHeight*maximumYRatio&&labelPattern.test(String(line.text||''))),matches=[];
-    for(const label of labels){const labelText=String(label.text||''),labelX=Number(label.x)||0,labelY=Number(label.y)||0,labelRight=labelX+Math.max(Number(label.width)||0,labelText.length*height*.4),inline=labelText.replace(labelPattern,'');for(const money of anchoredInvoiceMoneyValues(inline)){matches.push({value:money.value,score:0,label});}
-      const verticalTolerance=Math.max(height*2,pageHeight*Math.min(verticalRatio,.018),18),horizontalTolerance=Math.max(pageWidth*.45,height*12,80);
-      for(const line of lines){if(line===label)continue;const x=Number(line.x)||0,y=Number(line.y)||0,dx=x-labelRight,dy=Math.abs(y-labelY);if(dx< -height||dx>horizontalTolerance||dy>verticalTolerance)continue;const tokens=anchoredInvoiceMoneyValues(line.text);for(const token of tokens){const rightMost=Number(line.x||0)+Math.max(Number(line.width)||0,String(line.text||'').length*height*.42);matches.push({value:token.value,score:dy/verticalTolerance+Math.max(0,dx)/Math.max(pageWidth,1)*2+(pageWidth-rightMost)/Math.max(pageWidth,1)*.1,label,line});}}
+  function millfieldDate(value,contextYear=''){
+    // OCR frequently confuses a few characters on these faded invoice date
+    // rows (for example e9/05 e for 29/05/26). Repair only date-shaped tokens
+    // and accept a partial year only when the same PDF has a strong, repeated
+    // four-digit year anchor.
+    const source=String(value||'').replace(/'/g,'').replace(/[^\u0000-\u007F]/g,' '),year=String(contextYear||'');
+    const currentYear=new Date().getFullYear()+1,hasContext=/^20\d{2}$/.test(year)&&Number(year)<=currentYear;
+    const digitChoices=character=>{
+      if(/[0-9]/.test(character))return [character];
+      if(/[oO]/.test(character))return ['0'];
+      if(/[iIl|]/.test(character))return ['1'];
+      if(/[sS]/.test(character))return ['5'];
+      if(/[zZ]/.test(character))return ['2'];
+      if(/[bB]/.test(character))return ['8'];
+      if(/[gG]/.test(character))return ['6'];
+      if(/[eEcC]/.test(character))return ['2','6'];
+      return [];
+    };
+    const digitVariants=token=>{let variants=[''];for(const character of String(token||'').replace(/\s+/g,'')){const choices=digitChoices(character);if(!choices.length)return [];variants=variants.flatMap(prefix=>choices.map(digit=>prefix+digit));}return [...new Set(variants)];};
+    const candidates=[...source.matchAll(/(?<![A-Za-z\d/])([0-9OIl|eEcCsSzZbBgG](?:\s*[0-9OIl|eEcCsSzZbBgG]){0,3})\s*[\/.-]\s*([0-9OIl|eEcCsSzZbBgG](?:\s*[0-9OIl|eEcCsSzZbBgG]){0,1})(?:\s*[\/.-]\s*|\s+)([0-9OIl|eEcCsSzZbBgG](?:\s*[0-9OIl|eEcCsSzZbBgG]){0,3})(?![\d/])/g)];
+    const parsed=[];
+    for(const match of candidates){
+      const first=digitVariants(match[1]),second=digitVariants(match[2]),third=digitVariants(match[3]);
+      for(const a of first)for(const b of second)for(const c of third){
+        const isIso=match[1].length===4,day=isIso?c:a,month=b,yearToken=isIso?a:c;
+        if(!/^\d{1,2}$/.test(day)||!/^\d{1,2}$/.test(month))continue;
+        const possibleYears=[];
+        if(yearToken.length===4)possibleYears.push(yearToken);
+        else if(hasContext){
+          // OCR can retain the first digit(s) (2, 20) or last digit(s) (6, 26)
+          // of the year. The anchor must agree exactly.
+          if(year.startsWith(yearToken)||year.endsWith(yearToken))possibleYears.push(year);
+        }else if(yearToken.length===2)possibleYears.push(String(2000+Number(yearToken)));
+        for(const possibleYear of possibleYears){const parsedDate=parseDate(day+'/'+month+'/'+possibleYear),parsedYear=Number(String(parsedDate||'').slice(0,4));if(parsedDate&&parsedYear<=currentYear)parsed.push(parsedDate);}
+      }
     }
-    matches.sort((a,b)=>a.score-b.score);if(!matches.length)return null;const best=matches[0],near=matches.filter(item=>Math.abs(item.score-best.score)<.14);if(near.some(item=>Math.abs(Number(item.value)-Number(best.value))>.001))return null;return best.value;
+    const unique=[...new Set(parsed)];return unique.length===1?unique[0]:'';
   }
-  function millfieldInvoiceHeader(items,text=''){
+  function millfieldPageMetrics(items){const lines=(Array.isArray(items)?items:[]).filter(line=>line&&String(line.text||'').trim()),heights=lines.map(line=>Number(line.height)||0).filter(value=>value>0&&value<100).sort((a,b)=>a-b),height=heights[Math.floor(heights.length/2)]||18,pageHeight=Math.max(...lines.map(line=>(Number(line.y)||0)+(Number(line.height)||0)),1),pageWidth=Math.max(...lines.map(line=>(Number(line.x)||0)+(Number(line.width)||0)),1);return {lines,height,pageHeight,pageWidth};}
+  function millfieldNearbyMoney(items,labelPattern,{minimumYRatio=.58,maximumYRatio=.94,verticalRatio=.045,rightRatio=.04,excludeLines=[],standaloneLabel=false,returnMatch=false}={}){
+    const {lines,pageHeight,pageWidth,height}=millfieldPageMetrics(items),labels=lines.filter(line=>(Number(line.y)||0)>=pageHeight*minimumYRatio&&(Number(line.y)||0)<=pageHeight*maximumYRatio&&labelPattern.test(String(line.text||''))),matches=[];
+    for(const label of labels){const labelText=String(label.text||'').trim();if(standaloneLabel&&labelText.length>24)continue;const labelX=Number(label.x)||0,labelY=Number(label.y)||0,labelRight=labelX+Math.max(Number(label.width)||0,labelText.length*height*.4),inline=labelText.replace(labelPattern,'');for(const money of anchoredInvoiceMoneyValues(inline)){matches.push({value:money.value,score:0,label,line:label});}
+      const verticalTolerance=Math.max(height*2,pageHeight*Math.min(verticalRatio,.018),18),horizontalTolerance=Math.max(pageWidth*.45,height*12,80);
+      for(const line of lines){if(line===label||excludeLines.includes(line))continue;const x=Number(line.x)||0,y=Number(line.y)||0,dx=x-labelRight,dy=Math.abs(y-labelY);if(dx< -height||dx>horizontalTolerance||dy>verticalTolerance)continue;const tokens=anchoredInvoiceMoneyValues(line.text);for(const token of tokens){const rightMost=Number(line.x||0)+Math.max(Number(line.width)||0,String(line.text||'').length*height*.42);matches.push({value:token.value,score:dy/verticalTolerance+Math.max(0,dx)/Math.max(pageWidth,1)*2+(pageWidth-rightMost)/Math.max(pageWidth,1)*.1,label,line});}}
+    }
+    matches.sort((a,b)=>a.score-b.score);if(!matches.length)return null;const best=matches[0],near=matches.filter(item=>Math.abs(item.score-best.score)<.14);if(near.some(item=>Math.abs(Number(item.value)-Number(best.value))>.001))return null;return returnMatch?{value:best.value,line:best.line}:best.value;
+  }
+  function millfieldFooterSummaryAmounts(items){
+    const {lines,pageHeight,pageWidth,height}=millfieldPageMetrics(items),definitions=[{key:'goods',pattern:/\bTotal\s+Goods\b/i},{key:'vat',pattern:/\bTotal\s+VAT\b/i}],labels=definitions.flatMap(definition=>lines.filter(line=>(Number(line.y)||0)>=pageHeight*.58&&(Number(line.y)||0)<=pageHeight*.995&&definition.pattern.test(String(line.text||''))).map(line=>({...definition,line}))),candidates=[];
+    for(const line of lines){if((Number(line.y)||0)<pageHeight*.58||(Number(line.y)||0)>pageHeight*.995)continue;const text=String(line.text||''),values=anchoredInvoiceMoneyValues(text);if(!values.length)continue;const possible=[];
+      for(const label of labels){if(line===label.line){const inline=text.replace(label.pattern,'');for(const value of anchoredInvoiceMoneyValues(inline))possible.push({label,value:value.value,score:0});continue;}const x=Number(line.x)||0,y=Number(line.y)||0,labelX=Number(label.line.x)||0,labelY=Number(label.line.y)||0,labelText=String(label.line.text||''),labelRight=labelX+Math.max(Number(label.line.width)||0,labelText.length*height*.4),dx=x-labelRight,dy=Math.abs(y-labelY),verticalTolerance=Math.max(height*2,pageHeight*.018,18),horizontalTolerance=Math.max(pageWidth*.45,height*12,80);if(dx< -height||dx>horizontalTolerance||dy>verticalTolerance)continue;const rightMost=x+Math.max(Number(line.width)||0,text.length*height*.42),score=dy/verticalTolerance+Math.max(0,dx)/Math.max(pageWidth,1)*2+(pageWidth-rightMost)/Math.max(pageWidth,1)*.1;for(const value of values)possible.push({label,value:value.value,score});}
+      if(!possible.length)continue;possible.sort((a,b)=>a.score-b.score);const best=possible[0],near=possible.filter(item=>Math.abs(item.score-best.score)<.08);if(near.some(item=>item.label.key!==best.label.key))continue;candidates.push({line,value:best.value,label:best.label,score:best.score});
+    }
+    const result={goods:null,vat:null};for(const definition of definitions){const matches=candidates.filter(candidate=>candidate.label.key===definition.key).sort((a,b)=>a.score-b.score);if(!matches.length)continue;const best=matches[0],near=matches.filter(item=>Math.abs(item.score-best.score)<.14);if(!near.some(item=>Math.abs(Number(item.value)-Number(best.value))>.001))result[definition.key]=best.value;}
+    return result;
+  }
+  function millfieldAmountDueValue(items){
+    const {lines,pageHeight,height}=millfieldPageMetrics(items),footer=lines.filter(line=>(Number(line.y)||0)>=pageHeight*.68),normalizeLabel=value=>String(value||'').replace(/\bAM[O0]L{1,2}NT\b/ig,'Amount').replace(/\bAM[O0]U(?:M|N)T\b/ig,'Amount'),amountLabels=footer.filter(line=>/\bAmount(?:\s+Due)?\s*:?\s*$/i.test(normalizeLabel(line.text).trim())),dueLabels=footer.filter(line=>/\b(?:Due|ue)\s*:?\s*$/i.test(String(line.text||'').trim()));
+    const pairTolerance=Math.max(height*3,pageHeight*.04,36),candidates=[];
+    for(const amount of amountLabels){const amountY=Number(amount.y)||0,pairedDue=dueLabels.filter(due=>due!==amount&&Math.abs((Number(due.y)||0)-amountY)<=pairTolerance).sort((a,b)=>Math.abs((Number(a.y)||0)-amountY)-Math.abs((Number(b.y)||0)-amountY))[0];if(!pairedDue)continue;const amountX=Number(amount.x)||0,dueX=Number(pairedDue.x)||0,lowerY=Math.min(amountY,Number(pairedDue.y)||amountY)-Math.max(height*2,pageHeight*.06),upperY=Math.max(amountY,Number(pairedDue.y)||amountY)+height,minimumX=Math.min(amountX,dueX)-height;
+      for(const line of footer){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<lowerY||y>upperY||x<minimumX)continue;let tokens=anchoredInvoiceMoneyValues(line.text);if(!tokens.length){const isolated=String(line.text||'').trim().match(/^(?:[£$]\s*)?\(?(-?\d{1,6})\s+(\d{2})\)?$/);if(isolated){const value=invoiceAmount(`${isolated[1]}.${isolated[2]}`);if(value!==null)tokens=[{value}];}}for(const token of tokens)candidates.push({value:token.value,line,score:Math.abs(y-amountY)/Math.max(pairTolerance,1)+Math.max(0,amountX-x)/Math.max(pageHeight,1)});}
+    }
+    for(const amount of amountLabels){const amountY=Number(amount.y)||0,pairedDue=dueLabels.filter(due=>due!==amount&&Math.abs((Number(due.y)||0)-amountY)<=pairTolerance).sort((a,b)=>Math.abs((Number(a.y)||0)-amountY)-Math.abs((Number(b.y)||0)-amountY))[0];if(!pairedDue)continue;const amountX=Number(amount.x)||0,dueX=Number(pairedDue.x)||0,lowerY=Math.min(amountY,Number(pairedDue.y)||amountY)-Math.max(height*2,pageHeight*.06),upperY=Math.max(amountY,Number(pairedDue.y)||amountY)+height,minimumX=Math.min(amountX,dueX)-height;for(const line of footer){const y=Number(line.y)||0,x=Number(line.x)||0;if(y<lowerY||y>upperY||x<minimumX)continue;const raw=String(line.text||'').trim().replace(/[^\dA-Za-z,.;\s()\-]/g,''),match=raw.match(/^\(?(-?\d{1,3}(?:[ ,]\d{3})*|\d{1,6})\s*a\s*(\d{2})\)?$/i);if(!match)continue;const value=invoiceAmount(`${match[1].replace(/[ ,]/g,'')}.${match[2]}`);if(value!==null)candidates.push({value,line,score:Math.abs(y-amountY)/Math.max(pairTolerance,1)+Math.max(0,amountX-x)/Math.max(pageHeight,1)});}}
+    candidates.sort((a,b)=>a.score-b.score);if(!candidates.length)return null;const best=candidates[0],near=candidates.filter(item=>Math.abs(item.score-best.score)<.12);if(near.some(item=>Math.abs(Number(item.value)-Number(best.value))>.001))return null;return best.value;
+  }
+  function millfieldInvoiceHeader(items,text='',contextYear=''){
     const {lines,pageHeight,pageWidth,height}=millfieldPageMetrics(items),invoiceLabels=lines.filter(line=>/^\s*Invoice\s+Number\s*:?\s*$/i.test(String(line.text||''))),dateLabels=lines.filter(line=>/^\s*Date\s*:?\s*$/i.test(String(line.text||''))),headerY=invoiceLabels.length?Math.min(...invoiceLabels.map(line=>Number(line.y)||0)):pageHeight*.35,labelsX=invoiceLabels.length?Math.min(...invoiceLabels.map(line=>Number(line.x)||0)):pageWidth*.55,identityLines=lines.filter(line=>{const y=Number(line.y)||0,x=Number(line.x)||0;return y>=headerY-height&&y<=headerY+Math.max(pageHeight*.09,height*8)&&x>=labelsX-pageWidth*.12;});
     let originalInvoiceNumber='';
-    for(const line of identityLines){const raw=String(line.text||'').toUpperCase().replace(/[ＯО]/g,'0').replace(/[ＨН]/g,'H').replace(/[ＳЅ]/g,'S').replace(/[Il|]/g,'1');let match=raw.match(/\bH\s*S\s*[-:#]?\s*([0-9OIL|]{5,8})\b/);if(!match)match=raw.match(/\b(?:I\s*[-.]?\s*L\s*S|H\s*5|H\s*Z)\s*[-:#]?\s*([0-9OIL|]{5,8})\b/);if(match){const digits=match[1].replace(/\D/g,'');if(digits.length>=5&&digits.length<=8){originalInvoiceNumber=`HS${digits}`;break;}}
+    for(const line of identityLines){const raw=String(line.text||'').toUpperCase().replace(/[ＯО]/g,'0').replace(/[ＨН]/g,'H').replace(/[ＳЅ]/g,'S').replace(/[Il|]/g,'1');let match=raw.match(/\bH\s*S\s*[-:#]?\s*([0-9OIL|ZSBG]{5,8})\b/);if(!match)match=raw.match(/\b(?:I\s*[-.]?\s*L\s*S|H\s*5|H\s*Z)\s*[-:#]?\s*([0-9OIL|ZSBG]{5,8})\b/);if(match){const digits=match[1].replace(/[Oo]/g,'0').replace(/[Il|]/g,'1').replace(/Z/g,'2').replace(/S/g,'5').replace(/B/g,'8').replace(/G/g,'6').replace(/\D/g,'');if(digits.length>=5&&digits.length<=8){originalInvoiceNumber=`HS${digits}`;break;}}
       // On the printed Millfield header the invoice number and date occupy
       // the row immediately below their labels. OCR often damages the letters
       // "HS" while preserving the six digits, so only accept an isolated
       // 5-8 digit token in that label-relative header row. Date parts remain
       // separated by slashes and cannot join the invoice identifier.
-      const digitTokens=[...raw.matchAll(/(?<![\d/])(\d{5,8})(?![\d/])/g)].map(item=>item[1]);const candidate=digitTokens.find(value=>value.length>=5&&value.length<=8);if(candidate){originalInvoiceNumber=`HS${candidate}`;break;}}
-    const headerText=identityLines.map(line=>String(line.text||'')).join(' '),dateCandidates=identityLines.map(line=>millfieldDate(line.text)).filter(Boolean);let date='';
-    if(dateLabels.length){const label=dateLabels[0],labelY=Number(label.y)||0,labelX=Number(label.x)||0,tolerance=Math.max(height*4,pageHeight*.05,32),candidates=lines.filter(line=>Math.abs((Number(line.y)||0)-labelY)<=tolerance&&(Number(line.x)||0)>=labelX-pageWidth*.12).map(line=>({date:millfieldDate(line.text),distance:Math.abs((Number(line.y)||0)-labelY)})).filter(item=>item.date).sort((a,b)=>a.distance-b.distance);date=candidates[0]?.date||'';}
-    if(!date)date=millfieldDate(headerText)||dateCandidates[0]||millfieldDate(text)||'';
+      const digitTokens=[...raw.matchAll(/(?<![\d/])(\d{5,8})(?![\w/])/g)].map(item=>item[1]);const candidate=digitTokens.find(value=>value.length>=5&&value.length<=8);if(candidate){originalInvoiceNumber=`HS${candidate}`;break;}}
+    const headerText=identityLines.map(line=>String(line.text||'')).join(' '),dateCandidates=identityLines.map(line=>millfieldDate(line.text,contextYear)).filter(Boolean);let date='';
+    if(dateLabels.length){const label=dateLabels[0],labelY=Number(label.y)||0,labelX=Number(label.x)||0,tolerance=Math.max(height*4,pageHeight*.05,32),candidates=lines.filter(line=>Math.abs((Number(line.y)||0)-labelY)<=tolerance&&(Number(line.x)||0)>=labelX-pageWidth*.12).map(line=>({date:millfieldDate(line.text,contextYear),distance:Math.abs((Number(line.y)||0)-labelY)})).filter(item=>item.date).sort((a,b)=>a.distance-b.distance);date=candidates[0]?.date||'';}
+    if(!date)date=millfieldDate(headerText,contextYear)||dateCandidates[0]||millfieldDate(text,contextYear)||'';
     return {originalInvoiceNumber,date};
   }
+  function millfieldContextYearForPage(page,anchors,globalYear){
+    const nearby=(anchors||[]).filter(anchor=>Math.abs(Number(anchor.page)-Number(page))<=24);
+    if(nearby.some(anchor=>anchor.year!==globalYear))return '';
+    const corroborating=nearby.filter(anchor=>anchor.year===globalYear);
+    return corroborating.length>=2?globalYear:nearby.length? '':globalYear;
+  }
   function millfieldStatementPage(items){const text=(items||[]).map(line=>String(line.text||'')).join(' ');return isMillfieldAutopartsText(text)&&/\bStatement\s+To\b/i.test(text)&&/\bO\s*\/\s*S\s+Value\b/i.test(text)&&/\bInvoice\b/i.test(text);}
+  function millfieldStatementPagesFromOcr(ocrLines){const pages=new Map();for(const line of Array.isArray(ocrLines)?ocrLines:[]){if(!line||!String(line.text||'').trim())continue;const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}return [...pages].filter(([,items])=>millfieldStatementPage(items)).map(([page])=>page);}
   function millfieldStatementRowsFromOcr(ocrLines,source=''){
     const lines=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),pages=new Map();for(const line of lines){const page=Number(line.page)||1;if(!pages.has(page))pages.set(page,[]);pages.get(page).push(line);}const rows=[];
     for(const [page,items] of pages){if(!millfieldStatementPage(items))continue;const {lines:pageLines,height,pageHeight,pageWidth}=millfieldPageMetrics(items),findHeader=pattern=>pageLines.filter(line=>pattern.test(String(line.text||'').trim())).sort((a,b)=>(Number(a.y)||0)-(Number(b.y)||0))[0],dateHeader=findHeader(/^Date$/i),referenceHeader=findHeader(/^(?:Reference|Fteference|Ref)$/i),invoiceHeader=findHeader(/^Invoice$/i),creditHeader=findHeader(/^Credit$/i),typeHeader=findHeader(/^Type$/i),outstandingHeader=findHeader(/^O\s*\/\s*S\s+Value$/i);if(!dateHeader||!referenceHeader||!invoiceHeader||!outstandingHeader)continue;
@@ -4013,21 +4072,23 @@
   function millfieldInvoicePage(items,text=''){
     const flat=String(text||items.map(line=>String(line.text||'')).join(' '));if(!isMillfieldAutopartsText(flat)||millfieldStatementPage(items))return false;const hasHeader=/\bInvoice\s+Number\b/i.test(flat),hasFooter=/\bTotal\s+Goods\b/i.test(flat)&&/\bTotal\s+VAT\b/i.test(flat),hasDue=/\bAmount\b/i.test(flat)&&/\b(?:Invoice|Date)\b/i.test(flat);return hasHeader&&(hasFooter||hasDue);
   }
-  function parseMillfieldAutopartsInvoice(text,source='',ocrLines){
+  function parseMillfieldAutopartsInvoice(text,source='',ocrLines,options={}){
     const items=(Array.isArray(ocrLines)?ocrLines:[]).filter(line=>line&&String(line.text||'').trim()),flat=String(text||items.map(line=>String(line.text||'')).join('\n')),invoiceDocument=millfieldInvoicePage(items,flat);if(!invoiceDocument)return {invoiceNumber:'',originalInvoiceNumber:'',date:'',supplier:'Millfield Autoparts Ltd',subtotal:'',vat:'',vatUnverified:true,total:'',documentType:'NON-INVOICE',isInvoiceDocument:false,currency:'GBP',source,accepted:false,rejected:true,status:'REJECTED',confidence:'REJECTED',rejectedReason:'This Millfield document is a statement or non-invoice page.',retryOcr:false,profileId:'millfield-autoparts'};
-    const header=millfieldInvoiceHeader(items,flat),goods=millfieldNearbyMoney(items,/\bTotal\s+Goods\b/i,{minimumYRatio:.58,maximumYRatio:.995}),directVat=millfieldNearbyMoney(items,/\bTotal\s+VAT\b/i,{minimumYRatio:.58,maximumYRatio:.995}),printedTotal=millfieldNearbyMoney(items,/\bAmount\s+Due\b|\bAmount\b/i,{minimumYRatio:.68,maximumYRatio:.995,verticalRatio:.035}),amountDue=printedTotal;let total=amountDue??null,vat=directVat??null,net=goods??null;
+    const header=millfieldInvoiceHeader(items,flat,options.millfieldContextYear),footerAmounts=millfieldFooterSummaryAmounts(items),goods=footerAmounts.goods,directVat=footerAmounts.vat,printedTotal=millfieldNearbyMoney(items,/^\s*Amount(?:\s+Due)?\s*:?\s*$/i,{minimumYRatio:.68,maximumYRatio:.995,verticalRatio:.035,standaloneLabel:true})??millfieldAmountDueValue(items),amountDue=printedTotal;let total=amountDue??null,vat=directVat??null,net=goods??null,totalDerivedFromFooter=false;
     const meaningfulMoney=total!==null||vat!==null||net!==null,identity=header.originalInvoiceNumber||header.date;if(!identity&&!meaningfulMoney)return {invoiceNumber:'',originalInvoiceNumber:'',date:'',supplier:'Millfield Autoparts Ltd',subtotal:'',vat:'',vatUnverified:true,total:'',documentType:'NON-INVOICE',isInvoiceDocument:false,currency:'GBP',source,accepted:false,rejected:true,status:'REJECTED',confidence:'REJECTED',rejectedReason:'Faint Millfield copy page ignored because it contained no readable invoice identifiers or footer amounts.',retryOcr:false,profileId:'millfield-autoparts',millfieldIgnoredCopy:true};
     let invoiceNumber=header.originalInvoiceNumber||'',invoiceNumberGenerated=false;if(!invoiceNumber){invoiceNumberGenerated=true;invoiceNumber=generatedInvoiceReference('millfield-autoparts',header.date||'UNDATED',`${source}|PAGE:${Number(items[0]?.page)||1}|${flat}`);}
-    if(total===null&&net!==null&&vat!==null)total=Number((Math.round(net*100)+Math.round(vat*100))/100);
+    if(total===null&&net!==null&&vat!==null){total=Number((Math.round(net*100)+Math.round(vat*100))/100);totalDerivedFromFooter=true;}
     if(vat===null&&total!==null){const grossCents=Math.round(Math.abs(total)*100),assumedVatCents=Math.round(grossCents/6),netCents=net===null?null:Math.round(Math.abs(net)*100),footerDifferenceCents=netCents===null?null:grossCents-netCents;vat=Math.sign(total||1)*(footerDifferenceCents!==null&&footerDifferenceCents>=0&&Math.abs(footerDifferenceCents-assumedVatCents)<=2?footerDifferenceCents:assumedVatCents)/100;}
     if(vat===null&&net!==null){vat=Math.round(Math.round(Math.abs(net)*100)*.2)/100*Math.sign(net||1);}
-    if(total===null&&net!==null&&vat!==null)total=Number(((Math.round(net*100)+Math.round(vat*100))/100).toFixed(2));
+    if(total===null&&net!==null&&vat!==null){total=Number(((Math.round(net*100)+Math.round(vat*100))/100).toFixed(2));totalDerivedFromFooter=true;}
     if(total!==null)total=Number(Number(total).toFixed(2));if(vat!==null)vat=Number(Number(vat).toFixed(2));if(net!==null)net=Number(Number(net).toFixed(2));
     const complete=Boolean(header.date&&invoiceNumber&&total!==null&&vat!==null),reason=complete?'':!header.date?'Invoice date could not be read; statements are only used when the full printed invoice number is readable.':total===null?'Invoice total could not be confirmed from its footer or a matching statement.':'Invoice VAT could not be confirmed or derived from the invoice footer.';
-    return {invoiceNumber,originalInvoiceNumber:header.originalInvoiceNumber||invoiceNumber,date:header.date,supplier:'Millfield Autoparts Ltd',subtotal:net??'',vat:vat??'',vatUnverified:vat===null,vatMentioned:directVat!==null,vatAssumed20:directVat===null&&vat!==null,total:total??'',documentType:/\bCREDIT\s+NOTE\b/i.test(flat)?'CREDIT NOTE':'INVOICE',isInvoiceDocument:true,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:!complete,review:false,layoutId:'millfield-footer-summary',profileId:'millfield-autoparts',invoiceNumberGenerated,millfieldPrintedInvoiceNumber:Boolean(header.originalInvoiceNumber),millfieldFooterGoods:net??'',millfieldFooterVat:directVat??'',millfieldPrintedTotal:amountDue??''};
+    return {invoiceNumber,originalInvoiceNumber:header.originalInvoiceNumber||invoiceNumber,date:header.date,supplier:'Millfield Autoparts Ltd',subtotal:net??'',vat:vat??'',vatUnverified:vat===null,vatMentioned:directVat!==null,vatAssumed20:directVat===null&&vat!==null,total:total??'',documentType:/\bCREDIT\s+NOTE\b/i.test(flat)?'CREDIT NOTE':'INVOICE',isInvoiceDocument:true,currency:'GBP',source,accepted:complete,rejected:!complete,status:complete?'ACCEPTED':'REJECTED',confidence:complete?'ACCEPTED':'REJECTED',rejectedReason:reason,retryOcr:!complete,review:false,layoutId:'millfield-footer-summary',profileId:'millfield-autoparts',invoiceNumberGenerated,millfieldPrintedInvoiceNumber:Boolean(header.originalInvoiceNumber),millfieldFooterGoods:net??'',millfieldFooterVat:directVat??'',millfieldPrintedTotal:amountDue??'',millfieldTotalDerivedFromFooter:totalDerivedFromFooter};
   }
   function parseMillfieldAutopartsBatch(pageLines,source='',options={}){
-    const pages=[...pageLines.keys()].sort((a,b)=>a-b),records=[],statementPages=new Set(),consumed=new Set();for(const page of pages){const items=pageLines.get(page)||[],pageText=items.map(line=>String(line.text||'')).join(' '),compactText=millfieldCompact(pageText);if(items.length<=2&&compactText.length<=10){consumed.add(page);continue;}if(!isMillfieldAutopartsText(pageText))continue;consumed.add(page);if(millfieldStatementPage(items)){statementPages.add(page);continue;}if(!millfieldInvoicePage(items,pageText))continue;const row=parseInvoiceRobust(pageText,source,items,options);if(row.millfieldIgnoredCopy)continue;row.profileId='millfield-autoparts';row.page=page;row.sourcePages=[page];records.push(row);}
+    const pages=[...pageLines.keys()].sort((a,b)=>a-b),anchors=[],yearCounts=new Map();for(const page of pages){const items=pageLines.get(page)||[],text=items.map(line=>String(line.text||'')).join(' ');if(!isMillfieldAutopartsText(text)||millfieldStatementPage(items))continue;const year=String(millfieldInvoiceHeader(items,text).date||'').slice(0,4);if(/^20\d{2}$/.test(year)){anchors.push({page,year});yearCounts.set(year,(yearCounts.get(year)||0)+1);}}
+    const rankedYears=[...yearCounts].sort((a,b)=>b[1]-a[1]),yearTotal=[...yearCounts.values()].reduce((sum,count)=>sum+count,0),millfieldContextYear=rankedYears.length&&rankedYears[0][1]>=2&&rankedYears[0][1]/yearTotal>=.6?rankedYears[0][0]:'';
+    const records=[],statementPages=new Set(),consumed=new Set();for(const page of pages){const items=pageLines.get(page)||[],pageText=items.map(line=>String(line.text||'')).join(' '),compactText=millfieldCompact(pageText);if(items.length<=2&&compactText.length<=10){consumed.add(page);continue;}if(!isMillfieldAutopartsText(pageText))continue;consumed.add(page);if(millfieldStatementPage(items)){statementPages.add(page);continue;}if(!millfieldInvoicePage(items,pageText))continue;const suppliedContexts=options.millfieldContextByPage||{},hasSuppliedContext=Object.prototype.hasOwnProperty.call(suppliedContexts,page),pageContextYear=hasSuppliedContext?String(suppliedContexts[page]||''):millfieldContextYearForPage(page,anchors,millfieldContextYear),row=parseInvoiceRobust(pageText,source,items,{...options,millfieldContextYear:pageContextYear});if(row.millfieldIgnoredCopy)continue;row.profileId='millfield-autoparts';row.page=page;row.sourcePages=[page];row.millfieldContextYear=pageContextYear;records.push(row);}
     const otherLines=[...pageLines.values()].flat().filter(line=>!consumed.has(Number(line.page)||1)),otherRows=otherLines.length?parseInvoiceBatch(otherLines.map(line=>String(line.text||'')).join('\n'),source,otherLines,options):[];return [...otherRows,...records].sort((a,b)=>(Number(a.page)||0)-(Number(b.page)||0));
   }
   function applyMillfieldStatementRows(rows,statementRows){
@@ -4047,17 +4108,20 @@
       const identities=new Map(matches.map(item=>[`${item.referenceDigits}|${item.date}|${Math.round(Number(item.total)*100)}`,item]));
       if(identities.size!==1){row.millfieldStatementConflict=true;row.rejectedReason='The matching Millfield statement has conflicting entries for this invoice number.';row.accepted=false;row.rejected=true;row.status='REJECTED';continue;}
       const statement=[...identities.values()][0],statementTotal=Number(statement.total);
-      if(row.total===''||row.total===null||row.total===undefined){row.total=statementTotal;row.millfieldStatementConfirmed=true;row.millfieldStatementMatchedBySuffix=matchedBySuffix;}
-      else if(Math.abs(Math.round(Number(row.total)*100)-Math.round(statementTotal*100))>1){row.millfieldStatementConflict=true;row.rejectedReason='The printed invoice total conflicts with the matching statement; verify the document before importing.';row.accepted=false;row.rejected=true;row.status='REJECTED';continue;}
+      if(row.total===''||row.total===null||row.total===undefined||row.millfieldTotalDerivedFromFooter){row.total=statementTotal;row.millfieldStatementConfirmed=true;row.millfieldStatementMatchedBySuffix=matchedBySuffix;row.millfieldTotalDerivedFromFooter=false;}
+      else if(Math.abs(Math.round(Number(row.total)*100)-Math.round(statementTotal*100))<=1){row.millfieldStatementConfirmed=true;row.millfieldStatementMatchedBySuffix=matchedBySuffix;const totalConflict=row.ocrAmountConflicts?.total,knownTotals=[Number(row.total),Number(totalConflict?.firstPass),Number(totalConflict?.retry)].filter(Number.isFinite);if(totalConflict&&knownTotals.some(value=>Math.round(value*100)===Math.round(statementTotal*100))){const remaining={...(row.ocrAmountConflicts||{})};delete remaining.total;if(Object.keys(remaining).length){row.ocrAmountConflicts=remaining;row.ocrConflictReason=invoiceRetryConflictReason(remaining);}else{delete row.ocrAmountConflicts;delete row.ocrConflictReason;}}}
+      else if(Math.abs(Math.round(Number(row.total)*100)-Math.round(statementTotal*100))>1){const totalConflict=row.ocrAmountConflicts?.total,knownTotals=[Number(row.total),Number(totalConflict?.firstPass),Number(totalConflict?.retry)].filter(Number.isFinite),statementMatchesRetry=knownTotals.some(value=>Math.round(value*100)===Math.round(statementTotal*100));if(statementMatchesRetry){row.total=statementTotal;const remaining={...(row.ocrAmountConflicts||{})};delete remaining.total;if(Object.keys(remaining).length){row.ocrAmountConflicts=remaining;row.ocrConflictReason=invoiceRetryConflictReason(remaining);}else{delete row.ocrAmountConflicts;delete row.ocrConflictReason;}row.millfieldStatementConfirmed=true;row.millfieldStatementMatchedBySuffix=matchedBySuffix;}
+        else if(!matchedBySuffix&&row.date===statement.date){row.total=statementTotal;row.millfieldStatementConfirmed=true;row.millfieldStatementOverrodeOcrTotal=true;const remaining={...(row.ocrAmountConflicts||{})};delete remaining.total;if(Object.keys(remaining).length){row.ocrAmountConflicts=remaining;row.ocrConflictReason=invoiceRetryConflictReason(remaining);}else{delete row.ocrAmountConflicts;delete row.ocrConflictReason;}}
+        else{row.millfieldStatementConflict=true;row.rejectedReason='The printed invoice total conflicts with the matching statement; verify the document before importing.';row.accepted=false;row.rejected=true;row.status='REJECTED';continue;}}
       if(!row.date)row.date=statement.date;
-      if((row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified)&&row.total!==''&&row.total!==null&&row.total!==undefined){
+      if((row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified||row.vatAssumed20)&&row.total!==''&&row.total!==null&&row.total!==undefined){
         const goods=Number(row.millfieldFooterGoods),grossCents=Math.round(Math.abs(Number(row.total))*100),assumedVatCents=Math.round(grossCents/6),netCents=Number.isFinite(goods)&&goods!==0?Math.round(Math.abs(goods)*100):null,footerDifferenceCents=netCents===null?null:grossCents-netCents;
         row.vat=Math.sign(Number(row.total)||1)*(footerDifferenceCents!==null&&footerDifferenceCents>=0&&Math.abs(footerDifferenceCents-assumedVatCents)<=2?footerDifferenceCents:assumedVatCents)/100;row.vat=Number(row.vat.toFixed(2));row.vatUnverified=false;row.vatAssumed20=true;row.rejectedReason='';
       }
     }
     for(const row of millfieldRows){
       if(row.millfieldStatementConflict)continue;
-      const complete=Boolean(row.isInvoiceDocument!==false&&row.invoiceNumber&&row.date&&Number.isFinite(Number(row.total))&&row.total!==''&&row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat))&&!row.vatUnverified);
+      const complete=Boolean(row.isInvoiceDocument!==false&&row.invoiceNumber&&row.date&&Number.isFinite(Number(row.total))&&row.total!==''&&row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat))&&!row.vatUnverified&&!row.ocrConflictReason&&!row.millfieldStatementConflict);
       row.accepted=complete;row.rejected=!complete;row.status=complete?'ACCEPTED':'REJECTED';row.confidence=row.status;
       if(complete)row.rejectedReason='';else if(row.millfieldPrintedInvoiceNumber&&!row.date)row.rejectedReason='Invoice date could not be confirmed from the invoice or its matching statement.';else if(row.total===''||row.total===null||row.total===undefined)row.rejectedReason='Invoice total could not be confirmed from the invoice footer or a matching statement.';else if(row.vat===''||row.vat===null||row.vat===undefined||row.vatUnverified)row.rejectedReason='Invoice VAT could not be confirmed from the invoice footer or the stated 20% rate.';
     }
@@ -4086,7 +4150,7 @@
     {id:'parts-plus',name:'Parts Plus',kind:'supplier',status:'Review',category:'Invoices',detect:isPartsPlusText,parse:(flat,source,lines)=>parsePartsPlusInvoice(flat,source,lines)},
     {id:'rac-motoring-services',name:'RAC Motoring Services',kind:'supplier',status:'Review',category:'Invoices',detect:isRacMotoringText,parse:(flat,source,lines)=>parseRacInvoice(flat,source,lines)},
     {id:'eu-ltd',name:'EU LTD',kind:'supplier',status:'Review',category:'Invoices',detect:isEuLtdText,parse:(flat,source,lines)=>parseEuLtdInvoice(flat,source,lines)},
-    {id:'millfield-autoparts',name:'Millfield Autoparts Ltd',kind:'supplier',status:'Review',category:'Invoices',detect:isMillfieldAutopartsText,parse:(flat,source,lines)=>parseMillfieldAutopartsInvoice(flat,source,lines)},
+{id:'millfield-autoparts',name:'Millfield Autoparts Ltd',kind:'supplier',status:'Review',category:'Invoices',detect:isMillfieldAutopartsText,parse:(flat,source,lines,options)=>parseMillfieldAutopartsInvoice(flat,source,lines,options)},
     anchoredInvoiceProfile('acre-aesthetics','Acre Aesthetics Limited',text=>/\bACRE\s+AESTHETICS\s+LIMITED\b|acre-aesthetics/i.test(text)),
     anchoredInvoiceProfile('abbvie','AbbVie Ltd',text=>/\bABBVIE\s+(?:LTD|LIMITED)\b|\bABBVIE\s+HOUSE\b/i.test(text)),
     anchoredInvoiceProfile('siemens-finance','Siemens Financial Services Limited',text=>/\bSIEMENS\s+FINANCIAL\s+SERVICES\s+LIMITED\b/i.test(text)),
@@ -4172,7 +4236,6 @@
     // but it remains rejected until a supplier profile has been added.
     const profileConfigured=profile?.kind==='supplier',supportedProfile=profileConfigured&&Boolean(specialised),genericAcceptedForConfiguredProfile=profileConfigured&&row.accepted===true,unconfiguredSupplier=!profileConfigured&&row.isInvoiceDocument!==false;
     const vatRequired=row.documentType!=='DELIVERY NOTE',complete=Boolean((supportedProfile||genericAcceptedForConfiguredProfile)&&row.isInvoiceDocument!==false&&!row.ocrConflictReason&&!row.banozeFooterUnverified&&row.invoiceNumber&&row.date&&row.supplier&&row.total!==''&&row.total!==null&&row.total!==undefined&&Number.isFinite(Number(row.total))&&(!vatRequired||row.vat!==''&&row.vat!==null&&row.vat!==undefined&&Number.isFinite(Number(row.vat)))&&(profile?.id!=='amazon'||String(row.itemName||'').trim())&&(row.documentType!=='CORRECTION'||row.correctedTotal!==''&&row.correctedTotal!==null&&row.correctedTotal!==undefined&&Number.isFinite(Number(row.correctedTotal))&&row.correctedVat!==''&&row.correctedVat!==null&&row.correctedVat!==undefined&&Number.isFinite(Number(row.correctedVat))));
-
     row.status=complete?'ACCEPTED':'REJECTED';row.accepted=row.status==='ACCEPTED';row.rejected=row.status==='REJECTED';if(row.isInvoiceDocument===false){row.retryOcr=false;if(row.documentType!=='CREDIT NOTE')row.documentType='NON-INVOICE';}
     row.unconfiguredSupplier=unconfiguredSupplier;
     row.supplierProfileConfigured=Boolean(profileConfigured);
@@ -4366,7 +4429,7 @@
     return Boolean(complete&&!row?.freshwaysVatOcrAmbiguous&&!row?.eagleSummaryConflict&&!row?.eagleSummaryAmbiguousReference&&!row?.banozeFooterUnverified&&!candidate?.banozeFooterUnverified&&!Object.keys(row?.ocrAmountConflicts||{}).length&&(row?.profileId==='bestway'||kinFooterRetry||candidate?.accepted||row?.freshwaysVatOcrRetryResolved||eaglePageMatch));
   }
   function mergeInvoiceRetryCandidate(row,candidate,{preserveGeneratedReference=false}={}){
-    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','invoiceNumberGenerated','invoiceNumberGeneratedReason','date','supplier','subtotal','vat','vatUnverified','vatMentioned','total','banozeGoodsTotal','banozeDerivedVat','banozeDerivedTotal','banozeFooterUnverified','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured','ocrConflictReason','millfieldPrintedInvoiceNumber','millfieldFooterGoods','millfieldFooterVat','millfieldPrintedTotal','millfieldStatementConfirmed','millfieldStatementMatchedBySuffix','millfieldStatementConflict'];
+    const merged={...row},conflicts={...(row.ocrAmountConflicts||{})},fields=['invoiceNumber','originalInvoiceNumber','invoiceNumberGenerated','invoiceNumberGeneratedReason','date','supplier','subtotal','vat','vatUnverified','vatMentioned','vatAssumed20','total','banozeGoodsTotal','banozeDerivedVat','banozeDerivedTotal','banozeFooterUnverified','correctsInvoice','documentType','correctedSubtotal','correctedVat','correctedTotal','profileId','accepted','rejectedReason','unconfiguredSupplier','supplierProfileConfigured','ocrConflictReason','millfieldContextYear','millfieldPrintedInvoiceNumber','millfieldFooterGoods','millfieldFooterVat','millfieldPrintedTotal','millfieldTotalDerivedFromFooter','millfieldStatementConfirmed','millfieldStatementMatchedBySuffix','millfieldStatementConflict'];
     for(const key of fields){
       if(preserveGeneratedReference&&['invoiceNumber','originalInvoiceNumber','invoiceNumberGenerated','invoiceNumberGeneratedReason'].includes(key))continue;
       const value=candidate?.[key];if(value===''||value===null||value===undefined)continue;
@@ -4374,7 +4437,7 @@
       // become "20.00", keep already readable first-pass totals. The higher
       // resolution page can misread the pound sign on the invoice total too.
       if(row?.profileId==='freshways'&&row?.freshwaysVatOcrAmbiguous&&key==='total'&&merged.total!==''&&merged.total!==null&&merged.total!==undefined)continue;
-      const compareRetryAmount=(row.profileId==='bestway'||candidate.profileId==='bestway'||row.profileId==='eagle-foods'&&candidate.profileId==='eagle-foods')&&(key==='vat'||key==='total')||row.profileId==='freshways'&&candidate.profileId==='freshways'&&key==='vat';
+      const compareRetryAmount=(row.profileId==='bestway'||candidate.profileId==='bestway'||row.profileId==='eagle-foods'&&candidate.profileId==='eagle-foods'||row.profileId==='millfield-autoparts'&&candidate.profileId==='millfield-autoparts')&&(key==='vat'||key==='total')||row.profileId==='freshways'&&candidate.profileId==='freshways'&&key==='vat';
       if(compareRetryAmount){
         const first=merged[key],firstNumber=first===''||first===null||first===undefined?null:Number(first),retryNumber=Number(value);
         if(Number.isFinite(firstNumber)&&Number.isFinite(retryNumber)&&Math.round(firstNumber*100)!==Math.round(retryNumber*100)){
@@ -4384,6 +4447,7 @@
       }
       merged[key]=value;
     }
+    if(row?.profileId==='millfield-autoparts'&&row.millfieldPrintedInvoiceNumber&&!candidate?.millfieldPrintedInvoiceNumber){merged.invoiceNumber=row.invoiceNumber;merged.originalInvoiceNumber=row.originalInvoiceNumber;merged.invoiceNumberGenerated=row.invoiceNumberGenerated;merged.invoiceNumberGeneratedReason=row.invoiceNumberGeneratedReason;merged.millfieldPrintedInvoiceNumber=true;}
     if(row?.profileId==='freshways'&&row?.freshwaysVatOcrAmbiguous){
       const retryVat=candidate?.vat===''||candidate?.vat===null||candidate?.vat===undefined?null:Number(candidate.vat);
       if(retryVat===0){merged.vat=0;merged.freshwaysVatOcrAmbiguous=false;merged.freshwaysVatOcrRetryResolved=true;merged.rejectedReason='';}
@@ -4402,9 +4466,5 @@
     if(candidate?.ocrConflictReason){merged.ocrConflictReason=candidate.ocrConflictReason;merged.total='';merged.accepted=false;merged.rejectedReason=candidate.ocrConflictReason;}
     return merged;
   }
-  return {extractText,extractStarlingPdfText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,millfieldStatementRowsFromOcr,applyMillfieldStatementRows,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),underDevelopmentSuppliers,parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,matchBanozeFullPageRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
+  return {extractText,extractStarlingPdfText,parseBank,parseBankCsv,parseOcrBank,inspectBankBalances,markBankBalanceMismatches,parseInvoice:parseInvoiceRobust,parseInvoiceBatch,confirmEagleInvoiceRows,eagleStatementRowsFromOcr,millfieldStatementRowsFromOcr,millfieldStatementPagesFromOcr,applyMillfieldStatementRows,identifyInvoiceProfile,invoiceProfiles:invoiceProfiles.map(({id,name,kind})=>({id,name,kind})),receiptProfiles:receiptProfiles.map(({id,name,category})=>({id,name,category})),compatibleCompanies:compatibleCompanies(),underDevelopmentSuppliers,parseReceiptBatch,sortReceiptRowsByPdfPage,isReceiptBackPage,resolvePolishWzTotal,resolveSumUpAmount,invoiceStatusFor,invoiceRateBases,invoiceRetryAccepted,matchEagleRetryCandidate,matchBanozeFullPageRetryCandidate,mergeInvoiceRetryCandidate,invoiceRetryConflictReason,reconcileInvoiceCorrections,deduplicateInvoiceRows,invoiceRetryRegionsForRow,parseDairyFreshFooterRetryTargets,parsePdf,parseDate,amount,pdfFileUrl};
 });
-
-
-
-
