@@ -2114,14 +2114,14 @@ test('one under-development decision is shown after all selected files and block
 test('Banoze source and packaged runtime scripts have valid JavaScript syntax',()=>{
   const vm=require('node:vm'),root=path.resolve(__dirname,'..');for(const file of ['extractor/app.js','extractor/parser.js','release/Extractor-Network/resources/app/app.js','release/Extractor-Network/resources/app/parser.js'])new vm.Script(fs.readFileSync(path.join(root,file),'utf8'),{filename:file});
 });
-test('Banoze is registered for review and reads its printed invoice fields from nearby labels',()=>{
+test('Banoze is registered under development and reads its printed invoice fields from nearby labels',()=>{
   const makeLines=(scale=1,offsetX=0,offsetY=0)=>[
     ['BANOZE LTD',80,30],['INVOICE',890,100],['InvoiceNo. BNZ2099123456',1480,185],['Date. 03/04/2099',1650,232],
     ['Code BNZ0099',150,850],['GOODS TOTAL',1198,1910],['£12.00',1260,1958],['VAT',1536,1910],['£2.40',1525,1958],['TOTAL',1740,1910],['£14.40',1744,1958],
     ['Web: www.banoze.co.uk',230,2630]
   ].map(([text,x,y])=>({page:1,text,x:x*scale+offsetX,y:y*scale+offsetY,width:text.length*8*scale,height:20*scale}));
   const parse=lines=>P.parseInvoiceBatch(lines.map(line=>line.text).join('\n'),'renamed.pdf',lines);
-  const profile=P.compatibleCompanies.find(item=>item.id==='banoze');assert.ok(profile);assert.equal(profile.name,'Banoze Ltd');assert.equal(profile.category,'Invoices');assert.equal(profile.status,'Review');
+  const profile=P.compatibleCompanies.find(item=>item.id==='banoze');assert.ok(profile);assert.equal(profile.name,'Banoze Ltd');assert.equal(profile.category,'Invoices');assert.equal(profile.status,'Under development');
   for(const lines of [makeLines(),makeLines(1.7,280,180)]){const rows=parse(lines);assert.equal(rows.length,1);assert.deepEqual([rows[0].invoiceNumber,rows[0].originalInvoiceNumber,rows[0].date,rows[0].supplier,rows[0].vat,rows[0].total,rows[0].status,rows[0].profileId],['3456','BNZ2099123456','2099-04-03','Banoze Ltd',2.4,14.4,'ACCEPTED','banoze']);}
 });
 test('Banoze generates a unique internal invoice reference when the printed ID is missing',()=>{
@@ -2291,7 +2291,7 @@ test('Millfield Autoparts parses footer values by their labels and survives shif
   assert.equal(P.identifyInvoiceProfile('MILLFIELD AUTOPARTS LTD Invoice Number HS321430').id,'millfield-autoparts');
   assert.equal(P.identifyInvoiceProfile('www.millfieldauto arts.co.uk Statement To:').id,'millfield-autoparts','the known OCR omission of the P in the supplier website must still select Millfield');
   assert.notEqual(P.identifyInvoiceProfile('Freshways Ltd Invoice Number 321430').id,'millfield-autoparts','Millfield rules must not match other suppliers');
-  assert.ok(P.compatibleCompanies.some(company=>company.id==='millfield-autoparts'&&company.name==='Millfield Autoparts Ltd'&&company.status==='Review'&&company.category==='Invoices'));
+  assert.ok(P.compatibleCompanies.some(company=>company.id==='millfield-autoparts'&&company.name==='Millfield Autoparts Ltd'&&company.status==='Under development'&&company.category==='Invoices'));
   assert.deepEqual([base.invoiceNumber,base.originalInvoiceNumber,base.date,base.subtotal,base.vat,base.total,base.status],['1430','HS321430','2026-06-24',12.11,2.42,14.53,'ACCEPTED']);
   assert.deepEqual([shifted.invoiceNumber,shifted.date,shifted.vat,shifted.total,shifted.status],[base.invoiceNumber,base.date,base.vat,base.total,base.status]);
   const noPrintedTotal=parse(makeInvoice({total:''}))[0],vatFromTotal=parse(makeInvoice({goods:'4.53',vat:'',total:'27.21'}))[0],vatOnly=parse(makeInvoice({number:'',goods:'',vat:'2.42',total:''}))[0],zeroVatWithoutTotal=parse(makeInvoice({number:'',goods:'',vat:'0.00',total:''}))[0],implausibleDate=parse(makeInvoice({date:'03/05/83'}))[0];
