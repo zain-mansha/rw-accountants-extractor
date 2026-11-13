@@ -389,6 +389,58 @@ function Read-FocusedPdfRegion($page,$region,$pageNumber,$engine){
       }
       return @{Text=($variantTexts -join "`n");Lines=$lines.ToArray()}
     }
+    if([string]$region.profileId -eq 'millfield-autoparts' -and [string]$region.regionType -eq 'invoice-header'){
+      # Millfield invoice references sit beside the date in a narrow header
+      # row. Scanned rules and faint carbon copies can break the printed HS
+      # prefix, so compare a few text-anchored contrast readings of this crop.
+      # Keep each pass tagged; the parser accepts only a unique, supported
+      # reference and never derives one from amount/date alone.
+      foreach($line in $lines){$line|Add-Member -NotePropertyName millfieldHeaderVariant -NotePropertyValue 'base' -Force}
+      $copy=Copy-SoftwareBitmapToDrawingBitmap $software;$drawing=$copy.Bitmap;$variantTexts=New-Object System.Collections.Generic.List[string];$variantTexts.Add([string]$result.Text)
+      foreach($threshold in @(150,180,210,235)){
+        $thresholdBitmap=$null
+        try{
+          $thresholdBitmap=[InkGapRepair]::Threshold($drawing,$threshold);$variantResult=Read-BitmapOcrResult $thresholdBitmap $engine
+          if($variantResult.Text){$variantTexts.Add([string]$variantResult.Text)}
+          foreach($variantLine in $variantResult.Lines){$words=@($variantLine.Words);if(!$words.Count){continue};$lefts=@($words|ForEach-Object{[double]$_.BoundingRect.X});$tops=@($words|ForEach-Object{[double]$_.BoundingRect.Y});$rights=@($words|ForEach-Object{[double]$_.BoundingRect.X+[double]$_.BoundingRect.Width});$bottoms=@($words|ForEach-Object{[double]$_.BoundingRect.Y+[double]$_.BoundingRect.Height});$minX=($lefts|Measure-Object -Minimum).Minimum;$minY=($tops|Measure-Object -Minimum).Minimum;$maxX=($rights|Measure-Object -Maximum).Maximum;$maxY=($bottoms|Measure-Object -Maximum).Maximum;$lines.Add([pscustomobject]@{page=$pageNumber;text=[string]$variantLine.Text;x=$left+[double]$minX*$cropGeometryScaleX;y=$top+[double]$minY*$cropGeometryScaleY;width=[double]($maxX-$minX)*$cropGeometryScaleX;height=[double]($maxY-$minY)*$cropGeometryScaleY;confidence=(Get-OcrLineConfidence $variantLine);millfieldHeaderVariant=[string]$threshold})}
+        }catch{}finally{if($thresholdBitmap){$thresholdBitmap.Dispose()}}
+      }
+      return @{Text=($variantTexts -join "`n");Lines=$lines.ToArray()}
+    }
+    if([string]$region.profileId -eq 'millfield-autoparts' -and [string]$region.regionType -eq 'invoice-footer'){
+      # Millfield's footer totals can be very faint or broken by scan lines.
+      # Re-read only the OCR-label-anchored footer crop at a few contrast
+      # thresholds. Keep the readings separate so parsing can require
+      # independent agreement instead of choosing whichever number looks
+      # plausible.
+      foreach($line in $lines){$line|Add-Member -NotePropertyName millfieldFooterVariant -NotePropertyValue 'base' -Force}
+      $copy=Copy-SoftwareBitmapToDrawingBitmap $software;$drawing=$copy.Bitmap;$variantTexts=New-Object System.Collections.Generic.List[string];$variantTexts.Add([string]$result.Text)
+      foreach($threshold in @(150,180,210,220,235,240,250)){
+        $thresholdBitmap=$null
+        try{
+          $thresholdBitmap=[InkGapRepair]::Threshold($drawing,$threshold);$variantResult=Read-BitmapOcrResult $thresholdBitmap $engine
+          if($variantResult.Text){$variantTexts.Add([string]$variantResult.Text)}
+          foreach($variantLine in $variantResult.Lines){$words=@($variantLine.Words);if(!$words.Count){continue};$lefts=@($words|ForEach-Object{[double]$_.BoundingRect.X});$tops=@($words|ForEach-Object{[double]$_.BoundingRect.Y});$rights=@($words|ForEach-Object{[double]$_.BoundingRect.X+[double]$_.BoundingRect.Width});$bottoms=@($words|ForEach-Object{[double]$_.BoundingRect.Y+[double]$_.BoundingRect.Height});$minX=($lefts|Measure-Object -Minimum).Minimum;$minY=($tops|Measure-Object -Minimum).Minimum;$maxX=($rights|Measure-Object -Maximum).Maximum;$maxY=($bottoms|Measure-Object -Maximum).Maximum;$lines.Add([pscustomobject]@{page=$pageNumber;text=[string]$variantLine.Text;x=$left+[double]$minX*$cropGeometryScaleX;y=$top+[double]$minY*$cropGeometryScaleY;width=[double]($maxX-$minX)*$cropGeometryScaleX;height=[double]($maxY-$minY)*$cropGeometryScaleY;confidence=(Get-OcrLineConfidence $variantLine);millfieldFooterVariant=[string]$threshold})}
+        }catch{}finally{if($thresholdBitmap){$thresholdBitmap.Dispose()}}
+      }
+      return @{Text=($variantTexts -join "`n");Lines=$lines.ToArray()}
+    }
+    if([string]$region.profileId -eq 'millfield-autoparts' -and [string]$region.regionType -eq 'statement-invoice-amount'){
+      # The statement retry crop is anchored to the detected Invoice or Credit
+      # column and its matching reference/date row. Keep several contrast readings;
+      # the parser accepts the amount only if the readings agree.
+      foreach($line in $lines){$line|Add-Member -NotePropertyName millfieldStatementVariant -NotePropertyValue 'base' -Force}
+      $copy=Copy-SoftwareBitmapToDrawingBitmap $software;$drawing=$copy.Bitmap;$variantTexts=New-Object System.Collections.Generic.List[string];$variantTexts.Add([string]$result.Text)
+      foreach($threshold in @(155,185,215,235)){
+        $thresholdBitmap=$null
+        try{
+          $thresholdBitmap=[InkGapRepair]::Threshold($drawing,$threshold);$variantResult=Read-BitmapOcrResult $thresholdBitmap $engine
+          if($variantResult.Text){$variantTexts.Add([string]$variantResult.Text)}
+          foreach($variantLine in $variantResult.Lines){$words=@($variantLine.Words);if(!$words.Count){continue};$lefts=@($words|ForEach-Object{[double]$_.BoundingRect.X});$tops=@($words|ForEach-Object{[double]$_.BoundingRect.Y});$rights=@($words|ForEach-Object{[double]$_.BoundingRect.X+[double]$_.BoundingRect.Width});$bottoms=@($words|ForEach-Object{[double]$_.BoundingRect.Y+[double]$_.BoundingRect.Height});$minX=($lefts|Measure-Object -Minimum).Minimum;$minY=($tops|Measure-Object -Minimum).Minimum;$maxX=($rights|Measure-Object -Maximum).Maximum;$maxY=($bottoms|Measure-Object -Maximum).Maximum;$lines.Add([pscustomobject]@{page=$pageNumber;text=[string]$variantLine.Text;x=$left+[double]$minX*$cropGeometryScaleX;y=$top+[double]$minY*$cropGeometryScaleY;width=[double]($maxX-$minX)*$cropGeometryScaleX;height=[double]($maxY-$minY)*$cropGeometryScaleY;confidence=(Get-OcrLineConfidence $variantLine);millfieldStatementVariant=[string]$threshold})}
+        }catch{}finally{if($thresholdBitmap){$thresholdBitmap.Dispose()}}
+      }
+      return @{Text=($variantTexts -join "`n");Lines=$lines.ToArray()}
+    }
     if([string]$region.profileId -eq 'gsf-car-parts' -and [string]$region.regionType -eq 'invoice-date'){
       # The GSF tax-point date is faint on some scans. On this small,
       # text-anchored crop, compare a few binary contrast passes and emit the
